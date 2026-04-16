@@ -1,0 +1,42 @@
+int ledPin = 2;
+int buzzerPin = 15;
+
+int distance = 30;
+int step = -5;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(ledPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+}
+
+void loop() {
+  Serial.print("distance = ");
+  Serial.println(distance);
+
+  if (distance > 20) {
+    digitalWrite(ledPin, LOW);
+    digitalWrite(buzzerPin, LOW);
+    delay(1000);
+  } 
+  else if (distance > 10) {
+    digitalWrite(ledPin, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+    delay(500);
+    digitalWrite(buzzerPin, LOW);
+    delay(500);
+  } 
+  else {
+    digitalWrite(ledPin, HIGH);
+    digitalWrite(buzzerPin, HIGH);
+    delay(150);
+    digitalWrite(buzzerPin, LOW);
+    delay(150);
+  }
+
+  distance += step;
+
+  if (distance <= 5 || distance >= 30) {
+    step = -step;
+  }
+}
