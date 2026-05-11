@@ -1,0 +1,24 @@
+<수행 내용>
+SUMO(Simulation of Urban Mobility) 환경 구축 및 실행
+OSM 기반 실제 도로 네트워크 import 및 .net.xml 생성
+차량 Flow 및 Route 설정 (route.rou.xml)
+config.sumocfg 구성 및 SUMO GUI 시뮬레이션 실행
+20대 이상의 차량이 동작하는 교통 시뮬레이션 환경 구현
+Floating Car Data(FCD) 출력 설정 및 fcd.xml 생성
+Python 기반 전처리 코드 작성 (preprocess.py)
+FCD XML 데이터를 CSV 형식으로 변환 (processed_fcd.csv)
+TraCI(Traffic Control Interface) 연동 성공
+Python을 통해 SUMO 차량 데이터를 실시간으로 수집
+차량 ID 및 속도 데이터를 실시간 출력
+보행자(pedestrian) route 생성 및 시뮬레이션 테스트
+SUMO 프로젝트 전체 백업 및 환경 안정화
+
+<FCD Trajectory 데이터 생성>
+
+SUMO 시뮬레이션으로부터:
+
+차량 궤적
+속도
+위치 좌표
+
+데이터를 XML 형태로 저장 후 CSV로 변환.
