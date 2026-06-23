@@ -1,5 +1,6 @@
 // [박중선] V2X Smart Cane Sender
 // GPS + ICM-20948 IMU + ESP-NOW 송신기
+// + 부저/진동모터 제어 추가
 
 #include <WiFi.h>
 #include <esp_now.h>
@@ -28,6 +29,18 @@
 #define GPS_RX 16
 #define GPS_TX 17
 #define GPS_BAUD 9600
+
+// 부저/진동모터 핀
+#define BUZZER_PIN 25
+#define MOTOR_PIN 26
+
+// 부저 모듈이 Active LOW라고 가정
+#define BUZZER_ON  LOW
+#define BUZZER_OFF HIGH
+
+// 진동모터 모듈은 Active HIGH라고 가정
+#define MOTOR_ON  HIGH
+#define MOTOR_OFF LOW
 
 // 100ms = 10Hz 송신
 #define SEND_PERIOD_MS 100
@@ -88,6 +101,13 @@ float lastSpeed = 0.0;
 float lastHeading = 0.0;
 uint8_t lastGpsValid = 0;
 
+// 부저 제어 변수
+bool beepActive = false;
+uint32_t beepStartMs = 0;
+const uint32_t BEEP_DURATION_MS = 30;
+
+uint8_t currentRisk = 255;
+
 // =====================
 // ESP-NOW 전송 결과 콜백
 // ESP32 Core 3.3.8 기준
@@ -101,6 +121,73 @@ void onSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
   } else {
     Serial.println(" result=FAIL");
   }
+}
+
+// =====================
+// 액추에이터 초기화
+// =====================
+void setupActuator() {
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(MOTOR_PIN, OUTPUT);
+
+  digitalWrite(BUZZER_PIN, BUZZER_OFF);
+  digitalWrite(MOTOR_PIN, MOTOR_OFF);
+
+  Serial.println("[ACT] Buzzer/Motor ready");
+}
+
+// =====================
+// 부저 짧게 울리기 시작
+// =====================
+void startShortBeep() {
+  digitalWrite(BUZZER_PIN, BUZZER_ON);
+  beepActive = true;
+  beepStartMs = millis();
+}
+
+// =====================
+// 부저 자동으로 끄기
+// =====================
+void updateBeep() {
+  if (beepActive && millis() - beepStartMs >= BEEP_DURATION_MS) {
+    digitalWrite(BUZZER_PIN, BUZZER_OFF);
+    beepActive = false;
+  }
+}
+
+// =====================
+// risk_level에 따른 부저/진동모터 동작
+// =====================
+void applyRisk(uint8_t risk) {
+  if (risk == RISK_SAFE) {
+    digitalWrite(MOTOR_PIN, MOTOR_OFF);
+    digitalWrite(BUZZER_PIN, BUZZER_OFF);
+    beepActive = false;
+  }
+
+  else if (risk == RISK_CAUTION) {
+    digitalWrite(MOTOR_PIN, MOTOR_ON);
+    digitalWrite(BUZZER_PIN, BUZZER_OFF);
+    beepActive = false;
+  }
+
+  else if (risk == RISK_WARNING) {
+    digitalWrite(MOTOR_PIN, MOTOR_ON);
+
+    if (risk != currentRisk) {
+      startShortBeep();
+    }
+  }
+
+  else {
+    digitalWrite(MOTOR_PIN, MOTOR_ON);
+
+    if (risk != currentRisk) {
+      startShortBeep();
+    }
+  }
+
+  currentRisk = risk;
 }
 
 // =====================
@@ -189,12 +276,10 @@ void readImuIntoPacket() {
   if (imu.dataReady()) {
     imu.getAGMT();
 
-    // accX/Y/Z 단위가 mg라서 m/s^2로 변환
     packet.accel_x = (imu.accX() / 1000.0) * 9.80665;
     packet.accel_y = (imu.accY() / 1000.0) * 9.80665;
     packet.accel_z = (imu.accZ() / 1000.0) * 9.80665;
 
-    // gyro는 deg/s 계열
     packet.gyro_x = imu.gyrX();
     packet.gyro_y = imu.gyrY();
     packet.gyro_z = imu.gyrZ();
@@ -208,18 +293,17 @@ uint8_t decideRiskForTest(float speed, float ax, float ay, float az) {
   float totalA = sqrt(ax * ax + ay * ay + az * az);
 
   // 가만히 있으면 중력 때문에 약 9.8m/s^2
-  // 그래서 9.8에서 얼마나 벗어났는지 봄
   float motionA = fabs(totalA - 9.80665);
 
   if (speed > 2.0 || motionA > 5.0) {
-    return RISK_WARNING;   // 2
+    return RISK_WARNING;
   }
 
   if (speed > 1.0 || motionA > 2.5) {
-    return RISK_CAUTION;   // 1
+    return RISK_CAUTION;
   }
 
-  return RISK_SAFE;        // 0
+  return RISK_SAFE;
 }
 
 // =====================
@@ -241,6 +325,9 @@ void fillAndSendPacket() {
     packet.accel_z
   );
 
+  // 지팡이 자체에서 부저/진동 동작
+  applyRisk(packet.risk_level);
+
   packet.timestamp_ms = millis();
   packet.seq_num = seq++;
 
@@ -251,7 +338,9 @@ void fillAndSendPacket() {
   }
 
   Serial.printf(
-    "[SEND] seq=%u gps=%u lat=%.6f lng=%.6f spd=%.2f ax=%.2f ay=%.2f az=%.2f risk=%u size=%d\n",
+    "[SEND] seq=%u gps=%u lat=%.6f lng=%.6f spd=%.2f "
+    "ax=%.2f ay=%.2f az=%.2f gx=%.2f gy=%.2f gz=%.2f "
+    "risk=%u size=%d\n",
     packet.seq_num,
     packet.gps_valid,
     packet.latitude,
@@ -260,6 +349,9 @@ void fillAndSendPacket() {
     packet.accel_x,
     packet.accel_y,
     packet.accel_z,
+    packet.gyro_x,
+    packet.gyro_y,
+    packet.gyro_z,
     packet.risk_level,
     sizeof(packet)
   );
@@ -272,10 +364,11 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("=== V2X Smart Cane Sender: GPS + IMU + ESP-NOW ===");
+  Serial.println("=== V2X Smart Cane Sender: GPS + IMU + ESP-NOW + ACT ===");
 
   memset(&packet, 0, sizeof(packet));
 
+  setupActuator();
   setupImu();
   setupGps();
   setupEspNow();
@@ -287,6 +380,8 @@ void setup() {
 // loop
 // =====================
 void loop() {
+  updateBeep();
+
   readGps();
   readImuIntoPacket();
 
