@@ -134,15 +134,20 @@ void updateBeep() {
 // =====================
 // 액추에이터 초기화
 // =====================
-void setupActuator() {
+void forceActuatorOff() {
 #if USE_ACTUATOR
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(MOTOR_PIN, OUTPUT);
 
-  // 전원 들어오자마자 부저 안 울리게
+  // Active LOW 부저가 부팅 직후 울리지 않도록 가능한 빨리 OFF 고정
   digitalWrite(BUZZER_PIN, BUZZER_OFF);
   digitalWrite(MOTOR_PIN, MOTOR_OFF);
+#endif
+}
 
+void setupActuator() {
+#if USE_ACTUATOR
+  forceActuatorOff();
   Serial.println("[ACT] Buzzer/Motor ready");
 #endif
 }
@@ -300,6 +305,8 @@ void setupEspNowReceiver() {
 // setup
 // =====================
 void setup() {
+  forceActuatorOff();
+
   Serial.begin(115200);
   delay(1000);
 
