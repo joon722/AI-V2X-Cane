@@ -46,6 +46,9 @@
 #define RISK_WARNING 2
 #define RISK_DANGER  3
 
+// 송신기 MAC 주소
+uint8_t senderMAC[] = {0x30, 0x76, 0xF5, 0xE7, 0x51, 0x28};
+
 // =====================
 // 송신기/수신기 공통 구조체
 // 송신기 코드와 100% 똑같아야 함
@@ -78,6 +81,7 @@ typedef struct __attribute__((packed)) v2x_message {
 HardwareSerial jetsonSerial(2);
 
 v2x_message_t rx;
+v2x_message_t replyPacket;
 
 uint32_t recvCount = 0;
 uint32_t lostCount = 0;
@@ -134,20 +138,15 @@ void updateBeep() {
 // =====================
 // 액추에이터 초기화
 // =====================
-void forceActuatorOff() {
+void setupActuator() {
 #if USE_ACTUATOR
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(MOTOR_PIN, OUTPUT);
 
-  // Active LOW 부저가 부팅 직후 울리지 않도록 가능한 빨리 OFF 고정
+  // 전원 들어오자마자 부저 안 울리게
   digitalWrite(BUZZER_PIN, BUZZER_OFF);
   digitalWrite(MOTOR_PIN, MOTOR_OFF);
-#endif
-}
 
-void setupActuator() {
-#if USE_ACTUATOR
-  forceActuatorOff();
   Serial.println("[ACT] Buzzer/Motor ready");
 #endif
 }
@@ -225,6 +224,19 @@ void sendJsonToJetson(const v2x_message_t &m) {
   );
 #endif
 }
+void sendReplyToSender(const v2x_message_t &m) {
+  replyPacket = m;
+  replyPacket.node_type = 0x02;  // receiver 표시용
+  replyPacket.timestamp_ms = millis();
+
+  esp_err_t result = esp_now_send(senderMAC, (uint8_t *)&replyPacket, sizeof(replyPacket));
+
+  if (result == ESP_OK) {
+    Serial.printf("[TX BACK] seq=%u risk=%u\n", replyPacket.seq_num, replyPacket.risk_level);
+  } else {
+    Serial.println("[TX BACK] send function error");
+  }
+}
 
 // =====================
 // ESP-NOW 수신 콜백
@@ -277,6 +289,7 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   sendJsonToJetson(rx);
   applyRisk(rx.risk_level);
+  sendReplyToSender(rx);
 
   digitalWrite(LED_PIN, LOW);
 }
@@ -296,17 +309,26 @@ void setupEspNowReceiver() {
     ESP.restart();
   }
 
-  esp_now_register_recv_cb(onDataRecv);
+esp_now_register_recv_cb(onDataRecv);
 
-  Serial.println("[ESP-NOW] Receiver Ready");
+esp_now_peer_info_t peer = {};
+memcpy(peer.peer_addr, senderMAC, 6);
+peer.channel = 0;
+peer.encrypt = false;
+
+if (esp_now_add_peer(&peer) == ESP_OK) {
+  Serial.println("[ESP-NOW] sender peer added.");
+} else {
+  Serial.println("[ESP-NOW] sender peer add failed.");
+}
+
+Serial.println("[ESP-NOW] Receiver Ready");
 }
 
 // =====================
 // setup
 // =====================
 void setup() {
-  forceActuatorOff();
-
   Serial.begin(115200);
   delay(1000);
 
