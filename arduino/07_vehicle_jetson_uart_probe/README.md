@@ -1,7 +1,7 @@
 # 07_vehicle_jetson_uart_probe
 
 차량 ESP32 단독 테스트용 코드입니다. 지팡이 ESP32가 아직 준비되지 않아도 Jetson UART 입력과 risk 회신 흐름을 먼저 확인할 수 있습니다.
-
+6.25기준 이 코드는 사용 하지 않기로 
 ## 역할
 
 - 차량 상태 JSON을 10Hz로 생성
