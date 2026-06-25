@@ -1,5 +1,6 @@
 # 06_vehicle_v2x_gps_broadcast
-
+6.25일 기준 최종 차량용 esp보드 여기서 계속 수정할 것 
+서로 통신 가능 서로 직접적인 risk일때 울리게 하기(목표) 
 New main vehicle-side prototype sketch. The vehicle only broadcasts its state and does not calculate risk.
 
 ## Role
