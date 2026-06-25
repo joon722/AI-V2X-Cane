@@ -1,7 +1,7 @@
 # 10_rsu_espnow_multi_jetson_bridge
 
 차량 ESP와 지팡이 ESP를 모두 받는 RSU 브리지 코드입니다.
-
+rus에 사용한다
 ## 역할
 
 - 차량 상태 패킷 수신 후 Jetson에 JSON 출력
