@@ -290,16 +290,32 @@ void readImuIntoPacket() {
 // 테스트용 위험도 판단
 // =====================
 uint8_t decideRiskForTest(float speed, float ax, float ay, float az) {
-  float totalA = sqrt(ax * ax + ay * ay + az * az);
+  static int cautionCount = 0;
+  static int warningCount = 0;
 
-  // 가만히 있으면 중력 때문에 약 9.8m/s^2
+  float totalA = sqrt(ax * ax + ay * ay + az * az);
   float motionA = fabs(totalA - 9.80665);
 
-  if (speed > 2.0 || motionA > 5.0) {
+  bool warningNow = (speed > 3.0 || motionA > 9.0);
+  bool cautionNow = (speed > 1.8 || motionA > 5.0);
+
+  if (warningNow) {
+    warningCount++;
+  } else {
+    warningCount = 0;
+  }
+
+  if (cautionNow) {
+    cautionCount++;
+  } else {
+    cautionCount = 0;
+  }
+
+  if (warningCount >= 3) {
     return RISK_WARNING;
   }
 
-  if (speed > 1.0 || motionA > 2.5) {
+  if (cautionCount >= 3) {
     return RISK_CAUTION;
   }
 
