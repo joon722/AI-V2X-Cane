@@ -1,15 +1,20 @@
-// Cane V2X endpoint: broadcast cane status and react to Jetson/RSU risk alerts.
+// Cane V2X endpoint: broadcast cane GPS status and alert with vibration motor + beep buzzer.
 
 #include <WiFi.h>
 #include <esp_now.h>
 #include "esp_wifi.h"
+#include <Wire.h>
+#include <TinyGPSPlus.h>
+#include <ICM_20948.h>
+#include <math.h>
 
 // =====================
 // Feature switches
 // =====================
 #define USE_ACTUATOR 1
-#define USE_DFPLAYER 1
-#define USE_FIXED_GPS 1
+#define USE_GPS 1
+#define USE_IMU 1
+#define USE_FIXED_GPS_FALLBACK 1
 
 // =====================
 // Pins
@@ -17,9 +22,16 @@
 #define LED_PIN 2
 #define BUZZER_PIN 25
 #define MOTOR_PIN 26
-#define MP3_RX 32
-#define MP3_TX 33
-#define MP3_BAUD 9600
+
+// Same GPS wiring as 01_sender_gps_imu_espnow.
+#define GPS_RX 16
+#define GPS_TX 17
+#define GPS_BAUD 9600
+
+// Same I2C wiring as 01_sender_gps_imu_espnow.
+#define I2C_SDA 21
+#define I2C_SCL 22
+#define AD0_VAL 1
 
 // Active LOW buzzer, Active HIGH vibration motor.
 #define BUZZER_ON LOW
@@ -49,9 +61,8 @@
 
 #define SEND_INTERVAL_MS 100
 #define BEEP_DURATION_MS 50
-#define MP3_MIN_INTERVAL_MS 1500
 
-// Demo cane position. Change to the test location before field tests.
+// Fallback demo position. Used only while cane GPS is not fixed.
 #define CANE_FIXED_LAT 37.000000
 #define CANE_FIXED_LNG 127.000000
 
@@ -87,7 +98,9 @@ typedef struct __attribute__((packed)) v2x_risk_message {
   uint16_t seq_num;
 } v2x_risk_message_t;
 
-HardwareSerial mp3Serial(1);
+TinyGPSPlus gps;
+ICM_20948_I2C imu;
+HardwareSerial gpsSerial(2);
 
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txStatus;
@@ -102,9 +115,18 @@ uint8_t currentRisk = 255;
 uint32_t lastRiskMs = 0;
 uint16_t lastRiskSeq = 0;
 
+float lastLat = 0.0f;
+float lastLng = 0.0f;
+float lastSpeed = 0.0f;
+float lastHeading = 0.0f;
+uint8_t lastGpsValid = 0;
+
+float lastAccelX = 0.0f;
+float lastAccelY = 0.0f;
+float lastAccelZ = 0.0f;
+
 bool beepActive = false;
 uint32_t beepStartMs = 0;
-uint32_t lastMp3PlayMs = 0;
 
 uint32_t macToNodeId(const uint8_t *mac) {
   return ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
@@ -137,37 +159,6 @@ void forceOutputsOff() {
 #endif
 }
 
-void dfSendCommand(uint8_t cmd, uint16_t param) {
-#if USE_DFPLAYER
-  uint8_t packet[10];
-  packet[0] = 0x7E;
-  packet[1] = 0xFF;
-  packet[2] = 0x06;
-  packet[3] = cmd;
-  packet[4] = 0x00;
-  packet[5] = (param >> 8) & 0xFF;
-  packet[6] = param & 0xFF;
-  uint16_t checksum = 0 - (packet[1] + packet[2] + packet[3] + packet[4] + packet[5] + packet[6]);
-  packet[7] = (checksum >> 8) & 0xFF;
-  packet[8] = checksum & 0xFF;
-  packet[9] = 0xEF;
-  mp3Serial.write(packet, 10);
-#endif
-}
-
-void dfSetVolume(uint8_t volume) {
-#if USE_DFPLAYER
-  if (volume > 30) volume = 30;
-  dfSendCommand(0x06, volume);
-#endif
-}
-
-void dfPlayTrack(uint16_t trackNum) {
-#if USE_DFPLAYER
-  dfSendCommand(0x03, trackNum);
-#endif
-}
-
 void startBeep() {
 #if USE_ACTUATOR
   digitalWrite(BUZZER_PIN, BUZZER_ON);
@@ -181,6 +172,63 @@ void updateBeep() {
   if (beepActive && millis() - beepStartMs >= BEEP_DURATION_MS) {
     digitalWrite(BUZZER_PIN, BUZZER_OFF);
     beepActive = false;
+  }
+#endif
+}
+
+void setupGps() {
+#if USE_GPS
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
+  Serial.println("[GPS] ready");
+  Serial.println("[GPS] GPS TX -> ESP32 GPIO16 RX2");
+  Serial.println("[GPS] GPS RX -> ESP32 GPIO17 TX2");
+#endif
+}
+
+void setupImu() {
+#if USE_IMU
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+  imu.begin(Wire, AD0_VAL);
+
+  if (imu.status == ICM_20948_Stat_Ok) {
+    Serial.println("[IMU] connected");
+  } else {
+    Serial.print("[IMU] failed. status=");
+    Serial.println(imu.statusString());
+  }
+#endif
+}
+
+void readGps() {
+#if USE_GPS
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    lastLat = gps.location.lat();
+    lastLng = gps.location.lng();
+    lastGpsValid = gps.location.isValid() ? 1 : 0;
+  }
+
+  if (gps.speed.isUpdated()) {
+    lastSpeed = gps.speed.mps();
+  }
+
+  if (gps.course.isUpdated()) {
+    lastHeading = gps.course.deg();
+  }
+#endif
+}
+
+void readImu() {
+#if USE_IMU
+  if (imu.dataReady()) {
+    imu.getAGMT();
+    lastAccelX = (imu.accX() / 1000.0f) * 9.80665f;
+    lastAccelY = (imu.accY() / 1000.0f) * 9.80665f;
+    lastAccelZ = (imu.accZ() / 1000.0f) * 9.80665f;
   }
 #endif
 }
@@ -201,13 +249,6 @@ void applyRisk(uint8_t risk) {
   }
 #endif
 
-#if USE_DFPLAYER
-  if (risk > RISK_SAFE && millis() - lastMp3PlayMs > MP3_MIN_INTERVAL_MS) {
-    dfPlayTrack(risk);  // 0001.mp3, 0002.mp3, 0003.mp3
-    lastMp3PlayMs = millis();
-  }
-#endif
-
   currentRisk = risk;
 }
 
@@ -218,12 +259,22 @@ void buildStatusPacket() {
   txStatus.msg_type = MSG_CANE_STATUS;
   txStatus.node_type = NODE_CANE;
   txStatus.risk_level = currentRisk == 255 ? RISK_SAFE : currentRisk;
-  txStatus.gps_valid = USE_FIXED_GPS ? 1 : 0;
   txStatus.node_id = caneId;
-  txStatus.latitude = USE_FIXED_GPS ? CANE_FIXED_LAT : 0.0f;
-  txStatus.longitude = USE_FIXED_GPS ? CANE_FIXED_LNG : 0.0f;
-  txStatus.speed_mps = 0.0f;
-  txStatus.heading_deg = 0.0f;
+
+  if (lastGpsValid) {
+    txStatus.gps_valid = 1;
+    txStatus.latitude = lastLat;
+    txStatus.longitude = lastLng;
+    txStatus.speed_mps = lastSpeed;
+    txStatus.heading_deg = lastHeading;
+  } else {
+    txStatus.gps_valid = USE_FIXED_GPS_FALLBACK ? 1 : 0;
+    txStatus.latitude = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f;
+    txStatus.longitude = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f;
+    txStatus.speed_mps = 0.0f;
+    txStatus.heading_deg = 0.0f;
+  }
+
   txStatus.timestamp_ms = millis();
   txStatus.seq_num = seq++;
 }
@@ -234,12 +285,17 @@ void sendCaneStatus() {
   sendCount++;
 
   Serial.printf(
-    "[CANE SEND] id=%lu seq=%u lat=%.6f lng=%.6f risk=%u send=%lu result=%s\n",
+    "[CANE SEND] id=%lu seq=%u gps=%u lat=%.6f lng=%.6f spd=%.2f risk=%u ax=%.2f ay=%.2f az=%.2f send=%lu result=%s\n",
     (unsigned long)txStatus.node_id,
     txStatus.seq_num,
+    txStatus.gps_valid,
     txStatus.latitude,
     txStatus.longitude,
+    txStatus.speed_mps,
     txStatus.risk_level,
+    lastAccelX,
+    lastAccelY,
+    lastAccelZ,
     (unsigned long)sendCount,
     result == ESP_OK ? "OK" : "ERR"
   );
@@ -326,17 +382,14 @@ void setup() {
   delay(1000);
 
   Serial.println("=== V2X Cane Status + Risk Alert ===");
-  Serial.printf("[CONFIG] cane fixed lat=%.6f lng=%.6f\n", (float)CANE_FIXED_LAT, (float)CANE_FIXED_LNG);
+  Serial.println("[ACT] output = vibration motor + beep buzzer only, no DFPlayer");
+  Serial.printf("[CONFIG] fallback lat=%.6f lng=%.6f\n", (float)CANE_FIXED_LAT, (float)CANE_FIXED_LNG);
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-#if USE_DFPLAYER
-  mp3Serial.begin(MP3_BAUD, SERIAL_8N1, MP3_RX, MP3_TX);
-  delay(500);
-  dfSetVolume(22);
-  Serial.println("[DFPlayer] ready");
-#endif
+  setupGps();
+  setupImu();
 
   setupEspNow();
   applyRisk(RISK_SAFE);
@@ -345,6 +398,8 @@ void setup() {
 
 void loop() {
   updateBeep();
+  readGps();
+  readImu();
 
   if (millis() - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = millis();
