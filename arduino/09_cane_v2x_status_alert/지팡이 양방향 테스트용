@@ -1,4 +1,9 @@
-// Cane V2X endpoint: broadcast cane GPS status and alert with vibration motor + beep buzzer.
+// Cane V2X endpoint:
+// - Broadcast cane GPS/IMU status.
+// - Receive vehicle MSG_VEHICLE_STATUS directly.
+// - Receive MSG_RISK_ALERT from vehicle/RSU/Jetson.
+// - Calculate final_risk = max(cane_local_risk, remote_risk).
+// - Drive vibration motor and active-low buzzer with non-blocking patterns.
 
 #include <WiFi.h>
 #include <esp_now.h>
@@ -16,6 +21,10 @@
 #define USE_IMU 1
 #define USE_FIXED_GPS_FALLBACK 1
 
+// 1: desk/indoor test thresholds, matching v2x_vehicle_endpoint_indoor.ino.
+// 0: outdoor-like thresholds from the design note.
+#define USE_INDOOR_RISK_PROFILE 1
+
 // =====================
 // Pins
 // =====================
@@ -23,12 +32,10 @@
 #define BUZZER_PIN 25
 #define MOTOR_PIN 26
 
-// Same GPS wiring as 01_sender_gps_imu_espnow.
 #define GPS_RX 16
 #define GPS_TX 17
 #define GPS_BAUD 9600
 
-// Same I2C wiring as 01_sender_gps_imu_espnow.
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define AD0_VAL 1
@@ -41,6 +48,7 @@
 
 // =====================
 // V2X protocol constants
+// Must match vehicle/RSU code.
 // =====================
 #define V2X_MAGIC 0x56325831UL  // "V2X1"
 #define V2X_VERSION 1
@@ -60,15 +68,39 @@
 #define RISK_DANGER 3
 
 #define SEND_INTERVAL_MS 100
-#define BEEP_DURATION_MS 50
+#define VEHICLE_TIMEOUT_MS 1000
+#define REMOTE_RISK_TIMEOUT_MS 1800
+#define SAFE_CLEAR_DELAY_MS 1800
 
-// 실내 테스트에서는 CAUTION(risk 1)은 로그로만 보고,
-// WARNING(risk 2) 이상부터 진동/부저를 켬.
-#define ACTUATE_MIN_RISK RISK_WARNING
+#define WARNING_PERIOD_MS 500
+#define WARNING_ON_MS 200
+#define DANGER_BEEP_PERIOD_MS 220
+#define DANGER_BEEP_ON_MS 90
 
-// Fallback demo position. Used only while cane GPS is not fixed.
+// Fallback demo position. Vehicle indoor fallback is built around this point.
 #define CANE_FIXED_LAT 37.000000
 #define CANE_FIXED_LNG 127.000000
+
+#if USE_INDOOR_RISK_PROFILE
+#define RISK_DANGER_DISTANCE_M 0.4f
+#define RISK_WARNING_DISTANCE_M 0.9f
+#define RISK_CAUTION_DISTANCE_M 1.8f
+#define RISK_DANGER_TTC_S 0.7f
+#define RISK_WARNING_TTC_S 1.5f
+#define RISK_CAUTION_TTC_S 3.0f
+#define PASSING_CPA_SAFE_M 1.2f
+#else
+#define RISK_DANGER_DISTANCE_M 3.0f
+#define RISK_WARNING_DISTANCE_M 6.0f
+#define RISK_CAUTION_DISTANCE_M 10.0f
+#define RISK_DANGER_TTC_S 1.5f
+#define RISK_WARNING_TTC_S 3.0f
+#define RISK_CAUTION_TTC_S 5.0f
+#define PASSING_CPA_SAFE_M 4.0f
+#endif
+
+#define MIN_CLOSING_SPEED_MPS 0.30f
+#define CPA_LOOKAHEAD_S 6.0f
 
 typedef struct __attribute__((packed)) v2x_status_message {
   uint32_t magic;
@@ -108,16 +140,28 @@ HardwareSerial gpsSerial(2);
 
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txStatus;
+v2x_status_message_t latestVehicleStatus;
 v2x_risk_message_t rxRisk;
 
 uint32_t caneId = 0;
 uint16_t seq = 0;
 uint32_t sendCount = 0;
-uint32_t lastSendMs = 0;
+uint32_t vehicleRxCount = 0;
+uint32_t remoteRiskRxCount = 0;
 
-uint8_t currentRisk = 255;
-uint32_t lastRiskMs = 0;
-uint16_t lastRiskSeq = 0;
+uint32_t lastSendMs = 0;
+uint32_t lastVehicleMs = 0;
+uint32_t lastRemoteRiskMs = 0;
+uint32_t safeCandidateMs = 0;
+uint32_t lastActuatorLogMs = 0;
+
+bool hasVehicleStatus = false;
+bool newVehicleStatus = false;
+
+uint8_t caneLocalRisk = RISK_SAFE;
+uint8_t remoteRisk = RISK_SAFE;
+uint8_t rawFinalRisk = RISK_SAFE;
+uint8_t outputRisk = RISK_SAFE;
 
 float lastLat = 0.0f;
 float lastLng = 0.0f;
@@ -128,9 +172,6 @@ uint8_t lastGpsValid = 0;
 float lastAccelX = 0.0f;
 float lastAccelY = 0.0f;
 float lastAccelZ = 0.0f;
-
-bool beepActive = false;
-uint32_t beepStartMs = 0;
 
 uint32_t macToNodeId(const uint8_t *mac) {
   return ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
@@ -160,23 +201,6 @@ void forceOutputsOff() {
   pinMode(MOTOR_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, BUZZER_OFF);
   digitalWrite(MOTOR_PIN, MOTOR_OFF);
-#endif
-}
-
-void startBeep() {
-#if USE_ACTUATOR
-  digitalWrite(BUZZER_PIN, BUZZER_ON);
-  beepActive = true;
-  beepStartMs = millis();
-#endif
-}
-
-void updateBeep() {
-#if USE_ACTUATOR
-  if (beepActive && millis() - beepStartMs >= BEEP_DURATION_MS) {
-    digitalWrite(BUZZER_PIN, BUZZER_OFF);
-    beepActive = false;
-  }
 #endif
 }
 
@@ -237,23 +261,213 @@ void readImu() {
 #endif
 }
 
-void applyRisk(uint8_t risk) {
-  if (risk == currentRisk) return;
+float degToRad(float deg) {
+  return deg * 3.14159265f / 180.0f;
+}
 
-  Serial.printf("[CANE OUT] risk %u -> %u\n", currentRisk, risk);
+void relativeVectorMeters(float fromLat, float fromLng, float toLat, float toLng, float *east, float *north) {
+  const float R = 6371000.0f;
+  float midLat = degToRad((fromLat + toLat) * 0.5f);
 
+  *east = degToRad(toLng - fromLng) * cosf(midLat) * R;
+  *north = degToRad(toLat - fromLat) * R;
+}
+
+void getCanePosition(float *lat, float *lng, uint8_t *gpsValid) {
+  if (lastGpsValid) {
+    *lat = lastLat;
+    *lng = lastLng;
+    *gpsValid = 1;
+  } else {
+    *lat = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f;
+    *lng = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f;
+    *gpsValid = USE_FIXED_GPS_FALLBACK ? 1 : 0;
+  }
+}
+
+uint8_t calculateLocalRiskFromVehicle(
+  const v2x_status_message_t &vehicle,
+  float *outDistance,
+  float *outClosingSpeed,
+  float *outTtc,
+  float *outCpaDistance
+) {
+  float caneLat = 0.0f;
+  float caneLng = 0.0f;
+  uint8_t caneGpsValid = 0;
+  getCanePosition(&caneLat, &caneLng, &caneGpsValid);
+
+  if (!vehicle.gps_valid || !caneGpsValid) {
+    *outDistance = 999.0f;
+    *outClosingSpeed = 0.0f;
+    *outTtc = 999.0f;
+    *outCpaDistance = 999.0f;
+    return RISK_SAFE;
+  }
+
+  float east = 0.0f;
+  float north = 0.0f;
+  relativeVectorMeters(vehicle.latitude, vehicle.longitude, caneLat, caneLng, &east, &north);
+
+  float distance = sqrtf(east * east + north * north);
+  if (distance < 0.1f) distance = 0.1f;
+
+  // Heading convention: 0 deg = north, 90 = east, 180 = south, 270 = west.
+  float headingRad = degToRad(vehicle.heading_deg);
+  float vEast = vehicle.speed_mps * sinf(headingRad);
+  float vNorth = vehicle.speed_mps * cosf(headingRad);
+
+  float closingSpeed = (vEast * east + vNorth * north) / distance;
+  float ttc = 999.0f;
+  if (closingSpeed > MIN_CLOSING_SPEED_MPS) {
+    ttc = distance / closingSpeed;
+  }
+
+  float speed2 = vEast * vEast + vNorth * vNorth;
+  float tCpa = 999.0f;
+  float cpaDistance = distance;
+
+  if (speed2 > 0.05f) {
+    tCpa = (east * vEast + north * vNorth) / speed2;
+    if (tCpa >= 0.0f && tCpa <= CPA_LOOKAHEAD_S) {
+      float cpaEast = east - vEast * tCpa;
+      float cpaNorth = north - vNorth * tCpa;
+      cpaDistance = sqrtf(cpaEast * cpaEast + cpaNorth * cpaNorth);
+    }
+  }
+
+  bool closePassingButNotTowardMe =
+    (tCpa >= 0.0f && tCpa <= CPA_LOOKAHEAD_S &&
+     cpaDistance > PASSING_CPA_SAFE_M &&
+     closingSpeed < MIN_CLOSING_SPEED_MPS);
+
+  *outDistance = distance;
+  *outClosingSpeed = closingSpeed;
+  *outTtc = ttc;
+  *outCpaDistance = cpaDistance;
+
+  if (closePassingButNotTowardMe) {
+    return distance < RISK_CAUTION_DISTANCE_M ? RISK_CAUTION : RISK_SAFE;
+  }
+
+  if (distance < RISK_DANGER_DISTANCE_M || ttc < RISK_DANGER_TTC_S || cpaDistance < RISK_DANGER_DISTANCE_M) {
+    return RISK_DANGER;
+  }
+
+  if (distance < RISK_WARNING_DISTANCE_M || ttc < RISK_WARNING_TTC_S || cpaDistance < RISK_WARNING_DISTANCE_M) {
+    return RISK_WARNING;
+  }
+
+  if (distance < RISK_CAUTION_DISTANCE_M || ttc < RISK_CAUTION_TTC_S) {
+    return RISK_CAUTION;
+  }
+
+  return RISK_SAFE;
+}
+
+void updateLocalRisk() {
+  uint32_t now = millis();
+
+  if (!hasVehicleStatus || now - lastVehicleMs > VEHICLE_TIMEOUT_MS) {
+    if (caneLocalRisk != RISK_SAFE) {
+      Serial.println("[LOCAL RISK] vehicle timeout -> safe");
+    }
+    caneLocalRisk = RISK_SAFE;
+    hasVehicleStatus = false;
+    return;
+  }
+
+  if (!newVehicleStatus) return;
+  newVehicleStatus = false;
+
+  float distanceM = 0.0f;
+  float closingSpeed = 0.0f;
+  float ttc = 999.0f;
+  float cpaDistance = 999.0f;
+
+  uint8_t risk = calculateLocalRiskFromVehicle(
+    latestVehicleStatus,
+    &distanceM,
+    &closingSpeed,
+    &ttc,
+    &cpaDistance
+  );
+
+  caneLocalRisk = risk;
+
+  Serial.printf(
+    "[LOCAL RISK] vehicle=%lu seq=%u distance=%.2fm closing=%.2fm/s ttc=%.2fs cpa=%.2fm risk=%u vehicle_node_risk=%u\n",
+    (unsigned long)latestVehicleStatus.node_id,
+    latestVehicleStatus.seq_num,
+    distanceM,
+    closingSpeed,
+    ttc,
+    cpaDistance,
+    risk,
+    latestVehicleStatus.risk_level
+  );
+}
+
+void updateFinalRisk() {
+  uint32_t now = millis();
+
+  if (lastRemoteRiskMs > 0 && now - lastRemoteRiskMs > REMOTE_RISK_TIMEOUT_MS) {
+    if (remoteRisk != RISK_SAFE) {
+      Serial.println("[REMOTE RISK] timeout -> safe");
+    }
+    remoteRisk = RISK_SAFE;
+  }
+
+  rawFinalRisk = max(caneLocalRisk, remoteRisk);
+
+  if (rawFinalRisk > outputRisk) {
+    outputRisk = rawFinalRisk;
+    safeCandidateMs = 0;
+  } else if (rawFinalRisk < outputRisk) {
+    if (rawFinalRisk == RISK_SAFE) {
+      if (safeCandidateMs == 0) safeCandidateMs = now;
+      if (now - safeCandidateMs >= SAFE_CLEAR_DELAY_MS) {
+        outputRisk = RISK_SAFE;
+      }
+    } else {
+      outputRisk = rawFinalRisk;
+      safeCandidateMs = 0;
+    }
+  } else {
+    safeCandidateMs = 0;
+  }
+}
+
+void applyActuator() {
 #if USE_ACTUATOR
-  if (risk < ACTUATE_MIN_RISK) {
+  uint32_t now = millis();
+
+  if (now - lastActuatorLogMs >= 500) {
+    lastActuatorLogMs = now;
+    Serial.printf("[FINAL RISK] local=%u remote=%u raw=%u output=%u\n",
+                  caneLocalRisk, remoteRisk, rawFinalRisk, outputRisk);
+  }
+
+  if (outputRisk == RISK_SAFE || outputRisk == RISK_CAUTION) {
     digitalWrite(MOTOR_PIN, MOTOR_OFF);
     digitalWrite(BUZZER_PIN, BUZZER_OFF);
-    beepActive = false;
-  } else {
+    return;
+  }
+
+  if (outputRisk == RISK_WARNING) {
+    bool on = (now % WARNING_PERIOD_MS) < WARNING_ON_MS;
+    digitalWrite(MOTOR_PIN, on ? MOTOR_ON : MOTOR_OFF);
+    digitalWrite(BUZZER_PIN, on ? BUZZER_ON : BUZZER_OFF);
+    return;
+  }
+
+  if (outputRisk == RISK_DANGER) {
+    bool beepOn = (now % DANGER_BEEP_PERIOD_MS) < DANGER_BEEP_ON_MS;
     digitalWrite(MOTOR_PIN, MOTOR_ON);
-    startBeep();
+    digitalWrite(BUZZER_PIN, beepOn ? BUZZER_ON : BUZZER_OFF);
+    return;
   }
 #endif
-
-  currentRisk = risk;
 }
 
 void buildStatusPacket() {
@@ -262,7 +476,7 @@ void buildStatusPacket() {
   txStatus.version = V2X_VERSION;
   txStatus.msg_type = MSG_CANE_STATUS;
   txStatus.node_type = NODE_CANE;
-  txStatus.risk_level = currentRisk == 255 ? RISK_SAFE : currentRisk;
+  txStatus.risk_level = outputRisk;
   txStatus.node_id = caneId;
 
   if (lastGpsValid) {
@@ -311,28 +525,59 @@ bool isForThisCane(uint32_t targetId) {
 
 void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
   if (!isForThisCane(riskMsg.target_id)) {
-    Serial.printf("[CANE RX] risk for other target=%lu\n", (unsigned long)riskMsg.target_id);
+    Serial.printf("[RISK RX] for other target=%lu\n", (unsigned long)riskMsg.target_id);
     return;
   }
 
-  lastRiskSeq = riskMsg.seq_num;
-  lastRiskMs = millis();
+  uint8_t risk = riskMsg.risk_level;
+  if (risk > RISK_DANGER) risk = RISK_DANGER;
+
+  remoteRisk = risk;
+  lastRemoteRiskMs = millis();
+  remoteRiskRxCount++;
+
   Serial.printf(
-    "[CANE RX] risk=%u target=%lu src=%lu seq=%u\n",
-    riskMsg.risk_level,
+    "[RISK RX] remote=%u target=%lu src=%lu seq=%u count=%lu\n",
+    remoteRisk,
     (unsigned long)riskMsg.target_id,
     (unsigned long)riskMsg.src_id,
-    riskMsg.seq_num
+    riskMsg.seq_num,
+    (unsigned long)remoteRiskRxCount
   );
-  applyRisk(riskMsg.risk_level);
+}
+
+void handleVehicleStatus(const v2x_status_message_t &vehicleMsg, const uint8_t *srcMac) {
+  if (vehicleMsg.node_type != NODE_VEHICLE) return;
+
+  memcpy(&latestVehicleStatus, &vehicleMsg, sizeof(latestVehicleStatus));
+  hasVehicleStatus = true;
+  newVehicleStatus = true;
+  lastVehicleMs = millis();
+  vehicleRxCount++;
+
+  Serial.print("[VEHICLE RX] mac=");
+  printMac(srcMac);
+  Serial.printf(
+    " id=%lu seq=%u gps=%u lat=%.6f lng=%.6f spd=%.2f heading=%.1f node_risk=%u count=%lu\n",
+    (unsigned long)latestVehicleStatus.node_id,
+    latestVehicleStatus.seq_num,
+    latestVehicleStatus.gps_valid,
+    latestVehicleStatus.latitude,
+    latestVehicleStatus.longitude,
+    latestVehicleStatus.speed_mps,
+    latestVehicleStatus.heading_deg,
+    latestVehicleStatus.risk_level,
+    (unsigned long)vehicleRxCount
+  );
 }
 
 void handleLegacyReply(const v2x_status_message_t &replyMsg) {
   if (replyMsg.msg_type != MSG_RSU_REPLY) return;
-  lastRiskSeq = replyMsg.seq_num;
-  lastRiskMs = millis();
-  Serial.printf("[CANE RX LEGACY] risk=%u seq=%u\n", replyMsg.risk_level, replyMsg.seq_num);
-  applyRisk(replyMsg.risk_level);
+
+  remoteRisk = replyMsg.risk_level <= RISK_DANGER ? replyMsg.risk_level : RISK_DANGER;
+  lastRemoteRiskMs = millis();
+
+  Serial.printf("[RISK RX LEGACY] remote=%u seq=%u\n", remoteRisk, replyMsg.seq_num);
 }
 
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -345,10 +590,20 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   }
 
   if (len == sizeof(v2x_status_message_t)) {
-    v2x_status_message_t reply;
-    memcpy(&reply, data, sizeof(reply));
-    if (reply.magic == V2X_MAGIC && reply.version == V2X_VERSION) {
-      handleLegacyReply(reply);
+    v2x_status_message_t statusMsg;
+    memcpy(&statusMsg, data, sizeof(statusMsg));
+    if (statusMsg.magic != V2X_MAGIC || statusMsg.version != V2X_VERSION) {
+      Serial.println("[CANE RX] invalid status magic/version");
+      return;
+    }
+
+    if (statusMsg.msg_type == MSG_VEHICLE_STATUS) {
+      handleVehicleStatus(statusMsg, info->src_addr);
+      return;
+    }
+
+    if (statusMsg.msg_type == MSG_RSU_REPLY) {
+      handleLegacyReply(statusMsg);
       return;
     }
   }
@@ -385,25 +640,31 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  Serial.println("=== V2X Cane Status + Risk Alert ===");
-  Serial.println("[ACT] output = vibration motor + beep buzzer only, no DFPlayer");
-  Serial.printf("[CONFIG] fallback lat=%.6f lng=%.6f\n", (float)CANE_FIXED_LAT, (float)CANE_FIXED_LNG);
+  Serial.println("=== V2X Cane Bidirectional Local/Remote Risk ===");
+  Serial.println("[MODE] cane status TX + vehicle status RX + risk alert RX");
+  Serial.println("[ACT] risk 0/1 off, risk 2 pulse, risk 3 strong vibration + fast buzzer");
+  Serial.printf("[CONFIG] fallback lat=%.6f lng=%.6f indoor_profile=%d\n",
+                (float)CANE_FIXED_LAT,
+                (float)CANE_FIXED_LNG,
+                USE_INDOOR_RISK_PROFILE);
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
   setupGps();
   setupImu();
-
   setupEspNow();
-  applyRisk(RISK_SAFE);
+
   Serial.println("[CANE] System ready");
 }
 
 void loop() {
-  updateBeep();
   readGps();
   readImu();
+
+  updateLocalRisk();
+  updateFinalRisk();
+  applyActuator();
 
   if (millis() - lastSendMs >= SEND_INTERVAL_MS) {
     lastSendMs = millis();
@@ -412,7 +673,7 @@ void loop() {
     digitalWrite(LED_PIN, LOW);
   }
 
-  if (lastRiskMs > 0 && millis() - lastRiskMs < 1000) {
+  if (lastVehicleMs > 0 && millis() - lastVehicleMs < 1000) {
     digitalWrite(LED_PIN, HIGH);
   }
 
