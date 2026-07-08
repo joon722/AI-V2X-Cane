@@ -397,6 +397,17 @@ void sendRiskAlertToCane(uint8_t risk, uint32_t targetCaneId) {
 // =====================
 // Receive callback
 // =====================
+void handleRsuReply(const v2x_status_message_t &replyMsg) {
+  if (replyMsg.msg_type != MSG_RSU_REPLY || replyMsg.node_type != NODE_RSU) return;
+
+  lastRiskLevel = replyMsg.risk_level;
+  Serial.printf(
+    "[VEHICLE RX LEGACY] risk=%u seq=%u\n",
+    replyMsg.risk_level,
+    replyMsg.seq_num
+  );
+}
+
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len != sizeof(v2x_status_message_t)) {
     Serial.printf("[RX] drop len=%d expected=%d\n", len, sizeof(v2x_status_message_t));
@@ -408,6 +419,11 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   if (msg.magic != V2X_MAGIC || msg.version != V2X_VERSION) {
     Serial.println("[RX] invalid magic/version");
+    return;
+  }
+
+  if (msg.msg_type == MSG_RSU_REPLY && msg.node_type == NODE_RSU) {
+    handleRsuReply(msg);
     return;
   }
 
