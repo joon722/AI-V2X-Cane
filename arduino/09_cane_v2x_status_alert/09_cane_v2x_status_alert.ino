@@ -110,6 +110,8 @@ uint32_t caneId = 0;
 uint16_t seq = 0;
 uint32_t sendCount = 0;
 uint32_t lastSendMs = 0;
+uint32_t vehicleRxCount = 0;
+uint32_t lastVehicleRxMs = 0;
 
 uint8_t currentRisk = 255;
 uint32_t lastRiskMs = 0;
@@ -127,6 +129,9 @@ float lastAccelZ = 0.0f;
 
 bool beepActive = false;
 uint32_t beepStartMs = 0;
+
+float prevVehicleDistanceM = -1.0f;
+uint32_t prevVehicleRiskCalcMs = 0;
 
 uint32_t macToNodeId(const uint8_t *mac) {
   return ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
@@ -233,6 +238,66 @@ void readImu() {
 #endif
 }
 
+float degToRad(float deg) {
+  return deg * 3.14159265f / 180.0f;
+}
+
+float distanceMeters(float lat1, float lng1, float lat2, float lng2) {
+  const float R = 6371000.0f;
+
+  float p1 = degToRad(lat1);
+  float p2 = degToRad(lat2);
+  float dp = degToRad(lat2 - lat1);
+  float dl = degToRad(lng2 - lng1);
+
+  float a = sinf(dp / 2.0f) * sinf(dp / 2.0f)
+          + cosf(p1) * cosf(p2) * sinf(dl / 2.0f) * sinf(dl / 2.0f);
+
+  float c = 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
+  return R * c;
+}
+
+uint8_t calculateRiskFromVehicle(
+  const v2x_status_message_t &vehicle,
+  float *outDistance,
+  float *outClosingSpeed,
+  float *outTtc
+) {
+  float caneLat = lastGpsValid ? lastLat : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f);
+  float caneLng = lastGpsValid ? lastLng : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f);
+  float d = distanceMeters(caneLat, caneLng, vehicle.latitude, vehicle.longitude);
+
+  uint32_t now = millis();
+  float closingSpeed = 0.0f;
+  float ttc = 999.0f;
+
+  if (prevVehicleDistanceM >= 0.0f && prevVehicleRiskCalcMs > 0 && now > prevVehicleRiskCalcMs) {
+    float dt = (now - prevVehicleRiskCalcMs) / 1000.0f;
+    closingSpeed = (prevVehicleDistanceM - d) / dt;
+
+    if (closingSpeed > 0.1f) {
+      ttc = d / closingSpeed;
+    }
+  }
+
+  prevVehicleDistanceM = d;
+  prevVehicleRiskCalcMs = now;
+
+  *outDistance = d;
+  *outClosingSpeed = closingSpeed;
+  *outTtc = ttc;
+
+  if (d < 3.0f || ttc < 2.0f) {
+    return RISK_DANGER;
+  } else if (d < 6.0f || ttc < 4.0f) {
+    return RISK_WARNING;
+  } else if (d < 12.0f || ttc < 6.0f) {
+    return RISK_CAUTION;
+  } else {
+    return RISK_SAFE;
+  }
+}
+
 void applyRisk(uint8_t risk) {
   if (risk == currentRisk) return;
 
@@ -331,6 +396,36 @@ void handleLegacyReply(const v2x_status_message_t &replyMsg) {
   applyRisk(replyMsg.risk_level);
 }
 
+void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
+  if (vehicleMsg.msg_type != MSG_VEHICLE_STATUS || vehicleMsg.node_type != NODE_VEHICLE) return;
+
+  vehicleRxCount++;
+  lastVehicleRxMs = millis();
+
+  if (!vehicleMsg.gps_valid || !(lastGpsValid || USE_FIXED_GPS_FALLBACK)) {
+    Serial.println("[CANE RISK CALC] GPS invalid -> risk safe");
+    applyRisk(RISK_SAFE);
+    return;
+  }
+
+  float distanceM = 0.0f;
+  float closingSpeed = 0.0f;
+  float ttc = 999.0f;
+  uint8_t risk = calculateRiskFromVehicle(vehicleMsg, &distanceM, &closingSpeed, &ttc);
+
+  Serial.printf(
+    "[CANE RISK CALC] vehicle_id=%lu distance=%.2fm closing=%.2fm/s ttc=%.2fs risk=%u rx_count=%lu\n",
+    (unsigned long)vehicleMsg.node_id,
+    distanceM,
+    closingSpeed,
+    ttc,
+    risk,
+    (unsigned long)vehicleRxCount
+  );
+
+  applyRisk(risk);
+}
+
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len == sizeof(v2x_risk_message_t)) {
     memcpy(&rxRisk, data, sizeof(rxRisk));
@@ -344,7 +439,11 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     v2x_status_message_t reply;
     memcpy(&reply, data, sizeof(reply));
     if (reply.magic == V2X_MAGIC && reply.version == V2X_VERSION) {
-      handleLegacyReply(reply);
+      if (reply.msg_type == MSG_VEHICLE_STATUS && reply.node_type == NODE_VEHICLE) {
+        handleVehicleStatus(reply);
+      } else if (reply.msg_type == MSG_RSU_REPLY) {
+        handleLegacyReply(reply);
+      }
       return;
     }
   }
