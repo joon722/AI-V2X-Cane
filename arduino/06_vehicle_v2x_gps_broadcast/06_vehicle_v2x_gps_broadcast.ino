@@ -293,11 +293,11 @@ uint8_t calculateRiskFromCane(
 
   // 간단한 rule 기반 위험도
   // distance 또는 TTC 중 하나라도 위험하면 상위 risk로 올림.
-  if (d < 3.0f || ttc < 1.5f) {
+  if (d < 3.0f || ttc < 2.0f) {
     return RISK_DANGER;
-  } else if (d < 6.0f || ttc < 3.0f) {
+  } else if (d < 6.0f || ttc < 4.0f) {
     return RISK_WARNING;
-  } else if (d < 10.0f || ttc < 5.0f) {
+  } else if (d < 12.0f || ttc < 6.0f) {
     return RISK_CAUTION;
   } else {
     return RISK_SAFE;
