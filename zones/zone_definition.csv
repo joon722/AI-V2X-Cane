@@ -1,0 +1,5 @@
+zone_id,zone_name,zone_type,center_x,center_y,radius_m,base_risk,speed_limit,description
+Z01,Main Gate,Entrance,3602.48,1490.75,30,3,20,High pedestrian traffic near campus entrance
+Z02,Middle Gate,Intersection,3849.93,1387.09,30,4,15,Blind spot caused by buildings
+Z03,Student Center,Pedestrian Area,3872.76,1476.11,30,2,10,Frequent pedestrian movement
+Z04,Parking Exit,Parking,3866.20,1446.03,30,5,10,Vehicles exiting with limited visibility
