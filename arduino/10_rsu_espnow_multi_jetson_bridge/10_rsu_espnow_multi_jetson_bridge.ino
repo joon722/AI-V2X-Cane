@@ -192,12 +192,7 @@ void sendRiskAlert(int index, uint8_t risk, uint32_t srcId) {
 void sendRiskToDevice(int index, uint8_t risk, uint32_t srcId) {
   if (index < 0 || index >= MAX_DEVICES || !devices[index].active) return;
   devices[index].last_risk = risk;
-
-  if (devices[index].node_type == NODE_CANE) {
-    sendRiskAlert(index, risk, srcId);
-  } else {
-    sendLegacyReply(index, risk);
-  }
+  sendRiskAlert(index, risk, srcId);
 }
 
 void printStatusJson(const v2x_status_message_t &m, const device_slot_t &slot, const uint8_t *srcMac, int rssi) {
@@ -258,42 +253,55 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   digitalWrite(LED_PIN, LOW);
 }
 
-int extractIntAfterKey(const char *line, const char *key, int fallback) {
+bool extractUint32AfterKey(const char *line, const char *key, uint32_t &value) {
   const char *p = strstr(line, key);
-  if (!p) return fallback;
+  if (!p) return false;
   while (*p && *p != ':' && *p != '=') p++;
-  if (!*p) return fallback;
+  if (!*p) return false;
   p++;
   while (*p == ' ' || *p == '\"') p++;
-  if (*p < '0' || *p > '9') return fallback;
-  int value = 0;
+  if (*p < '0' || *p > '9') return false;
+  value = 0;
   while (*p >= '0' && *p <= '9') {
-    value = value * 10 + (*p - '0');
+    uint8_t digit = *p - '0';
+    if (value > (UINT32_MAX - digit) / 10UL) return false;
+    value = value * 10UL + digit;
     p++;
   }
-  return value;
+  return true;
 }
 
 void handleJetsonLine(const char *line) {
-  int riskRaw = extractIntAfterKey(line, "risk", -1);
-  if (riskRaw < 0) {
+  uint32_t riskRaw = 0;
+  if (!extractUint32AfterKey(line, "risk", riskRaw)) {
     Serial.print("{\"type\":\"jetson_ignore\",\"line\":\"");
     Serial.print(line);
     Serial.println("\"}");
     return;
   }
 
-  uint8_t risk = clampRisk(riskRaw);
-  int targetRaw = extractIntAfterKey(line, "target_id", -1);
-  int srcRaw = extractIntAfterKey(line, "src_id", 0);
-  uint32_t srcId = srcRaw < 0 ? 0 : (uint32_t)srcRaw;
+  uint8_t risk = clampRisk((int)riskRaw);
+  uint32_t targetId = 0;
+  uint32_t srcId = 0;
+  bool hasTarget = extractUint32AfterKey(line, "target_id", targetId);
+  extractUint32AfterKey(line, "src_id", srcId);
 
-  if (targetRaw >= 0) {
-    int index = findDeviceByNodeId((uint32_t)targetRaw);
+  if (hasTarget) {
+    if (targetId == 0 || targetId == 0xFFFFFFFFUL) {
+      for (int i = 0; i < MAX_DEVICES; i++) {
+        if (devices[i].active) sendRiskToDevice(i, risk, srcId);
+      }
+      Serial.printf("{\"type\":\"risk_broadcast_to_seen\",\"target_id\":%lu,\"risk\":%u}\n",
+                    (unsigned long)targetId, risk);
+      return;
+    }
+
+    int index = findDeviceByNodeId(targetId);
     if (index >= 0) {
       sendRiskToDevice(index, risk, srcId);
     } else {
-      Serial.printf("{\"type\":\"risk_drop\",\"reason\":\"target_not_seen\",\"target_id\":%d,\"risk\":%u}\n", targetRaw, risk);
+      Serial.printf("{\"type\":\"risk_drop\",\"reason\":\"target_not_seen\",\"target_id\":%lu,\"risk\":%u}\n",
+                    (unsigned long)targetId, risk);
     }
     return;
   }

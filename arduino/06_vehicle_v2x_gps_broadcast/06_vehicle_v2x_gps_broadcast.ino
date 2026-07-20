@@ -11,6 +11,7 @@
 // =====================
 #define USE_GPS 1
 #define SEND_BROADCAST 1
+#define USE_DEMO_GPS_FALLBACK 1
 
 // =====================
 // Pins
@@ -28,15 +29,24 @@
 #define V2X_VERSION 1
 
 #define MSG_VEHICLE_STATUS 1
-#define MSG_CANE_REPLY     2
+#define MSG_RSU_REPLY      2
+#define MSG_CANE_STATUS    3
+#define MSG_RISK_ALERT     4
 
 #define NODE_VEHICLE 0x10
 #define NODE_CANE    0x20
+#define NODE_RSU     0x30
 
 #define RISK_SAFE    0
+#define RISK_CAUTION 1
+#define RISK_WARNING 2
+#define RISK_DANGER  3
 #define SEND_INTERVAL_MS 100
 
-typedef struct __attribute__((packed)) v2x_message {
+#define DEMO_VEHICLE_LAT 37.000000
+#define DEMO_VEHICLE_LNG 127.000150
+
+typedef struct __attribute__((packed)) v2x_status_message {
   uint32_t magic;
   uint8_t version;
   uint8_t msg_type;
@@ -52,7 +62,21 @@ typedef struct __attribute__((packed)) v2x_message {
 
   uint32_t timestamp_ms;
   uint16_t seq_num;
-} v2x_message_t;
+} v2x_status_message_t;
+
+typedef struct __attribute__((packed)) v2x_risk_message {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t msg_type;
+  uint8_t node_type;
+  uint8_t risk_level;
+  uint8_t reserved;
+
+  uint32_t target_id;
+  uint32_t src_id;
+  uint32_t timestamp_ms;
+  uint16_t seq_num;
+} v2x_risk_message_t;
 
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
@@ -60,8 +84,9 @@ TinyGPSPlus gps;
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 uint8_t caneMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Optional: replace with cane MAC for directed send.
 
-v2x_message_t txPacket;
-v2x_message_t rxReply;
+v2x_status_message_t txPacket;
+v2x_status_message_t rxReply;
+v2x_risk_message_t rxRisk;
 
 uint32_t vehicleId = 0;
 uint16_t seq = 0;
@@ -69,6 +94,7 @@ uint32_t sendCount = 0;
 uint32_t ackCount = 0;
 uint32_t lastSendMs = 0;
 uint32_t lastAckMs = 0;
+uint8_t lastRiskLevel = RISK_SAFE;
 
 void printMacAddress(const char *prefix, const uint8_t *mac) {
   Serial.print(prefix);
@@ -126,15 +152,15 @@ void buildPacket() {
 
 #if USE_GPS
   bool gpsOk = gps.location.isValid() && gps.location.age() < 3000;
-  txPacket.gps_valid = gpsOk ? 1 : 0;
-  txPacket.latitude = gpsOk ? gps.location.lat() : 0.0;
-  txPacket.longitude = gpsOk ? gps.location.lng() : 0.0;
+  txPacket.gps_valid = gpsOk || USE_DEMO_GPS_FALLBACK ? 1 : 0;
+  txPacket.latitude = gpsOk ? gps.location.lat() : (USE_DEMO_GPS_FALLBACK ? DEMO_VEHICLE_LAT : 0.0);
+  txPacket.longitude = gpsOk ? gps.location.lng() : (USE_DEMO_GPS_FALLBACK ? DEMO_VEHICLE_LNG : 0.0);
   txPacket.speed_mps = gps.speed.isValid() ? gps.speed.mps() : 0.0;
   txPacket.heading_deg = gps.course.isValid() ? gps.course.deg() : 0.0;
 #else
-  txPacket.gps_valid = 0;
-  txPacket.latitude = 0.0;
-  txPacket.longitude = 0.0;
+  txPacket.gps_valid = USE_DEMO_GPS_FALLBACK ? 1 : 0;
+  txPacket.latitude = USE_DEMO_GPS_FALLBACK ? DEMO_VEHICLE_LAT : 0.0;
+  txPacket.longitude = USE_DEMO_GPS_FALLBACK ? DEMO_VEHICLE_LNG : 0.0;
   txPacket.speed_mps = 0.0;
   txPacket.heading_deg = 0.0;
 #endif
@@ -168,26 +194,56 @@ void sendPacket() {
 }
 
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len != sizeof(v2x_message_t)) {
-    Serial.printf("[RX BACK] size mismatch len=%d expected=%d\n", len, sizeof(v2x_message_t));
+  if (len == sizeof(v2x_risk_message_t)) {
+    memcpy(&rxRisk, data, sizeof(rxRisk));
+    bool validRisk =
+      rxRisk.magic == V2X_MAGIC &&
+      rxRisk.version == V2X_VERSION &&
+      rxRisk.msg_type == MSG_RISK_ALERT &&
+      (rxRisk.target_id == 0 || rxRisk.target_id == vehicleId || rxRisk.target_id == 0xFFFFFFFFUL);
+
+    if (!validRisk) {
+      Serial.println("[RX RISK] invalid or not for this vehicle");
+      return;
+    }
+
+    ackCount++;
+    lastAckMs = millis();
+    lastRiskLevel = rxRisk.risk_level;
+    Serial.printf(
+      "[RX RISK] risk=%u target=%lu src=%lu seq=%u ack=%lu rx_ms=%lu\n",
+      rxRisk.risk_level,
+      (unsigned long)rxRisk.target_id,
+      (unsigned long)rxRisk.src_id,
+      rxRisk.seq_num,
+      (unsigned long)ackCount,
+      (unsigned long)lastAckMs
+    );
     return;
   }
 
-  memcpy(&rxReply, data, sizeof(rxReply));
-  if (rxReply.magic != V2X_MAGIC || rxReply.version != V2X_VERSION || rxReply.msg_type != MSG_CANE_REPLY) {
-    Serial.println("[RX BACK] invalid packet header");
+  if (len == sizeof(v2x_status_message_t)) {
+    memcpy(&rxReply, data, sizeof(rxReply));
+    if (rxReply.magic != V2X_MAGIC || rxReply.version != V2X_VERSION || rxReply.msg_type != MSG_RSU_REPLY) {
+      Serial.println("[RX BACK] invalid status reply header");
+      return;
+    }
+
+    ackCount++;
+    lastAckMs = millis();
+    lastRiskLevel = rxReply.risk_level;
+    Serial.printf(
+      "[RX BACK] seq=%u risk=%u ack=%lu rx_ms=%lu\n",
+      rxReply.seq_num,
+      rxReply.risk_level,
+      (unsigned long)ackCount,
+      (unsigned long)lastAckMs
+    );
     return;
   }
 
-  ackCount++;
-  lastAckMs = millis();
-  Serial.printf(
-    "[RX BACK] seq=%u cane_risk=%u ack=%lu rx_ms=%lu\n",
-    rxReply.seq_num,
-    rxReply.risk_level,
-    (unsigned long)ackCount,
-    (unsigned long)lastAckMs
-  );
+  Serial.printf("[RX BACK] size mismatch len=%d expected_status=%d expected_risk=%d\n",
+                len, sizeof(v2x_status_message_t), sizeof(v2x_risk_message_t));
 }
 
 void setupEspNow() {

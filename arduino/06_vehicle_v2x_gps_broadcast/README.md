@@ -6,8 +6,10 @@ New main vehicle-side prototype sketch. The vehicle only broadcasts its state an
 
 - Read GPS from GPIO16/17
 - Generate a vehicle `node_id` from the ESP32 MAC address
-- Broadcast `v2x_message_t` at 10 Hz over ESP-NOW
-- Receive cane replies and print `[RX BACK]`
+- Broadcast `v2x_status_message_t` at 10 Hz over ESP-NOW
+- Use `MSG_VEHICLE_STATUS` and `NODE_VEHICLE`
+- Receive `MSG_RISK_ALERT` or legacy `MSG_RSU_REPLY` and print the risk level
+- Keep vehicle-side risk calculation out of this main flow
 
 ## Wiring
 
@@ -28,4 +30,3 @@ By default the sketch uses ESP-NOW broadcast:
 ```
 
 This is useful for 1:N and N:N demo setup. If directed send is needed, set it to `0` and replace `caneMAC[]`.
-

@@ -61,10 +61,10 @@
 #define RISK_WARNING 2
 #define RISK_DANGER  3
 
-// Coarse fail-safe thresholds. Tune conservatively for demo.
-#define DIST_CAUTION_M 30.0f
-#define DIST_WARNING_M 18.0f
-#define DIST_DANGER_M   8.0f
+// Coarse fail-safe thresholds aligned with the main cane risk logic.
+#define DIST_CAUTION_M 10.0f
+#define DIST_WARNING_M  6.0f
+#define DIST_DANGER_M   3.0f
 
 #define VEHICLE_TIMEOUT_MS 1200
 #define JETSON_RISK_TIMEOUT_MS 1200
@@ -244,9 +244,9 @@ bool getCanePosition(float &lat, float &lng) {
 
 uint8_t riskFromDistance(float distanceM) {
   if (isnan(distanceM)) return RISK_SAFE;
-  if (distanceM <= DIST_DANGER_M) return RISK_DANGER;
-  if (distanceM <= DIST_WARNING_M) return RISK_WARNING;
-  if (distanceM <= DIST_CAUTION_M) return RISK_CAUTION;
+  if (distanceM < DIST_DANGER_M) return RISK_DANGER;
+  if (distanceM < DIST_WARNING_M) return RISK_WARNING;
+  if (distanceM < DIST_CAUTION_M) return RISK_CAUTION;
   return RISK_SAFE;
 }
 

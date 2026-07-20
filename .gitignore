@@ -3,3 +3,8 @@ arduino/**/config.h
 *.log
 __pycache__/
 *.py[cod]
+
+# arduino-cli 도구 (재설치 가능, 저장소에 포함하지 않음)
+arduino-cli-bin/
+arduino-cli-data/
+arduino-cli.zip

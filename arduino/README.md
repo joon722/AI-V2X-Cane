@@ -33,6 +33,26 @@ Jetson 위험도 출력 이후 피드백 확인용 코드입니다.
 
 업로드 전 `config.example.h`를 복사해서 `config.h`를 만들고 Wi-Fi 정보를 입력해야 합니다.
 
+## 09_vehicle_v2x_direct_risk_alert
+
+Vehicle-side direct ESP-NOW risk test sketch.
+
+- Vehicle ESP32 broadcasts `MSG_VEHICLE_STATUS`.
+- Vehicle ESP32 receives `MSG_CANE_STATUS`.
+- Vehicle ESP32 calculates simple distance/TTC risk locally.
+- Vehicle ESP32 sends `MSG_RISK_ALERT` directly to the cane ESP32.
+- Use `06_vehicle_v2x_gps_broadcast` + `08_rsu_espnow_jetson_bridge` for the Jetson-centered flow.
+
+## 11_cane_v2x_status_alert
+
+Cane-side endpoint for the current `10_rsu_espnow_multi_jetson_bridge` protocol.
+
+- Cane ESP32 broadcasts `MSG_CANE_STATUS`.
+- Cane ESP32 receives `MSG_VEHICLE_STATUS`.
+- Cane ESP32 calculates fallback `local_risk`.
+- Cane ESP32 receives `MSG_RISK_ALERT` as `remote_risk`.
+- Output risk is `final_risk = max(local_risk, remote_risk)`.
+
 ## 99_legacy_originals
 
 정리 전 원본 코드 보관 폴더입니다.

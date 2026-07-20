@@ -1,41 +1,52 @@
 # 10_rsu_espnow_multi_jetson_bridge
 
-차량 ESP와 지팡이 ESP를 모두 받는 RSU 브리지 코드입니다.
+Final RSU bridge sketch for the current vehicle/cane/Jetson protocol.
 
-## 역할
+## Role
 
-- 차량 상태 패킷 수신 후 Jetson에 JSON 출력
-- 지팡이 상태 패킷 수신 후 Jetson에 JSON 출력
-- Jetson이 보낸 risk JSON을 대상 단말에 ESP-NOW로 전송
+- Receive vehicle `MSG_VEHICLE_STATUS` packets.
+- Receive cane `MSG_CANE_STATUS` packets.
+- Print each status packet to USB Serial as one JSON line for Jetson.
+- Read Jetson risk JSON from USB Serial.
+- Relay Jetson risk to vehicle/cane endpoints as `MSG_RISK_ALERT`.
+- Do not calculate risk on the RSU bridge.
 
-## 구조
+## Status JSON To Jetson
+
+Each received status packet is printed with at least:
 
 ```text
-Vehicle ESP --ESP-NOW--> RSU Bridge --USB Serial--> Jetson
-Cane ESP    --ESP-NOW--> RSU Bridge --USB Serial--> Jetson
-Vehicle ESP <--ESP-NOW-- RSU Bridge <--USB Serial-- Jetson risk
-Cane ESP    <--ESP-NOW-- RSU Bridge <--USB Serial-- Jetson risk
+type, node_id, seq, gps_valid, lat, lng, speed_mps, heading_deg,
+node_risk, tx_ms, rx_ms, recv_count, lost_count, rssi, src_mac
 ```
 
-## Jetson으로 나가는 JSON
+Example:
 
 ```json
-{"type":"vehicle","node_id":123,"seq":1,"lat":37.0,"lng":127.0,"speed_mps":2.0}
-{"type":"cane","node_id":456,"seq":1,"lat":37.0,"lng":127.0,"speed_mps":0.0}
+{"type":"vehicle","node_id":123,"seq":1,"gps_valid":1,"lat":37.0,"lng":127.0,"speed_mps":2.0,"heading_deg":90.0,"node_risk":0,"tx_ms":100,"rx_ms":120,"recv_count":1,"lost_count":0,"rssi":-52,"src_mac":"AA:BB:CC:DD:EE:FF"}
 ```
 
-## Jetson에서 받는 risk JSON
+## Risk JSON From Jetson
 
-전체 단말에 같은 risk:
+Broadcast the same risk to every seen endpoint:
 
 ```json
 {"risk":2}
 ```
 
-특정 단말에 risk:
+Send risk to one endpoint:
 
 ```json
-{"target_id":456,"src_id":123,"risk":2}
+{"risk":2,"target_id":456,"src_id":123}
 ```
 
-`target_id`는 경고를 받을 단말, `src_id`는 위험 원인이 된 상대 단말입니다.
+`target_id` is the endpoint that should receive the warning. `src_id` is optional
+and can identify the vehicle or Jetson-side source of the risk.
+
+## Relay Behavior
+
+- Missing `target_id` broadcasts to every seen vehicle/cane endpoint.
+- `target_id` of `0` or `0xFFFFFFFF` also broadcasts to every seen endpoint.
+- Known `target_id` sends only to that endpoint.
+- Unknown `target_id` is dropped and logged.
+- Vehicle and cane endpoints both receive risk as `MSG_RISK_ALERT`.
