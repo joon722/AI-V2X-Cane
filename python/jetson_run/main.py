@@ -1,17 +1,17 @@
 import risk_inference
 
-print("==========")
-print("Jetson Nano Risk Engine")
-print("==========")
 
-risk_inference.run()
+def main():
+    print("==============================")
+    print("Jetson Nano Risk Engine")
+    print("==============================")
 
-print("Finished.")import risk_inference
+    risk_inference.run()
 
-print("==========")
-print("Jetson Nano Risk Engine")
-print("==========")
+    print("==============================")
+    print("Finished.")
+    print("==============================")
 
-risk_inference.run()
 
-print("Finished.")
+if __name__ == "__main__":
+    main()

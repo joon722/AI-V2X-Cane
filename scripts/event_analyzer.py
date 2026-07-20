@@ -7,8 +7,8 @@ from event_classifier import classify_event
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
-INPUT_FILE = PROJECT_DIR / "feature_9cols.csv"
-OUTPUT_FILE = PROJECT_DIR / "dataset" / "event_result.csv"
+INPUT_FILE = PROJECT_DIR / "dataset" / "scenario_005" / "feature.csv"
+OUTPUT_FILE = PROJECT_DIR / "dataset" / "scenario_005" / "event_result.csv"
 
 
 def calculate_event_position(ped_x, ped_y, veh_x, veh_y):
