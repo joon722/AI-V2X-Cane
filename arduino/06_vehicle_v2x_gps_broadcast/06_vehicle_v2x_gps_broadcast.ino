@@ -293,11 +293,11 @@ uint8_t calculateRiskFromCane(
 
   // 간단한 rule 기반 위험도
   // distance 또는 TTC 중 하나라도 위험하면 상위 risk로 올림.
-  if (d < 3.0f || ttc < 1.5f) {
+  if (d < 3.0f || ttc < 2.0f) {
     return RISK_DANGER;
-  } else if (d < 6.0f || ttc < 3.0f) {
+  } else if (d < 6.0f || ttc < 4.0f) {
     return RISK_WARNING;
-  } else if (d < 10.0f || ttc < 5.0f) {
+  } else if (d < 12.0f || ttc < 6.0f) {
     return RISK_CAUTION;
   } else {
     return RISK_SAFE;
@@ -397,6 +397,17 @@ void sendRiskAlertToCane(uint8_t risk, uint32_t targetCaneId) {
 // =====================
 // Receive callback
 // =====================
+void handleRsuReply(const v2x_status_message_t &replyMsg) {
+  if (replyMsg.msg_type != MSG_RSU_REPLY || replyMsg.node_type != NODE_RSU) return;
+
+  lastRiskLevel = replyMsg.risk_level;
+  Serial.printf(
+    "[VEHICLE RX LEGACY] risk=%u seq=%u\n",
+    replyMsg.risk_level,
+    replyMsg.seq_num
+  );
+}
+
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   if (len != sizeof(v2x_status_message_t)) {
     Serial.printf("[RX] drop len=%d expected=%d\n", len, sizeof(v2x_status_message_t));
@@ -408,6 +419,11 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   if (msg.magic != V2X_MAGIC || msg.version != V2X_VERSION) {
     Serial.println("[RX] invalid magic/version");
+    return;
+  }
+
+  if (msg.msg_type == MSG_RSU_REPLY && msg.node_type == NODE_RSU) {
+    handleRsuReply(msg);
     return;
   }
 
