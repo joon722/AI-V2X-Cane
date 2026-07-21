@@ -1,0 +1,5 @@
+zone_id,zone_name,zone_type,center_x,center_y,radius_m,base_risk,description
+Z01,parking_exit,parking_exit,10,5,8,2,vehicle can cross pedestrian path
+Z02,blind_corner,blind_corner,25,12,6,2,side approach can be hidden
+Z03,safe_pass,safe_pass,40,20,10,0,pedestrian and vehicle paths are separated
+
