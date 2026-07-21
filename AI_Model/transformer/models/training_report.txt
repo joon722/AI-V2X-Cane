@@ -1,0 +1,20 @@
+Classification Report
+=====================
+              precision    recall  f1-score   support
+
+      Normal     0.9968    0.9995    0.9981      2158
+     Caution     0.9966    0.9605    0.9782       304
+     Warning     0.9091    0.9091    0.9091        55
+   Near Miss     0.5455    1.0000    0.7059         6
+
+    accuracy                         0.9929      2523
+   macro avg     0.8620    0.9673    0.8978      2523
+weighted avg     0.9938    0.9929    0.9931      2523
+
+
+Confusion Matrix
+================
+[[2157    1    0    0]
+ [   7  292    5    0]
+ [   0    0   50    5]
+ [   0    0    0    6]]
