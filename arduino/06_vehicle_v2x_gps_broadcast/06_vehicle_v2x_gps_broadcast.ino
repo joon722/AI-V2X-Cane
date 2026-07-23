@@ -42,7 +42,7 @@
 
 // GPS가 안 잡히는 실내에서도 테스트할 때 1.
 // 실제 도로 주행에서는 반드시 0 권장.
-#define USE_DEMO_MOVING_FALLBACK 1
+#define USE_DEMO_MOVING_FALLBACK 0
 
 // Jetson/RSU 없이 차량 ESP32가 직접 위험도를 계산할 때 1.
 #define VEHICLE_CALCULATES_RISK 1
@@ -117,11 +117,11 @@
 #define RISK_CAUTION_TTC_S 3.0f
 #else
 #define RISK_DANGER_DISTANCE_M 3.0f
-#define RISK_WARNING_DISTANCE_M 6.0f
-#define RISK_CAUTION_DISTANCE_M 12.0f
-#define RISK_DANGER_TTC_S 2.0f
-#define RISK_WARNING_TTC_S 4.0f
-#define RISK_CAUTION_TTC_S 6.0f
+#define RISK_WARNING_DISTANCE_M 5.0f
+#define RISK_CAUTION_DISTANCE_M 8.0f
+#define RISK_DANGER_TTC_S 0.0f
+#define RISK_WARNING_TTC_S 0.0f
+#define RISK_CAUTION_TTC_S 0.0f
 #endif
 
 // 지팡이 노드의 GPS fallback 좌표와 같아야 함.
