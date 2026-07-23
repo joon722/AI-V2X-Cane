@@ -67,7 +67,7 @@
 #define DFPLAYER_RX 26  // ESP32 RX1 <- DFPlayer TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
 #define DFPLAYER_BAUD 115200
-#define DFPLAYER_VOLUME 25  // 0~30
+#define DFPLAYER_VOLUME 5  // 0~30
 
 // =====================
 // 동작 설정
@@ -79,7 +79,7 @@
 
 // 중력 성분을 제거한 선형가속도 크기가 이 값을 넘으면 충격으로 판단.
 // 너무 민감하면 올리고, 둔하면 낮추면 됨.
-#define IMPACT_THRESHOLD_MPS2 7.0f
+#define IMPACT_THRESHOLD_MPS2 30.0f
 #define IMPACT_COOLDOWN_MS 5000UL
 
 #define TRACK_CAUTION_FILE "/0001.mp3"
@@ -286,9 +286,21 @@ void initializeDfPlayer() {
            sizeof(volumeCommand),
            "AT+VOL=%u",
            (unsigned int)constrain(DFPLAYER_VOLUME, 0, 30));
-  sendDfPlayerAtCommand(volumeCommand);
-  sendDfPlayerAtCommand("AT+PLAYMODE=3");  // 한 곡 재생 후 정지
-  sendDfPlayerAtCommand("AT+AMP=ON");      // 내장 스피커 앰프 켜기
+// 재생 모드 설정
+sendDfPlayerAtCommand("AT+PLAYMODE=3");
+delay(200);
+
+// 내장 스피커 앰프 켜기
+sendDfPlayerAtCommand("AT+AMP=ON");
+delay(200);
+
+// 앰프를 켠 뒤 볼륨 적용
+sendDfPlayerAtCommand(volumeCommand);
+delay(200);
+
+// 실제 적용된 볼륨 조회
+sendDfPlayerAtCommand("AT+VOL=?");
+delay(200);
 #endif
 }
 
