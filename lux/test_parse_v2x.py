@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from step3_parse_v2x import normalize_record, process_line
+from parse_v2x import normalize_record, process_line
 
 
 SAMPLE = (

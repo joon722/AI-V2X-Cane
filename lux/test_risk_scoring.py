@@ -3,8 +3,8 @@
 
 import unittest
 
-from step6_kinematics import relative_kinematics
-from step7_risk import (
+from kinematics import relative_kinematics
+from risk_scoring import (
     DCPA_FAR_M,
     DCPA_FLOOR,
     DCPA_NEAR_M,

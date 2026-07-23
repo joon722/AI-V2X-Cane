@@ -26,11 +26,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from step3_parse_v2x import SOURCE_MODES, normalize_record
-from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
-from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
-from step6_kinematics import KinematicsPipeline, to_float
-from step7_risk import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
+from parse_v2x import SOURCE_MODES, normalize_record
+from state_store import FRESH_WINDOW_S, StateStore, has_position
+from sim_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
+from kinematics import KinematicsPipeline, to_float
+from risk_scoring import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
 
 
 HEARTBEAT_S = 1.0

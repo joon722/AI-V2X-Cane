@@ -4,9 +4,9 @@
 import json
 import unittest
 
-from step4_state_store import StateStore
-from step6_kinematics import KinematicsPipeline
-from step8_send_risk import RiskSender, RiskTransmitter
+from state_store import StateStore
+from kinematics import KinematicsPipeline
+from send_risk import RiskSender, RiskTransmitter
 
 
 class OnChangeAndHeartbeatTest(unittest.TestCase):

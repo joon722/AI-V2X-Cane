@@ -2,8 +2,8 @@ import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from step4_state_store import StateStore, inject_vehicle, process_line
-from step5_test_vehicle import TestVehicle
+from state_store import StateStore, inject_vehicle, process_line
+from sim_vehicle import TestVehicle
 
 
 CANE = (

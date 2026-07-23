@@ -19,16 +19,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from step3_parse_v2x import SOURCE_MODES, normalize_record, serial_lines
-from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
-from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
-from step6_kinematics import GPS_SIGMA_M, KinematicsPipeline, to_float
+from parse_v2x import SOURCE_MODES, normalize_record, serial_lines
+from state_store import FRESH_WINDOW_S, StateStore, has_position
+from sim_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
+from kinematics import GPS_SIGMA_M, KinematicsPipeline, to_float
 
 
 # --- Team scoring table -----------------------------------------------------
 # Verbatim copy of tmp/AI-V2X-Cane-audit/scripts/risk_calculator.py. The audit
 # folder is throwaway, so importing from it is fragile; the numbers are frozen
-# here instead and mirrored by test_step7_risk.py. If the team retunes the
+# here instead and mirrored by test_risk_scoring.py. If the team retunes the
 # table, re-sync these three functions and nothing else.
 
 def calculate_ttc(distance_m, relative_speed_mps):

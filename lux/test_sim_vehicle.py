@@ -1,6 +1,6 @@
 import unittest
 
-from step5_test_vehicle import (
+from sim_vehicle import (
     METERS_PER_DEGREE_LAT,
     TestVehicle,
     offset_position,

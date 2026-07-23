@@ -4,10 +4,10 @@
 import math
 import unittest
 
-from step3_parse_v2x import normalize_record
-from step4_state_store import StateStore
-from step5_test_vehicle import offset_position
-from step6_kinematics import (
+from parse_v2x import normalize_record
+from state_store import StateStore
+from sim_vehicle import offset_position
+from kinematics import (
     KinematicsPipeline,
     LocalFrame,
     NodeTracker,

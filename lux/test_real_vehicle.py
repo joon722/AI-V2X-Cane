@@ -10,17 +10,17 @@ because it always ran dead-centre (dcpa=0):
   glancing real vehicle  -> DCPA gate suppresses it, nothing is transmitted
 
 Timing is driven with controlled pc_time, the same style as
-test_step6_kinematics.AsynchronousArrivalTest, so the run is deterministic.
+test_kinematics.AsynchronousArrivalTest, so the run is deterministic.
 """
 
 import unittest
 
-from step3_parse_v2x import normalize_record
-from step4_state_store import StateStore
-from step5_test_vehicle import offset_position
-from step6_kinematics import KinematicsPipeline, to_float
-from step7_risk import DCPA_FLOOR, assess_risk
-from step8_send_risk import RiskTransmitter
+from parse_v2x import normalize_record
+from state_store import StateStore
+from sim_vehicle import offset_position
+from kinematics import KinematicsPipeline, to_float
+from risk_scoring import DCPA_FLOOR, assess_risk
+from send_risk import RiskTransmitter
 
 
 CANE_LAT, CANE_LNG = 37.0, 127.0

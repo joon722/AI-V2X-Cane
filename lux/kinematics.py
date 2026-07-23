@@ -20,9 +20,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from step3_parse_v2x import SOURCE_MODES, normalize_record, serial_lines
-from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
-from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
+from parse_v2x import SOURCE_MODES, normalize_record, serial_lines
+from state_store import FRESH_WINDOW_S, StateStore, has_position
+from sim_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
 
 
 # Same constant step 5 uses to place the simulated vehicle. Sharing it is

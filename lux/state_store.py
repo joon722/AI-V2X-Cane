@@ -6,8 +6,8 @@ import json
 import sys
 import time
 
-from step3_parse_v2x import SOURCE_MODES, normalize_record, serial_lines
-from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
+from parse_v2x import SOURCE_MODES, normalize_record, serial_lines
+from sim_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
 
 
 FRESH_WINDOW_S = 0.5

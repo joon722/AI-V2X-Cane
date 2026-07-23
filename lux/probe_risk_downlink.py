@@ -13,7 +13,7 @@ import json
 import sys
 import time
 
-from step3_parse_v2x import normalize_record
+from parse_v2x import normalize_record
 
 
 # Start at 2. The cane rests at 0, so sending 0 first proves nothing and only
