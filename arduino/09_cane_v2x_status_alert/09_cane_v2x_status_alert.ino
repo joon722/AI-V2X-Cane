@@ -14,7 +14,7 @@
 #define USE_ACTUATOR 1
 #define USE_GPS 1
 #define USE_IMU 1
-#define USE_FIXED_GPS_FALLBACK 1
+#define USE_FIXED_GPS_FALLBACK 0
 
 // =====================
 // Pins
