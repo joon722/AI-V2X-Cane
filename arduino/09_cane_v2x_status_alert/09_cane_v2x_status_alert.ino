@@ -287,15 +287,15 @@ uint8_t calculateRiskFromVehicle(
   *outClosingSpeed = closingSpeed;
   *outTtc = ttc;
 
-  if (d < 3.0f || ttc < 2.0f) {
-    return RISK_DANGER;
-  } else if (d < 6.0f || ttc < 4.0f) {
-    return RISK_WARNING;
-  } else if (d < 12.0f || ttc < 6.0f) {
-    return RISK_CAUTION;
-  } else {
-    return RISK_SAFE;
-  }
+  if (d < 3.0f) {
+  return RISK_DANGER;
+} else if (d < 5.0f) {
+  return RISK_WARNING;
+} else if (d < 8.0f) {
+  return RISK_CAUTION;
+} else {
+  return RISK_SAFE;
+}
 }
 
 void applyRisk(uint8_t risk) {
