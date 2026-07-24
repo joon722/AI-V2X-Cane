@@ -41,9 +41,10 @@
 
 // =====================
 // V2X protocol constants
+// 차량 노드와 버전 및 구조체가 반드시 같아야 한다.
 // =====================
 #define V2X_MAGIC 0x56325831UL  // "V2X1"
-#define V2X_VERSION 1
+#define V2X_VERSION 2
 
 #define MSG_VEHICLE_STATUS 1
 #define MSG_RSU_REPLY 2
@@ -59,8 +60,18 @@
 #define RISK_WARNING 2
 #define RISK_DANGER 3
 
-#define SEND_INTERVAL_MS 100
-#define BEEP_DURATION_MS 50
+#define SEND_INTERVAL_MS 100UL
+#define BEEP_DURATION_MS 50UL
+
+// GPS 데이터가 이 시간보다 오래되면 유효하지 않은 것으로 처리.
+#define GPS_FIX_MAX_AGE_MS 3000UL
+
+// 차량에서 직접 보내는 위험 패킷의 유효시간.
+// 이 시간 동안에는 지팡이 자체 계산보다 차량 계산 결과를 우선한다.
+#define DIRECT_RISK_TIMEOUT_MS 1500UL
+
+// 차량 상태 패킷이 끊겼다고 판단할 시간.
+#define VEHICLE_STATUS_TIMEOUT_MS 2000UL
 
 // Fallback demo position. Used only while cane GPS is not fixed.
 #define CANE_FIXED_LAT 37.000000
@@ -94,6 +105,12 @@ typedef struct __attribute__((packed)) v2x_risk_message {
 
   uint32_t target_id;
   uint32_t src_id;
+
+  // 차량에서 계산해서 전달한 위험 관련 값.
+  float distance_m;
+  float closing_speed_mps;
+  float ttc_s;
+
   uint32_t timestamp_ms;
   uint16_t seq_num;
 } v2x_risk_message_t;
@@ -211,18 +228,28 @@ void readGps() {
     gps.encode(gpsSerial.read());
   }
 
-  if (gps.location.isUpdated()) {
+  bool gpsFresh =
+    gps.location.isValid() &&
+    gps.location.age() < GPS_FIX_MAX_AGE_MS;
+
+  if (gpsFresh) {
     lastLat = gps.location.lat();
     lastLng = gps.location.lng();
-    lastGpsValid = gps.location.isValid() ? 1 : 0;
-  }
+    lastGpsValid = 1;
 
-  if (gps.speed.isUpdated()) {
-    lastSpeed = gps.speed.mps();
-  }
+    if (gps.speed.isValid()) {
+      lastSpeed = gps.speed.mps();
+    } else {
+      lastSpeed = 0.0f;
+    }
 
-  if (gps.course.isUpdated()) {
-    lastHeading = gps.course.deg();
+    if (gps.course.isValid()) {
+      lastHeading = gps.course.deg();
+    }
+  } else {
+    // 예전에 한 번 잡힌 GPS 좌표를 무한정 사용하는 것을 방지.
+    lastGpsValid = 0;
+    lastSpeed = 0.0f;
   }
 #endif
 }
@@ -372,19 +399,41 @@ bool isForThisCane(uint32_t targetId) {
 
 void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
   if (!isForThisCane(riskMsg.target_id)) {
-    Serial.printf("[CANE RX] risk for other target=%lu\n", (unsigned long)riskMsg.target_id);
+    Serial.printf(
+      "[CANE RX] risk for other target=%lu\n",
+      (unsigned long)riskMsg.target_id
+    );
+    return;
+  }
+
+  if (riskMsg.risk_level > RISK_DANGER) {
+    Serial.printf(
+      "[CANE RX] invalid risk level=%u\n",
+      riskMsg.risk_level
+    );
     return;
   }
 
   lastRiskSeq = riskMsg.seq_num;
   lastRiskMs = millis();
+
+  // 차량이 직접 계산한 위험정보가 들어왔으므로
+  // 지팡이의 이전 자체 계산 기록은 초기화한다.
+  prevVehicleDistanceM = -1.0f;
+  prevVehicleRiskCalcMs = 0;
+
   Serial.printf(
-    "[CANE RX] risk=%u target=%lu src=%lu seq=%u\n",
+    "[CANE RX] risk=%u distance=%.2fm closing=%.2fm/s "
+    "ttc=%.2fs target=%lu src=%lu seq=%u\n",
     riskMsg.risk_level,
+    riskMsg.distance_m,
+    riskMsg.closing_speed_mps,
+    riskMsg.ttc_s,
     (unsigned long)riskMsg.target_id,
     (unsigned long)riskMsg.src_id,
     riskMsg.seq_num
   );
+
   applyRisk(riskMsg.risk_level);
 }
 
@@ -397,12 +446,38 @@ void handleLegacyReply(const v2x_status_message_t &replyMsg) {
 }
 
 void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
-  if (vehicleMsg.msg_type != MSG_VEHICLE_STATUS || vehicleMsg.node_type != NODE_VEHICLE) return;
+  if (vehicleMsg.msg_type != MSG_VEHICLE_STATUS ||
+      vehicleMsg.node_type != NODE_VEHICLE) {
+    return;
+  }
+
+  uint32_t now = millis();
 
   vehicleRxCount++;
-  lastVehicleRxMs = millis();
+  lastVehicleRxMs = now;
 
-  if (!vehicleMsg.gps_valid || !(lastGpsValid || USE_FIXED_GPS_FALLBACK)) {
+  // 차량이 계산한 직접 위험 패킷이 최근에 도착했다면
+  // 지팡이 자체 계산으로 그 결과를 덮어쓰지 않는다.
+  bool directRiskFresh =
+    lastRiskMs > 0 &&
+    now - lastRiskMs <= DIRECT_RISK_TIMEOUT_MS;
+
+  if (directRiskFresh) {
+    Serial.printf(
+      "[CANE VEHICLE STATUS] vehicle=%lu seq=%u "
+      "direct risk active -> local calculation skipped\n",
+      (unsigned long)vehicleMsg.node_id,
+      vehicleMsg.seq_num
+    );
+    return;
+  }
+
+  // 직접 위험 패킷이 없을 때만 지팡이 자체 계산을 예비용으로 수행.
+  if (!vehicleMsg.gps_valid ||
+      !(lastGpsValid || USE_FIXED_GPS_FALLBACK)) {
+    prevVehicleDistanceM = -1.0f;
+    prevVehicleRiskCalcMs = 0;
+
     Serial.println("[CANE RISK CALC] GPS invalid -> risk safe");
     applyRisk(RISK_SAFE);
     return;
@@ -411,10 +486,17 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
   float distanceM = 0.0f;
   float closingSpeed = 0.0f;
   float ttc = 999.0f;
-  uint8_t risk = calculateRiskFromVehicle(vehicleMsg, &distanceM, &closingSpeed, &ttc);
+
+  uint8_t risk = calculateRiskFromVehicle(
+    vehicleMsg,
+    &distanceM,
+    &closingSpeed,
+    &ttc
+  );
 
   Serial.printf(
-    "[CANE RISK CALC] vehicle_id=%lu distance=%.2fm closing=%.2fm/s ttc=%.2fs risk=%u rx_count=%lu\n",
+    "[CANE RISK FALLBACK] vehicle_id=%lu distance=%.2fm "
+    "closing=%.2fm/s ttc=%.2fs risk=%u rx_count=%lu\n",
     (unsigned long)vehicleMsg.node_id,
     distanceM,
     closingSpeed,
@@ -426,29 +508,79 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
   applyRisk(risk);
 }
 
-void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (len == sizeof(v2x_risk_message_t)) {
+void onDataRecv(const esp_now_recv_info_t *info,
+                const uint8_t *data,
+                int len) {
+  // magic 4바이트 + version + msg_type + node_type까지 필요.
+  if (len < 7) {
+    Serial.printf("[CANE RX] packet too short len=%d\n", len);
+    return;
+  }
+
+  uint32_t receivedMagic = 0;
+  memcpy(&receivedMagic, data, sizeof(receivedMagic));
+
+  // packed 구조체 기준:
+  // data[4] = version, data[5] = msg_type, data[6] = node_type
+  uint8_t receivedVersion = data[4];
+  uint8_t receivedMsgType = data[5];
+
+  if (receivedMagic != V2X_MAGIC ||
+      receivedVersion != V2X_VERSION) {
+    Serial.printf(
+      "[CANE RX] invalid magic/version len=%d version=%u\n",
+      len,
+      receivedVersion
+    );
+    return;
+  }
+
+  if (receivedMsgType == MSG_RISK_ALERT) {
+    if (len != sizeof(v2x_risk_message_t)) {
+      Serial.printf(
+        "[CANE RX] invalid risk packet size len=%d expected=%u\n",
+        len,
+        (unsigned int)sizeof(v2x_risk_message_t)
+      );
+      return;
+    }
+
     memcpy(&rxRisk, data, sizeof(rxRisk));
-    if (rxRisk.magic == V2X_MAGIC && rxRisk.version == V2X_VERSION && rxRisk.msg_type == MSG_RISK_ALERT) {
-      handleRiskMessage(rxRisk);
+    handleRiskMessage(rxRisk);
+    return;
+  }
+
+  if (receivedMsgType == MSG_VEHICLE_STATUS ||
+      receivedMsgType == MSG_RSU_REPLY) {
+    if (len != sizeof(v2x_status_message_t)) {
+      Serial.printf(
+        "[CANE RX] invalid status packet size len=%d expected=%u\n",
+        len,
+        (unsigned int)sizeof(v2x_status_message_t)
+      );
+      return;
+    }
+
+    v2x_status_message_t statusMsg;
+    memcpy(&statusMsg, data, sizeof(statusMsg));
+
+    if (statusMsg.msg_type == MSG_VEHICLE_STATUS &&
+        statusMsg.node_type == NODE_VEHICLE) {
+      handleVehicleStatus(statusMsg);
+      return;
+    }
+
+    if (statusMsg.msg_type == MSG_RSU_REPLY) {
+      handleLegacyReply(statusMsg);
       return;
     }
   }
 
-  if (len == sizeof(v2x_status_message_t)) {
-    v2x_status_message_t reply;
-    memcpy(&reply, data, sizeof(reply));
-    if (reply.magic == V2X_MAGIC && reply.version == V2X_VERSION) {
-      if (reply.msg_type == MSG_VEHICLE_STATUS && reply.node_type == NODE_VEHICLE) {
-        handleVehicleStatus(reply);
-      } else if (reply.msg_type == MSG_RSU_REPLY) {
-        handleLegacyReply(reply);
-      }
-      return;
-    }
-  }
-
-  Serial.printf("[CANE RX] drop len=%d\n", len);
+  Serial.printf(
+    "[CANE RX] unsupported msg_type=%u len=%d\n",
+    receivedMsgType,
+    len
+  );
 }
 
 void setupEspNow() {
@@ -500,14 +632,58 @@ void loop() {
   readGps();
   readImu();
 
-  if (millis() - lastSendMs >= SEND_INTERVAL_MS) {
-    lastSendMs = millis();
+  uint32_t now = millis();
+
+  if (now - lastSendMs >= SEND_INTERVAL_MS) {
+    lastSendMs = now;
+
     digitalWrite(LED_PIN, HIGH);
     sendCaneStatus();
     digitalWrite(LED_PIN, LOW);
   }
 
-  if (lastRiskMs > 0 && millis() - lastRiskMs < 1000) {
+  bool directRiskFresh =
+    lastRiskMs > 0 &&
+    now - lastRiskMs <= DIRECT_RISK_TIMEOUT_MS;
+
+  bool vehicleStatusFresh =
+    lastVehicleRxMs > 0 &&
+    now - lastVehicleRxMs <= VEHICLE_STATUS_TIMEOUT_MS;
+
+  // 차량의 직접 위험 패킷이 일정 시간 동안 오지 않으면
+  // 지팡이 자체 거리 계산 모드로 돌아갈 수 있도록 기록 초기화.
+  if (lastRiskMs > 0 && !directRiskFresh) {
+    lastRiskMs = 0;
+    lastRiskSeq = 0;
+    prevVehicleDistanceM = -1.0f;
+    prevVehicleRiskCalcMs = 0;
+
+    Serial.println(
+      "[CANE] direct risk timeout -> fallback mode"
+    );
+
+    // 차량 상태마저 끊겼다면 위험 출력을 안전 상태로 해제.
+    if (!vehicleStatusFresh) {
+      applyRisk(RISK_SAFE);
+    }
+  }
+
+  // 직접 위험 패킷과 차량 상태 패킷이 모두 끊기면
+  // 진동 모터가 계속 켜져 있지 않도록 SAFE 처리.
+  if (lastVehicleRxMs > 0 && !vehicleStatusFresh) {
+    lastVehicleRxMs = 0;
+    prevVehicleDistanceM = -1.0f;
+    prevVehicleRiskCalcMs = 0;
+
+    if (lastRiskMs == 0) {
+      Serial.println(
+        "[CANE] vehicle communication timeout -> SAFE"
+      );
+      applyRisk(RISK_SAFE);
+    }
+  }
+
+  if (directRiskFresh) {
     digitalWrite(LED_PIN, HIGH);
   }
 
