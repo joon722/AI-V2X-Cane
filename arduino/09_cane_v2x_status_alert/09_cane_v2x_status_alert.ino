@@ -61,7 +61,24 @@
 #define RISK_DANGER 3
 
 #define SEND_INTERVAL_MS 100UL
-#define BEEP_DURATION_MS 50UL
+
+// =====================
+// 위험 단계별 진동/부저 패턴
+// =====================
+
+// 주의: 0.5초 진동 후 1.5초 정지.
+#define CAUTION_CYCLE_MS 2000UL
+#define CAUTION_MOTOR_ON_MS 500UL
+
+// 경고: 0.4초 진동 후 0.4초 정지.
+#define WARNING_CYCLE_MS 800UL
+#define WARNING_MOTOR_ON_MS 400UL
+
+// 위험: 0.15초 간격의 빠른 진동.
+// 부저는 각 주기의 처음 0.1초 동안 울린다.
+#define DANGER_CYCLE_MS 300UL
+#define DANGER_MOTOR_ON_MS 150UL
+#define DANGER_BUZZER_ON_MS 100UL
 
 // GPS 데이터가 이 시간보다 오래되면 유효하지 않은 것으로 처리.
 #define GPS_FIX_MAX_AGE_MS 3000UL
@@ -144,8 +161,8 @@ float lastAccelX = 0.0f;
 float lastAccelY = 0.0f;
 float lastAccelZ = 0.0f;
 
-bool beepActive = false;
-uint32_t beepStartMs = 0;
+// 현재 위험 단계의 진동 패턴이 시작된 시간.
+uint32_t riskPatternStartMs = 0;
 
 float prevVehicleDistanceM = -1.0f;
 uint32_t prevVehicleRiskCalcMs = 0;
@@ -172,29 +189,55 @@ void setupCaneId() {
   Serial.printf("[CANE] node_id=%lu\n", (unsigned long)caneId);
 }
 
+void writeActuatorOutputs(bool motorOn, bool buzzerOn) {
+#if USE_ACTUATOR
+  digitalWrite(
+    MOTOR_PIN,
+    motorOn ? MOTOR_ON : MOTOR_OFF
+  );
+
+  digitalWrite(
+    BUZZER_PIN,
+    buzzerOn ? BUZZER_ON : BUZZER_OFF
+  );
+#endif
+}
+
 void forceOutputsOff() {
 #if USE_ACTUATOR
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(MOTOR_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, BUZZER_OFF);
-  digitalWrite(MOTOR_PIN, MOTOR_OFF);
 #endif
+
+  writeActuatorOutputs(false, false);
 }
 
-void startBeep() {
+void updateActuators() {
 #if USE_ACTUATOR
-  digitalWrite(BUZZER_PIN, BUZZER_ON);
-  beepActive = true;
-  beepStartMs = millis();
-#endif
-}
+  uint32_t elapsedMs = millis() - riskPatternStartMs;
+  bool motorOn = false;
+  bool buzzerOn = false;
 
-void updateBeep() {
-#if USE_ACTUATOR
-  if (beepActive && millis() - beepStartMs >= BEEP_DURATION_MS) {
-    digitalWrite(BUZZER_PIN, BUZZER_OFF);
-    beepActive = false;
+  if (currentRisk == RISK_CAUTION) {
+    // 느린 진동: 0.5초 ON, 1.5초 OFF.
+    uint32_t phaseMs = elapsedMs % CAUTION_CYCLE_MS;
+    motorOn = phaseMs < CAUTION_MOTOR_ON_MS;
   }
+  else if (currentRisk == RISK_WARNING) {
+    // 반복 진동: 0.4초 ON, 0.4초 OFF.
+    uint32_t phaseMs = elapsedMs % WARNING_CYCLE_MS;
+    motorOn = phaseMs < WARNING_MOTOR_ON_MS;
+  }
+  else if (currentRisk == RISK_DANGER) {
+    // 빠른 진동과 반복 부저.
+    uint32_t phaseMs = elapsedMs % DANGER_CYCLE_MS;
+
+    motorOn = phaseMs < DANGER_MOTOR_ON_MS;
+    buzzerOn = phaseMs < DANGER_BUZZER_ON_MS;
+  }
+
+  // SAFE이거나 잘못된 위험 단계면 둘 다 false 상태로 유지.
+  writeActuatorOutputs(motorOn, buzzerOn);
 #endif
 }
 
@@ -326,22 +369,26 @@ uint8_t calculateRiskFromVehicle(
 }
 
 void applyRisk(uint8_t risk) {
+  // 알 수 없는 위험 단계는 안전 상태로 처리.
+  if (risk > RISK_DANGER) {
+    risk = RISK_SAFE;
+  }
+
   if (risk == currentRisk) return;
 
-  Serial.printf("[CANE OUT] risk %u -> %u\n", currentRisk, risk);
-
-#if USE_ACTUATOR
-  if (risk == RISK_SAFE) {
-    digitalWrite(MOTOR_PIN, MOTOR_OFF);
-    digitalWrite(BUZZER_PIN, BUZZER_OFF);
-    beepActive = false;
-  } else {
-    digitalWrite(MOTOR_PIN, MOTOR_ON);
-    startBeep();
-  }
-#endif
+  Serial.printf(
+    "[CANE OUT] risk %u -> %u\n",
+    currentRisk,
+    risk
+  );
 
   currentRisk = risk;
+
+  // 위험 단계가 바뀌면 새 패턴을 처음부터 시작.
+  riskPatternStartMs = millis();
+
+  // 다음 loop까지 기다리지 않고 즉시 출력에 반영.
+  updateActuators();
 }
 
 void buildStatusPacket() {
@@ -628,7 +675,9 @@ void setup() {
 }
 
 void loop() {
-  updateBeep();
+  // 현재 위험 단계에 맞춰 진동과 부저 패턴을 계속 갱신.
+  updateActuators();
+
   readGps();
   readImu();
 
