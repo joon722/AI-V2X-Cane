@@ -67,7 +67,7 @@
 #define DFPLAYER_RX 26  // ESP32 RX1 <- DFPlayer TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
 #define DFPLAYER_BAUD 115200
-#define DFPLAYER_VOLUME 5  // 0~30
+#define DFPLAYER_VOLUME 15  // 0~30
 
 // =====================
 // 동작 설정
