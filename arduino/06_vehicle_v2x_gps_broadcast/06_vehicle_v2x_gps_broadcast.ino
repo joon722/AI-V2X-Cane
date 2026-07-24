@@ -77,6 +77,25 @@
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
 
+// GPS 진행 방향을 신뢰하기 위한 최소 차량 속도.
+// 이 속도보다 느리면 GPS 방향값을 새로 갱신하지 않는다.
+#define MIN_VALID_HEADING_SPEED_MPS 0.8f
+
+// 차량 진행 방향을 기준으로 좌우 몇 도까지 전방으로 볼 것인지 설정.
+#define FORWARD_CONE_HALF_ANGLE_DEG 45.0f
+
+// TTC 계산에 사용할 최소 접근속도.
+#define MIN_TTC_CLOSING_SPEED_MPS 0.3f
+
+// GPS 거리 변화가 너무 짧은 주기로 계산되지 않도록 제한.
+#define TTC_SAMPLE_INTERVAL_MS 500UL
+
+// 접근속도 저역통과 필터. 클수록 부드럽지만 반응은 느려진다.
+#define TTC_FILTER_ALPHA 0.70f
+
+// 동시에 추적할 지팡이 노드 개수.
+#define MAX_TRACKED_CANES 4
+
 // 중력 성분을 제거한 선형가속도 크기가 이 값을 넘으면 충격으로 판단.
 // 너무 민감하면 올리고, 둔하면 낮추면 됨.
 #define IMPACT_THRESHOLD_MPS2 30.0f
@@ -92,7 +111,7 @@
 // 지팡이 노드와 구조체/상수가 반드시 같아야 함.
 // =====================
 #define V2X_MAGIC 0x56325831UL
-#define V2X_VERSION 1
+#define V2X_VERSION 2
 
 #define MSG_VEHICLE_STATUS 1
 #define MSG_RSU_REPLY 2
@@ -119,9 +138,9 @@
 #define RISK_DANGER_DISTANCE_M 3.0f
 #define RISK_WARNING_DISTANCE_M 5.0f
 #define RISK_CAUTION_DISTANCE_M 8.0f
-#define RISK_DANGER_TTC_S 0.0f
-#define RISK_WARNING_TTC_S 0.0f
-#define RISK_CAUTION_TTC_S 0.0f
+#define RISK_DANGER_TTC_S 1.5f
+#define RISK_WARNING_TTC_S 3.0f
+#define RISK_CAUTION_TTC_S 5.0f
 #endif
 
 // 지팡이 노드의 GPS fallback 좌표와 같아야 함.
@@ -153,6 +172,11 @@ typedef struct __attribute__((packed)) v2x_risk_message {
   uint8_t reserved;
   uint32_t target_id;
   uint32_t src_id;
+
+  float distance_m;
+  float closing_speed_mps;
+  float ttc_s;
+  
   uint32_t timestamp_ms;
   uint16_t seq_num;
 } v2x_risk_message_t;
@@ -187,6 +211,7 @@ double vehicleLat = 0.0;
 double vehicleLng = 0.0;
 float vehicleSpeed = 0.0f;
 float vehicleHeading = 0.0f;
+bool vehicleHeadingValid = false;
 uint8_t vehicleGpsValid = 0;
 bool usingDemoGps = false;
 
@@ -208,8 +233,20 @@ bool dfPlayerReady = false;
 uint8_t lastAnnouncedRisk = RISK_SAFE;
 
 uint8_t lastRiskLevel = RISK_SAFE;
-float prevDistanceM = -1.0f;
-uint32_t prevRiskCalcMs = 0;
+
+// 지팡이 노드마다 이전 거리와 접근속도를 따로 저장.
+// 여러 지팡이의 거리 기록이 섞이는 문제를 막는다.
+typedef struct {
+  bool used;
+  bool hasClosingSpeed;
+  uint32_t nodeId;
+  float prevDistanceM;
+  float filteredClosingSpeed;
+  uint32_t prevCalcMs;
+  uint32_t lastUpdateMs;
+} CaneRiskState;
+
+CaneRiskState caneRiskStates[MAX_TRACKED_CANES];
 
 portMUX_TYPE caneMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -376,7 +413,11 @@ void updateDemoMovingFallback() {
   vehicleLat = CANE_FIXED_LAT;
   vehicleLng = CANE_FIXED_LNG + offsetM / metersPerDegLng;
   vehicleSpeed = speedMps;
+
+  // 데모 차량은 서쪽으로 이동한다고 가정.
   vehicleHeading = 270.0f;
+  vehicleHeadingValid = true;
+
   vehicleGpsValid = 1;
   usingDemoGps = true;
 #else
@@ -384,6 +425,7 @@ void updateDemoMovingFallback() {
   vehicleLng = 0.0;
   vehicleSpeed = 0.0f;
   vehicleHeading = 0.0f;
+  vehicleHeadingValid = false;
   vehicleGpsValid = 0;
   usingDemoGps = false;
 #endif
@@ -401,8 +443,19 @@ void readGps() {
   if (gpsOk) {
     vehicleLat = gps.location.lat();
     vehicleLng = gps.location.lng();
-    vehicleSpeed = gps.speed.isValid() ? gps.speed.mps() : 0.0f;
-    vehicleHeading = gps.course.isValid() ? gps.course.deg() : 0.0f;
+
+    vehicleSpeed = gps.speed.isValid()
+                     ? gps.speed.mps()
+                     : 0.0f;
+
+    // GPS course는 차량 차체 방향이 아니라 실제 이동 방향이다.
+    // 저속에서는 값이 크게 흔들리므로 일정 속도 이상에서만 갱신한다.
+    if (gps.course.isValid() &&
+        vehicleSpeed >= MIN_VALID_HEADING_SPEED_MPS) {
+      vehicleHeading = gps.course.deg();
+      vehicleHeadingValid = true;
+    }
+
     vehicleGpsValid = 1;
     usingDemoGps = false;
   } else {
@@ -479,61 +532,215 @@ void readImu() {
 }
 
 // =====================
-// 거리/TTC 위험도
+// 거리/TTC/진행 방향 위험도
 // =====================
 float degToRad(float degree) {
   return degree * DEG_TO_RAD;
 }
 
-float distanceMeters(double lat1, double lng1, double lat2, double lng2) {
+float distanceMeters(double lat1,
+                     double lng1,
+                     double lat2,
+                     double lng2) {
   const float earthRadiusM = 6371000.0f;
+
   float p1 = degToRad(lat1);
   float p2 = degToRad(lat2);
   float dp = degToRad(lat2 - lat1);
   float dl = degToRad(lng2 - lng1);
 
   float a = sinf(dp * 0.5f) * sinf(dp * 0.5f) +
-            cosf(p1) * cosf(p2) * sinf(dl * 0.5f) * sinf(dl * 0.5f);
+            cosf(p1) * cosf(p2) *
+            sinf(dl * 0.5f) * sinf(dl * 0.5f);
+
   a = constrain(a, 0.0f, 1.0f);
-  return earthRadiusM * 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
+
+  return earthRadiusM * 2.0f *
+         atan2f(sqrtf(a), sqrtf(1.0f - a));
+}
+
+// 차량 위치에서 지팡이 위치까지의 방위각을 계산.
+// 반환값: 북쪽 0도, 동쪽 90도, 남쪽 180도, 서쪽 270도.
+float bearingDegrees(double fromLat,
+                     double fromLng,
+                     double toLat,
+                     double toLng) {
+  float lat1 = degToRad(fromLat);
+  float lat2 = degToRad(toLat);
+  float deltaLng = degToRad(toLng - fromLng);
+
+  float y = sinf(deltaLng) * cosf(lat2);
+  float x = cosf(lat1) * sinf(lat2) -
+            sinf(lat1) * cosf(lat2) * cosf(deltaLng);
+
+  float bearing = atan2f(y, x) * RAD_TO_DEG;
+
+  if (bearing < 0.0f) {
+    bearing += 360.0f;
+  }
+
+  return bearing;
+}
+
+// 두 방향 사이의 가장 짧은 각도 차이를 -180~180도로 반환.
+float angleDifferenceDegrees(float headingDeg,
+                             float targetBearingDeg) {
+  float difference =
+    fmodf(targetBearingDeg - headingDeg + 540.0f, 360.0f) - 180.0f;
+
+  return difference;
+}
+
+bool isCaneInVehiclePath(float headingErrorDeg) {
+  if (!vehicleHeadingValid) return false;
+  if (vehicleSpeed < MIN_VALID_HEADING_SPEED_MPS) return false;
+
+  return fabsf(headingErrorDeg) <= FORWARD_CONE_HALF_ANGLE_DEG;
+}
+
+void resetAllCaneRiskStates() {
+  memset(caneRiskStates, 0, sizeof(caneRiskStates));
+}
+
+CaneRiskState *getCaneRiskState(uint32_t caneNodeId) {
+  uint32_t now = millis();
+
+  // 기존에 추적 중인 지팡이를 먼저 찾는다.
+  for (int i = 0; i < MAX_TRACKED_CANES; i++) {
+    if (caneRiskStates[i].used &&
+        caneRiskStates[i].nodeId == caneNodeId) {
+      caneRiskStates[i].lastUpdateMs = now;
+      return &caneRiskStates[i];
+    }
+  }
+
+  // 비어 있는 슬롯을 찾는다.
+  for (int i = 0; i < MAX_TRACKED_CANES; i++) {
+    if (!caneRiskStates[i].used) {
+      memset(&caneRiskStates[i], 0, sizeof(CaneRiskState));
+
+      caneRiskStates[i].used = true;
+      caneRiskStates[i].nodeId = caneNodeId;
+      caneRiskStates[i].prevDistanceM = -1.0f;
+      caneRiskStates[i].lastUpdateMs = now;
+
+      return &caneRiskStates[i];
+    }
+  }
+
+  // 슬롯이 꽉 찬 경우 가장 오래 갱신되지 않은 슬롯을 재사용한다.
+  int oldestIndex = 0;
+  uint32_t oldestAge = 0;
+
+  for (int i = 0; i < MAX_TRACKED_CANES; i++) {
+    uint32_t age = now - caneRiskStates[i].lastUpdateMs;
+
+    if (age > oldestAge) {
+      oldestAge = age;
+      oldestIndex = i;
+    }
+  }
+
+  memset(&caneRiskStates[oldestIndex], 0, sizeof(CaneRiskState));
+
+  caneRiskStates[oldestIndex].used = true;
+  caneRiskStates[oldestIndex].nodeId = caneNodeId;
+  caneRiskStates[oldestIndex].prevDistanceM = -1.0f;
+  caneRiskStates[oldestIndex].lastUpdateMs = now;
+
+  return &caneRiskStates[oldestIndex];
 }
 
 uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
                               float *outDistance,
                               float *outClosingSpeed,
-                              float *outTtc) {
+                              float *outTtc,
+                              float *outBearing,
+                              float *outHeadingError,
+                              bool *outInVehiclePath) {
+  uint32_t now = millis();
+
   float distanceM = distanceMeters(vehicleLat,
                                    vehicleLng,
                                    cane.latitude,
                                    cane.longitude);
-  uint32_t now = millis();
-  float closingSpeed = 0.0f;
+
+  float bearing = bearingDegrees(vehicleLat,
+                                 vehicleLng,
+                                 cane.latitude,
+                                 cane.longitude);
+
+  float headingError =
+    angleDifferenceDegrees(vehicleHeading, bearing);
+
+  bool inVehiclePath = isCaneInVehiclePath(headingError);
+
+  CaneRiskState *state = getCaneRiskState(cane.node_id);
+
+  float closingSpeed = state->hasClosingSpeed
+                         ? state->filteredClosingSpeed
+                         : 0.0f;
+
   float ttc = 999.0f;
 
-  if (prevDistanceM >= 0.0f && prevRiskCalcMs > 0 && now > prevRiskCalcMs) {
-    float dt = (now - prevRiskCalcMs) / 1000.0f;
-    // 비정상적으로 짧은 간격의 GPS 흔들림은 TTC에 사용하지 않음.
-    if (dt >= 0.05f) {
-      closingSpeed = (prevDistanceM - distanceM) / dt;
-      if (closingSpeed > 0.1f) ttc = distanceM / closingSpeed;
+  if (state->prevDistanceM < 0.0f || state->prevCalcMs == 0) {
+    // 첫 데이터는 비교 대상이 없으므로 저장만 한다.
+    state->prevDistanceM = distanceM;
+    state->prevCalcMs = now;
+  } else {
+    uint32_t elapsedMs = now - state->prevCalcMs;
+
+    if (elapsedMs >= TTC_SAMPLE_INTERVAL_MS) {
+      float dt = elapsedMs / 1000.0f;
+
+      float rawClosingSpeed =
+        (state->prevDistanceM - distanceM) / dt;
+
+      if (!state->hasClosingSpeed) {
+        state->filteredClosingSpeed = rawClosingSpeed;
+        state->hasClosingSpeed = true;
+      } else {
+        state->filteredClosingSpeed =
+          TTC_FILTER_ALPHA * state->filteredClosingSpeed +
+          (1.0f - TTC_FILTER_ALPHA) * rawClosingSpeed;
+      }
+
+      state->prevDistanceM = distanceM;
+      state->prevCalcMs = now;
+      closingSpeed = state->filteredClosingSpeed;
     }
   }
 
-  prevDistanceM = distanceM;
-  prevRiskCalcMs = now;
+  // 차량 전방에 있고 실제로 가까워질 때만 TTC를 유효하게 계산한다.
+  if (inVehiclePath &&
+      closingSpeed >= MIN_TTC_CLOSING_SPEED_MPS) {
+    ttc = distanceM / closingSpeed;
+  }
+
   *outDistance = distanceM;
   *outClosingSpeed = closingSpeed;
   *outTtc = ttc;
+  *outBearing = bearing;
+  *outHeadingError = headingError;
+  *outInVehiclePath = inVehiclePath;
 
-  if (distanceM < RISK_DANGER_DISTANCE_M || ttc < RISK_DANGER_TTC_S) {
+  // 아주 가까운 물체는 방향과 관계없이 거리 기준으로 경고한다.
+  // TTC 기준은 차량 진행 경로 안에 있을 때만 유효해진다.
+  if (distanceM < RISK_DANGER_DISTANCE_M ||
+      ttc < RISK_DANGER_TTC_S) {
     return RISK_DANGER;
   }
-  if (distanceM < RISK_WARNING_DISTANCE_M || ttc < RISK_WARNING_TTC_S) {
+
+  if (distanceM < RISK_WARNING_DISTANCE_M ||
+      ttc < RISK_WARNING_TTC_S) {
     return RISK_WARNING;
   }
-  if (distanceM < RISK_CAUTION_DISTANCE_M || ttc < RISK_CAUTION_TTC_S) {
+
+  if (distanceM < RISK_CAUTION_DISTANCE_M ||
+      ttc < RISK_CAUTION_TTC_S) {
     return RISK_CAUTION;
   }
+
   return RISK_SAFE;
 }
 
@@ -578,12 +785,16 @@ void sendVehicleStatus() {
 }
 
 void sendRiskAlertToCane(uint8_t risk,
+                         float distanceM,
+                         float closingSpeed,
+                         float ttc,
                          uint32_t targetCaneId,
                          const uint8_t *targetMac) {
 #if VEHICLE_CALCULATES_RISK
   addPeerIfNeeded(targetMac, "cane");
 
   memset(&txRiskAlert, 0, sizeof(txRiskAlert));
+
   txRiskAlert.magic = V2X_MAGIC;
   txRiskAlert.version = V2X_VERSION;
   txRiskAlert.msg_type = MSG_RISK_ALERT;
@@ -591,18 +802,33 @@ void sendRiskAlertToCane(uint8_t risk,
   txRiskAlert.risk_level = risk;
   txRiskAlert.target_id = targetCaneId;
   txRiskAlert.src_id = vehicleId;
+
+  txRiskAlert.distance_m = distanceM;
+  txRiskAlert.closing_speed_mps = closingSpeed;
+  txRiskAlert.ttc_s = ttc;
+
   txRiskAlert.timestamp_ms = millis();
   txRiskAlert.seq_num = riskSeq++;
 
-  esp_err_t result = esp_now_send(targetMac,
-                                  (uint8_t *)&txRiskAlert,
-                                  sizeof(txRiskAlert));
+  esp_err_t result = esp_now_send(
+    targetMac,
+    (uint8_t *)&txRiskAlert,
+    sizeof(txRiskAlert)
+  );
+
   riskSendCount++;
-  Serial.printf("[RISK TX] cane=%lu risk=%u seq=%u result=%s\n",
-                (unsigned long)targetCaneId,
-                risk,
-                txRiskAlert.seq_num,
-                result == ESP_OK ? "OK" : "ERR");
+
+  Serial.printf(
+    "[RISK TX] cane=%lu risk=%u distance=%.2f "
+    "closing=%.2f ttc=%.2f seq=%u result=%s\n",
+    (unsigned long)targetCaneId,
+    risk,
+    distanceM,
+    closingSpeed,
+    ttc,
+    txRiskAlert.seq_num,
+    result == ESP_OK ? "OK" : "ERR"
+  );
 #endif
 }
 
@@ -671,7 +897,20 @@ void processLatestCanePacket() {
   if (!vehicleGpsValid || !cane.gps_valid) {
     lastRiskLevel = RISK_SAFE;
     announceRisk(RISK_SAFE);
-    sendRiskAlertToCane(RISK_SAFE, cane.node_id, caneMac);
+
+    // GPS가 끊겼다가 다시 잡혔을 때 오래된 거리 기록으로
+    // 잘못된 TTC가 계산되지 않도록 초기화한다.
+    resetAllCaneRiskStates();
+
+    sendRiskAlertToCane(
+      RISK_SAFE,
+      0.0f,
+      0.0f,
+      999.0f,
+      cane.node_id,
+      caneMac
+    );
+
     Serial.println("[RISK] GPS invalid -> SAFE");
     return;
   }
@@ -679,21 +918,46 @@ void processLatestCanePacket() {
   float distanceM = 0.0f;
   float closingSpeed = 0.0f;
   float ttc = 999.0f;
-  uint8_t risk = calculateRiskFromCane(cane,
-                                       &distanceM,
-                                       &closingSpeed,
-                                       &ttc);
+  float bearing = 0.0f;
+  float headingError = 0.0f;
+  bool inVehiclePath = false;
+
+  uint8_t risk = calculateRiskFromCane(
+    cane,
+    &distanceM,
+    &closingSpeed,
+    &ttc,
+    &bearing,
+    &headingError,
+    &inVehiclePath
+  );
 
   lastRiskLevel = risk;
   announceRisk(risk);
-  sendRiskAlertToCane(risk, cane.node_id, caneMac);
 
-  Serial.printf("[RISK] cane=%lu distance=%.2fm closing=%.2fm/s ttc=%.2fs risk=%u\n",
-                (unsigned long)cane.node_id,
-                distanceM,
-                closingSpeed,
-                ttc,
-                risk);
+  sendRiskAlertToCane(
+    risk,
+    distanceM,
+    closingSpeed,
+    ttc,
+    cane.node_id,
+    caneMac
+  );
+
+  Serial.printf(
+    "[RISK] cane=%lu distance=%.2fm closing=%.2fm/s "
+    "ttc=%.2fs heading=%.1f bearing=%.1f "
+    "diff=%.1f inPath=%u risk=%u\n",
+    (unsigned long)cane.node_id,
+    distanceM,
+    closingSpeed,
+    ttc,
+    vehicleHeading,
+    bearing,
+    headingError,
+    inVehiclePath ? 1 : 0,
+    risk
+  );
 }
 
 void resetStaleCaneRisk() {
@@ -707,8 +971,10 @@ void resetStaleCaneRisk() {
 
   lastRiskLevel = RISK_SAFE;
   announceRisk(RISK_SAFE);
-  prevDistanceM = -1.0f;
-  prevRiskCalcMs = 0;
+
+  // 기존 거리 및 접근속도 기록을 모두 초기화.
+  resetAllCaneRiskStates();
+
   Serial.println("[CANE] timeout -> risk reset");
 }
 
@@ -717,10 +983,16 @@ void logSensors() {
   lastSensorLogMs = millis();
 
   Serial.printf(
-    "[SENSOR] GPS=%s lat=%.6f lng=%.6f | IMU=%s acc=(%.2f,%.2f,%.2f) gyro=(%.1f,%.1f,%.1f) linear=%.2f\n",
+    "[SENSOR] GPS=%s lat=%.6f lng=%.6f "
+    "speed=%.2fm/s heading=%.1f headingValid=%u | "
+    "IMU=%s acc=(%.2f,%.2f,%.2f) "
+    "gyro=(%.1f,%.1f,%.1f) linear=%.2f\n",
     vehicleGpsValid ? (usingDemoGps ? "DEMO" : "FIX") : "NO_FIX",
     vehicleLat,
     vehicleLng,
+    vehicleSpeed,
+    vehicleHeading,
+    vehicleHeadingValid ? 1 : 0,
     imuHasSample ? "OK" : "WAIT",
     accelX,
     accelY,
