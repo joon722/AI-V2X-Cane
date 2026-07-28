@@ -6,7 +6,7 @@ import unittest
 
 from state_store import StateStore
 from kinematics import KinematicsPipeline
-from send_risk import RiskSender, RiskTransmitter
+from send_risk import BROADCAST_TARGET_ID, RiskSender, RiskTransmitter
 
 
 class OnChangeAndHeartbeatTest(unittest.TestCase):
@@ -91,9 +91,18 @@ class RsuEchoTest(unittest.TestCase):
 
 
 class CommandFormatTest(unittest.TestCase):
-    def test_command_matches_the_verified_downlink_shape(self):
-        tx = RiskTransmitter(target_id=0)
-        self.assertEqual(tx.command(2), '{"target_id":0,"risk":2}')
+    def test_broadcast_omits_the_target_id_key(self):
+        # arduino/10 reads target_id with a -1 fallback and treats every value
+        # >= 0 as a unicast to that node id, so {"target_id":0} is looked up as
+        # node id 0, matches no device and comes back as risk_drop. Only an
+        # absent key reaches the broadcast branch.
+        tx = RiskTransmitter(target_id=BROADCAST_TARGET_ID)
+        self.assertEqual(tx.command(2), '{"risk":2}')
+
+    def test_broadcast_command_carries_no_target_id_substring(self):
+        # The bridge parses with strstr, so the key must not appear at all.
+        tx = RiskTransmitter(target_id=BROADCAST_TARGET_ID)
+        self.assertNotIn("target_id", tx.command(3))
 
     def test_target_id_is_carried_into_the_command(self):
         tx = RiskTransmitter(target_id=4125577512)

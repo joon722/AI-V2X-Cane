@@ -35,6 +35,10 @@ from risk_scoring import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
 
 HEARTBEAT_S = 1.0
 
+# Sending to "everyone the RSU has seen" is expressed by leaving target_id out of
+# the command entirely, not by addressing node id 0. See RiskTransmitter.command.
+BROADCAST_TARGET_ID = 0
+
 # After the RSU accepts a downlink it echoes these two record types back on the
 # same serial line (documented in the session summary). They confirm the command
 # landed; they are not pipeline input, so step 8 consumes them without warning.
@@ -62,7 +66,12 @@ class RiskTransmitter:
     heartbeat is testable and the whole thing stays deterministic.
     """
 
-    def __init__(self, target_id=0, heartbeat_s=HEARTBEAT_S, allow_untrusted=False):
+    def __init__(
+        self,
+        target_id=BROADCAST_TARGET_ID,
+        heartbeat_s=HEARTBEAT_S,
+        allow_untrusted=False,
+    ):
         self.target_id = target_id
         self.heartbeat_s = heartbeat_s
         self.allow_untrusted = allow_untrusted
@@ -88,11 +97,21 @@ class RiskTransmitter:
         return TxDecision(should_send, computed_level, effective, trusted, reason)
 
     def command(self, effective_level):
-        """The verified downlink shape, compact and newline-free."""
-        return json.dumps(
-            {"target_id": self.target_id, "risk": effective_level},
-            separators=(",", ":"),
-        )
+        """The downlink shape, compact and newline-free.
+
+        A broadcast must OMIT the target_id key. The multi-node bridge
+        (arduino/10) parses it as `extractIntAfterKey(line, "target_id", -1)`
+        and takes any value >= 0 as a unicast to that node id, so
+        {"target_id":0} is not a broadcast: it looks up node id 0, matches no
+        device and answers risk_drop. Only an absent key falls through to the
+        "send to every device seen" branch. Leaving the key out also works on
+        the single-node bridge (arduino/08), which looks for node_id instead,
+        so the keyless form is the one both bridges broadcast.
+        """
+        payload = {"risk": effective_level}
+        if self.target_id != BROADCAST_TARGET_ID:
+            payload = {"target_id": self.target_id, **payload}
+        return json.dumps(payload, separators=(",", ":"))
 
 
 CSV_FIELDS = (
@@ -242,7 +261,12 @@ def parse_args():
     )
     parser.add_argument("--vehicle-speed", type=float, default=SPEED_MPS)
     parser.add_argument("--vehicle-start-m", type=float, default=START_DISTANCE_M)
-    parser.add_argument("--target-id", type=int, default=0, help="downlink target (0=broadcast)")
+    parser.add_argument(
+        "--target-id",
+        type=int,
+        default=BROADCAST_TARGET_ID,
+        help="downlink target node id (0=broadcast, sent by omitting the key)",
+    )
     parser.add_argument(
         "--tx-heartbeat-s",
         type=float,
