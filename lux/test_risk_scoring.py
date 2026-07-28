@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests for step 7 risk scoring: vendored team table + DCPA suppression gate."""
 
+import importlib.util
 import unittest
+from pathlib import Path
 
 from kinematics import relative_kinematics
 from risk_scoring import (
@@ -50,6 +52,83 @@ class VendoredTeamTableTest(unittest.TestCase):
     def test_ttc_is_infinite_when_not_approaching(self):
         self.assertEqual(calculate_ttc(10.0, 0.0), 9999.0)
         self.assertEqual(calculate_ttc(10.0, -3.0), 9999.0)
+
+
+TEAM_TABLE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "risk_calculator.py"
+
+
+def _load_team_table():
+    """Import the team's own scoring table straight from its file.
+
+    lux/ is imported flat rather than as a package, so scripts/ is not on
+    sys.path; loading by path keeps this independent of how the caller set
+    PYTHONPATH. Returns None when the file is absent, which is the case on a
+    Jetson that only carries lux/.
+    """
+    if not TEAM_TABLE_PATH.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("team_risk_calculator", TEAM_TABLE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TeamTableDriftTest(unittest.TestCase):
+    """The vendored copy must stay numerically identical to the team's own file.
+
+    risk_scoring.py freezes the table so lux/ runs on the Jetson without needing
+    scripts/ alongside it. The price of that copy is drift: if the team retunes
+    scripts/risk_calculator.py, nothing else in lux/ would notice. This is the
+    tripwire -- it fails the moment the two disagree, and a failure here means
+    "re-sync the three functions", not "change these numbers".
+    """
+
+    # distance_m, rel_speed_mps, vehicle_speed_mps, zone_base_risk.
+    # Chosen to cross every cutoff in the table, including the not-approaching
+    # branch and the zone clamp at both ends.
+    CASES = (
+        (8.0, 5.0, 5.0, 0),
+        (50.0, 5.0, 5.0, 0),
+        (8.0, 25.0, 25.0, 0),
+        (8.0, 0.0, 0.0, 0),
+        (15.0, 12.0, 18.0, 3),
+        (95.0, 1.0, 2.0, 5),
+        (3.0, -2.0, 0.0, 2),
+        (120.0, 30.0, 30.0, 0),
+        (35.0, 16.0, 11.0, 7),
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.team = _load_team_table()
+
+    def setUp(self):
+        if self.team is None:
+            self.skipTest(f"team table not present at {TEAM_TABLE_PATH}")
+
+    def test_ttc_matches_the_team_table(self):
+        for distance, rel_speed, _veh, _zone in self.CASES:
+            with self.subTest(distance=distance, rel_speed=rel_speed):
+                self.assertEqual(
+                    calculate_ttc(distance, rel_speed),
+                    self.team.calculate_ttc(distance, rel_speed),
+                )
+
+    def test_score_matches_the_team_table(self):
+        for distance, rel_speed, veh_speed, zone in self.CASES:
+            with self.subTest(distance=distance, rel_speed=rel_speed, zone=zone):
+                ttc = calculate_ttc(distance, rel_speed)
+                self.assertEqual(
+                    calculate_risk_score(distance, rel_speed, veh_speed, ttc, zone),
+                    self.team.calculate_risk_score(distance, rel_speed, veh_speed, ttc, zone),
+                )
+
+    def test_level_cutoffs_match_the_team_table(self):
+        for score in (0, 19.99, 20, 44.99, 45, 69.99, 70, 100):
+            with self.subTest(score=score):
+                self.assertEqual(
+                    classify_risk_level(score), self.team.classify_risk_level(score)
+                )
 
 
 class DcpaGateTest(unittest.TestCase):

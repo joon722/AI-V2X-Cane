@@ -26,10 +26,12 @@ from kinematics import GPS_SIGMA_M, KinematicsPipeline, to_float
 
 
 # --- Team scoring table -----------------------------------------------------
-# Verbatim copy of tmp/AI-V2X-Cane-audit/scripts/risk_calculator.py. The audit
-# folder is throwaway, so importing from it is fragile; the numbers are frozen
-# here instead and mirrored by test_risk_scoring.py. If the team retunes the
-# table, re-sync these three functions and nothing else.
+# Verbatim copy of scripts/risk_calculator.py, which is the single source of
+# truth for these numbers. It is copied rather than imported because lux/ is
+# deployed to the Jetson on its own, without scripts/ alongside it.
+# test_risk_scoring.py::TeamTableDriftTest loads that file and asserts the two
+# still agree, so a retune on the team side fails the suite instead of drifting
+# silently. On a failure there, re-sync these three functions and nothing else.
 
 def calculate_ttc(distance_m, relative_speed_mps):
     """TTC in seconds. A non-approaching pair returns a large sentinel."""
