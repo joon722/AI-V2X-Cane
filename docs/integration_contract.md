@@ -99,7 +99,14 @@ github 09.ino에는 있다(goag가 뒤처짐).
 ### 결정할 것
 - [ ] **단일 정의 채택**: A(점수표) or B(임계값). (Transformer가 A로 학습됐으니 A 권장)
 - [ ] 채택 시 나머지 하나는 코드에서 제거/정렬
-- [ ] `risk_calculator.py`(원본)와 `lux/risk_scoring.py`(복사본) 중 **단일 소스** 지정 (drift 방지)
+- [x] `risk_calculator.py`(원본)와 `lux/risk_scoring.py`(복사본) 중 **단일 소스** 지정 (drift 방지)
+      → **정본 = `scripts/risk_calculator.py`.** 2026-07-28 기준 두 파일의 세 함수는 숫자까지
+        동일함을 확인했다. lux 쪽 복사본은 유지한다(Jetson에는 `lux/`만 배포돼 `scripts/`가
+        같이 가지 않으므로 import 하면 깨진다). 대신 **복사본이 조용히 갈라지는 것**만 막았다:
+        `test_risk_scoring.TeamTableDriftTest`가 `scripts/risk_calculator.py`를 파일 경로로
+        직접 로드해 9개 케이스 + 컷오프 경계에서 두 구현의 출력이 같은지 검증한다.
+        (팀 표를 1점만 바꿔도 실패하는 것을 실제로 확인했다. `scripts/`가 없는 환경에서는 skip)
+        → **팀이 표를 바꾸면 이 테스트가 깨지는 것이 재동기화 신호다.**
 
 담당: 최민서(라벨 정의 소유) · 강현준(실시간 반영)
 
@@ -184,14 +191,44 @@ speed_mps, heading_deg, timestamp_ms, seq_num). → 9단계 실차 교체 시 �
 
 - [ ] **표준 브리지 = 파일 10 확정** (vehicle/cane 동일 키 + node_risk + cane 지원)
 
-## 6-3. Jetson → RSU 다운링크 형식 (키 불일치)
-- lux `send_risk.py`가 보냄: `{"target_id":0, "risk":N}`
+## 6-3. Jetson → RSU 다운링크 형식 (키 불일치) — **lux 쪽 수정 완료(2026-07-28)**
+- lux `send_risk.py`가 보냈던 것: `{"target_id":0, "risk":N}`
 - 파일 10이 받음: 브로드캐스트는 **`{"risk":N}` (target_id 키 생략!)**, 지정은 `target_id`
 - 파일 08이 받음: 지정 키가 **`node_id`** (target_id 아님)
 - **⚠️ 함정:** 파일 10에서 `{"target_id":0}`은 브로드캐스트가 아니라 **드롭**된다(node_id 0 단말 없음).
 
-- [ ] lux 다운링크를 파일 10 규격에 맞추기: 브로드캐스트 시 target_id 키 **생략**
-- [ ] RSU ack 타입(`risk_tx`, `risk_broadcast_to_seen`, `risk_drop`) Jetson 파서가 무시하는지 확인
+펌웨어 코드로 확인한 근거 (`10_..._bridge.ino` `handleJetsonLine`):
+
+```c
+int targetRaw = extractIntAfterKey(line, "target_id", -1);  // 키 없으면 -1
+if (targetRaw >= 0) { ... 못 찾으면 risk_drop ... return; } // 0 도 "지정"으로 간다
+for (...) sendRiskToDevice(...);                            // 키가 없을 때만 브로드캐스트
+```
+
+**키를 생략하면 파일 08에서도 브로드캐스트가 된다**(08은 `node_id`를 보므로 target_id 유무와
+무관하게 키 없음 → 전체 전송). 즉 키 없는 형태가 두 브리지 모두에서 브로드캐스트로 동작하는
+유일한 형식이라, 6-2의 브리지 표준이 확정되기 전에도 안전하게 바꿀 수 있다.
+
+- [x] lux 다운링크를 파일 10 규격에 맞추기: 브로드캐스트 시 target_id 키 **생략**
+      → `send_risk.RiskTransmitter.command()` 수정 + `BROADCAST_TARGET_ID` 상수,
+        테스트 2개 추가(`test_send_risk.CommandFormatTest`)
+- [x] RSU ack 타입(`risk_tx`, `risk_broadcast_to_seen`, `risk_drop`) Jetson 파서가 무시하는지 확인
+      → `send_risk.RSU_ACK_TYPES`가 앞의 둘을 조용히 소비. `risk_drop`은 미등록이라
+        `[WARN] ignored_type`으로 찍힌다. 수정 후에는 발생하지 않아야 하므로 **일부러 남겨둠**
+        (드롭이 다시 보이면 경고로 드러나는 게 낫다)
+
+### ⚠️ 실기 기록과 펌웨어 코드가 모순된다 (박중선 확인 필요)
+
+`lux/v2x_session_summary_next_steps.md`의 8단계 실기 기록에는 `{"target_id":0,"risk":N}`을
+보냈을 때 RSU가 **`risk_broadcast_to_seen`으로 응답했고 지팡이 node_risk도 따라왔다**고
+적혀 있다. 그런데 위 코드대로면 그 입력은 `risk_drop`이 나와야 한다. 응답 타입 문자열
+(`risk_tx` / `risk_broadcast_to_seen`)은 파일 10에만 있으므로 08을 쓴 것도 아니다.
+
+가능성: **RSU에 실제로 플래시된 브리지 펌웨어가 리포의 파일 10과 다른 버전이다.**
+Part 1의 사본 갈라짐과 같은 뿌리일 수 있다.
+
+- [ ] RSU 보드에 올라간 브리지 펌웨어의 실제 버전 확인
+- [ ] 이번 수정본으로 재검증 (여전히 `risk_broadcast_to_seen`이 나오면 정상)
 
 담당: 강현준(Jetson 송신) · 박중선(브리지 펌웨어)
 
@@ -209,12 +246,45 @@ speed_mps, heading_deg, timestamp_ms, seq_num). → 9단계 실차 교체 시 �
 - 좌표 = **GPS 위경도(상도동)**, risk 0~3, ttc·timestamp 선택
 - 집계 조회: `GET /api/risk-segments` → 도로 구간별 `{points, grade, events, avg, ttc}`
 
+### 실제로 돌려본 결과 (2026-07-28, 임시 DB로 격리 실행)
+
+서버 자체는 **정상 동작한다.** 실 `risk.db`는 건드리지 않고 별도 작업폴더에서 띄워 확인:
+
+| 확인 | 결과 |
+|---|---|
+| `POST /api/events` (lat/lng/risk/ttc/timestamp 전체) | 200, id 발급 |
+| `POST /api/events` (lat/lng/risk 만 — SUMO 업로더 최소 형태) | 200, timestamp 서버시각 자동 |
+| `POST` risk=7 (범위 밖) | **422 거부** — 스키마 0~3 제약이 실제로 걸린다 |
+| `GET /api/risk-segments` | 200, 도로 엣지 단위 집계 정상 (`grade`/`events`/`avg`/`ttc`) |
+
+**🔴 그런데 여기서 결함 하나가 나왔다: 도로 스냅에 거리 제한이 없다.**
+
+실시간 lux가 실내에서 쓰는 fallback 좌표 `37.0/127.0`을 그대로 올려봤더니, 거부되지 않고
+**상도동 도로(37.4901/126.9535)에 위험도 3으로 찍혔다.** 두 지점은 약 55km 떨어져 있다.
+`app/roads.py::nearest_edge_id`가 거리 상한 없이 무조건 가장 가까운 엣지를 돌려주기 때문이다.
+
+→ 지금 상태에서 업로드 클라이언트를 붙이면 **실내 개발 중에 지도가 조용히 오염된다.**
+   (전송 쪽에는 이미 같은 성격의 방어가 있다: `send_risk`의 트러스트 게이팅이 `gps_valid=0`이면
+   nonzero risk를 막는다. 업로드에도 같은 게이트가 필요하고, 서버에도 상한이 필요하다.)
+
 ### 결정할 것
 - [ ] lux 파이프라인에 **위험 이벤트 발생 시 `POST /api/events` 호출부 추가**
+      (현재 lux 전체에 업로드 호출부가 **0건**임을 grep으로 확인. RSU로만 보내고 있다)
+- [ ] **업로드에 트러스트 게이트 적용**: `gps_valid=0`이면 올리지 않기 (전송 정책과 동일하게)
+- [ ] **서버 스냅 거리 상한 추가**: 가장 가까운 엣지가 N m 이상 떨어지면 저장 거부(400)
+      또는 `off_road`로 표시. N은 도로망 커버리지 기준으로 정하면 됨 (예: 50m)
 - [ ] 지도 서버 주소 합의 (localhost / 팀 공용 / cloudflared 터널)
 - [ ] 업로드 좌표는 상도동 위경도여야 함 → 실시간 cane의 37.0/127.0 가짜값 문제(Part 2와 연동)
 - [ ] 업로드 트리거 정책 (매 이벤트? risk≥1만? 중복 억제?)
 - [ ] map을 정본 리포에 편입 (Part 1)
+
+### SUMO → 지도 경로
+
+`import_sumo_results.py`는 CSV(`lat,lng,risk,ttc,timestamp`)를 읽어 같은 `POST /api/events`로
+올린다. **파이프는 놓여 있는데 아직 데이터가 안 흐른다** — 리포에 있는 건 4줄짜리 포맷 예시
+(`sumo_risk_sample.csv`, 이미 상도동 위경도)뿐이고, 실제 SUMO 결과는 로컬 좌표(3600/1400)라
+그대로는 못 올린다. 스크립트 docstring도 `convertXY2LonLat()`로 먼저 변환하라고 적고 있다.
+→ **Part 2(좌표계)가 풀려야 이 경로가 살아난다.** 스크립트 자체를 고칠 일은 없다.
 
 담당: 최민서(지도 서버) · 강현준(업로드 클라이언트)
 
@@ -250,10 +320,30 @@ speed_mps, heading_deg, timestamp_ms, seq_num). → 9단계 실차 교체 시 �
 lux 안에 연결 안 된 3갈래: **Stack A**(parse→...→send_risk, 실전송) · **Stack B**(jetson_rsu_bridge→risk_engine, zone+rule+AI-placeholder max, x/y 가정) · **Stack C**(predict_risk, 미연결).
 - [ ] Stack A를 기준으로 zone·AI 합류(융합 플랜 B1~B4), Stack B는 참고용으로 정리
 
-## 9-2. TTC "미접근" 센티넬 통일
+## 9-2. TTC "미접근" 센티넬 — **통일하지 않기로 판단(2026-07-28)**
 - `9999`(risk_calculator/risk_scoring) / `None`(kinematics) / `rel_speed≤0.2`(risk_engine) 제각각
-- 수식 자체(`거리/상대속도`)는 동일 → 상수만 통일하면 됨
-- [ ] 미접근 표현 하나로 통일
+- 수식 자체(`거리/상대속도`)는 동일
+
+세 값이 흐르는 경로를 따라가 본 결과, **통일이 이득이 없고 오히려 손해**다.
+
+| 위치 | 표현 | 이유 |
+|---|---|---|
+| `risk_scoring.calculate_ttc` | `9999.0` | 팀 점수표 입력값. 표의 마지막 컷오프가 `ttc<=12`라 9999는 "TTC 0점"을 만드는 **표의 일부**다. 여기를 바꾸면 팀 표를 훼손하고 Part 3 drift 테스트가 깨진다 |
+| `kinematics` | `None` | 물리량. "최근접이 앞에 없음"은 값이 없는 것이지 큰 값이 아니다 |
+| `risk_engine.estimate_ttc` | `None` (+`rel_speed≤0.2` 게이트) | Stack B 소속. Part 9-1에서 **정리 대상**으로 이미 지정됨 |
+
+세 값이 실제로 섞이는 경계는 지금 **없다.** `assess_risk`는 kinematics의 ttc를 쓰지 않고
+팀 함수로 다시 계산한다(그래서 점수가 팀 표와 정확히 일치한다). 억지로 상수 하나로 묶으면
+팀 표를 건드리거나 안 쓰는 변환 레이어가 생긴다.
+
+**대신 진짜 함정은 따로 있다 (Part 4와 함께 처리):**
+AI feature 11개 중 9번째가 `ttc`인데, `predict_risk.TrajectoryBuffer.features()`는
+`sample.get(name, 0.0)`으로 없는 값을 **0.0**으로 채운다. 미접근(None)이 그대로 흘러들면
+**TTC 0초 = 즉시 충돌 = 최고 위험**으로 뒤집힌다. 아직 배선 전이라 지금 터지지는 않는다.
+
+- [x] 미접근 표현 통일 → **하지 않음**(위 근거). 대신 각 위치에 왜 다른지 이 표로 고정
+- [ ] AI feature 배선 시 `ttc` 미접근을 무엇으로 넣을지 결정 (9999? 팀 학습 데이터가 미접근을
+      어떤 값으로 채웠는지 최민서 확인 필요 — 학습과 추론이 같아야 한다)
 
 ## 9-3. 제안서 vs 실제 구현 범위 (발표 표기)
 - 제안서 핵심기능 중 현재 미구현: 차량 LCD HMI, 역방향 LED 경고, V2I 신호등 연장
