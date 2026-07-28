@@ -1,5 +1,6 @@
 arduino/**/config.h
 *.tmp
 *.log
+tmp/
 __pycache__/
 *.py[cod]
