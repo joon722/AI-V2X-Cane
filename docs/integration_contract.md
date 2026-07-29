@@ -114,29 +114,78 @@ github 09.ino에는 있다(goag가 뒤처짐).
 
 # Part 4. AI 모델 (Transformer/ONNX) 입출력 규격
 
-**실제 학습된 모델** (`AI_Model/transformer/train_transformer.py`, `models/scaler.json`, `export_onnx.py`):
-- 입력 텐서: `[batch, 10, 11]`, dtype float32, input 이름 `input`
-- **feature 11개 (순서 고정):** `ped_x, ped_y, veh_x, veh_y, ped_speed_mps, veh_speed_mps, distance_m, rel_speed_mps, ttc, risk_score, zone_base_risk`
-- 정규화: **StandardScaler(z-score) 필수** (scaler.json에 feature별 mean/scale)
-- 출력: `[batch, 4]` **logits** (softmax 없음), argmax = risk_level 0~3, **현재 시점 분류(미래예측 아님)**
-- window 10프레임 슬라이딩
+**규격은 2026-07-29 학습 산출물에서 직접 읽어 확정했다. 최민서 답변을 기다릴 필요가 없었다** —
+`risk_transformer.onnx`와 `scaler.json`이 **이미 리포에 있다**(`AI_Model/transformer/models/`).
 
-**강현준 `lux/predict_risk.py`의 현재 가정 (불일치):**
-- feature **8개**(ttc·risk_score·zone_base_risk 누락), **정규화 없음**, 주석엔 "미래 예측"
+| 항목 | 확정값 | 근거 |
+|---|---|---|
+| 입력 텐서 | `[batch, 10, 11]` float32, 이름 `input` | `export_onnx.py` |
+| feature 11개 순서 | `ped_x, ped_y, veh_x, veh_y, ped_speed_mps, veh_speed_mps, distance_m, rel_speed_mps, ttc, risk_score, zone_base_risk` | `scaler.json: feature_columns` |
+| 정규화 | StandardScaler z-score `(x-mean)/scale` | `train_transformer.py:179` |
+| 출력 | `[batch, 4]` **logits**(softmax 없음), argmax = level | `export_onnx.py` |
+| 시점 | **현재 시점 분류.** 미래 예측 아님 | 분류기가 `x[:, -1, :]`, 라벨도 `labels[end_index]`(윈도우 마지막 프레임) |
+| window | 10프레임 | `scaler.json: sequence_length` |
+| **ttc 미접근** | **9999** | 학습 데이터 12,621행 중 **7,802행(61.8%)이 정확히 9999** |
 
-**함정:** 입력 11개 중 뒤 3개(ttc, risk_score, zone_base_risk)는 원시 센서값이 아니라
+- [x] feature 11개 이름·순서·단위 확정
+- [x] 출력이 "현재 분류"임을 코드로 확인
+- [x] ttc 미접근 표현 확정(9999) — 팀에 물을 필요 없어졌다
+- [x] **확보물 3종 중 2종은 이미 리포에 있음** (`risk_transformer.onnx`, `scaler.json`)
+- [x] `lux/predict_risk.py`를 11 feature·StandardScaler·현재분류로 수정
+      → `Scaler` 클래스(z-score) 추가, `DEFAULT_FEATURE_ORDER` 11개로 교체,
+        `NO_APPROACH_TTC=9999`로 결측 ttc 채움, docstring의 "미래 예측" 오기 정정.
+        `TrainedModelContractTest`가 `scaler.json`을 직접 읽어 feature 순서·window가
+        어긋나면 실패한다(Part 3의 drift 테스트와 같은 방식).
+- [ ] window 10프레임의 **샘플 주기(Hz)** — 여전히 미확정 (SUMO step length 확인 필요)
+- [ ] 샘플 입력/출력 1쌍 (회귀 테스트 고정용) — onnxruntime 설치 후 직접 생성 가능
+
+**함정 1:** 입력 11개 중 뒤 3개(ttc, risk_score, zone_base_risk)는 원시 센서값이 아니라
 **rule 파이프라인 산출물**이다. 즉 AI를 돌리려면 실시간 쪽이 rule(TTC·score·zone)을 먼저 계산해
 feature로 넣어야 한다. (AI가 rule을 대체하는 게 아니라 rule 출력을 먹는 구조)
 
-### 결정할 것 (최민서에게 확인 + 파일 확보)
-- [ ] feature 11개 이름·순서·단위 최종 확정 (위 목록 맞나?)
-- [ ] `scaler.json` mean/scale 값이 최종본인가? (좌표계 결정 Part 2에 종속 — SUMO 좌표 정규화라 위경도면 무효)
-- [ ] window 10프레임의 **샘플 주기(Hz)** 확정 (10Hz=1초? 코드에 미명시)
-- [ ] 출력이 "현재 분류"인 게 맞나? 미래 예측이 필요하면 재학습 필요
-- [ ] **확보물:** `risk_transformer.onnx` + feature 추출 스크립트(정규화 포함) + 샘플 입력/출력 1쌍(회귀 테스트 고정용)
-- [ ] `lux/predict_risk.py`를 11 feature·StandardScaler·현재분류로 수정
+**함정 2 (실제로 있던 버그):** 결측 ttc를 0.0으로 채우면 모델은 "TTC 0초 = 즉시 충돌"로 읽는다.
+학습이 9999로 채웠으므로 정반대 해석이 된다. `predict_risk`에서 수정 완료.
 
-담당: 최민서(모델·규격) · 강현준(추론 슬롯 수정)
+---
+
+## 🔴 Part 4-1. 학습 데이터의 구조적 한계 (2026-07-29 발견 — 최민서 확인 필요)
+
+`dataset/labeled_master_dataset.csv`(12,621행)를 집계한 결과, **모델이 실시간 입력을 그대로
+받을 수 없는 상태**임이 드러났다. 규격이 맞아도 값이 맞지 않는다.
+
+| feature | 학습 데이터 실제 분포 | 의미 |
+|---|---|---|
+| `ped_x` | **12,621행 전부 `3600`** (고유값 1개) | 보행자가 한 지점에 고정 |
+| `ped_y` | **12,621행 전부 `1400`** (고유값 1개) | 〃 |
+| `ped_speed_mps` | **12,621행 전부 `1.2`** (고유값 1개) | 보행자 속도도 상수 |
+| `zone_base_risk` | `0`이 12,367행(98.0%), `3`이 176, `4`가 78 | zone 안 표본이 2% |
+| `risk_level` | 0: 10,796 / 1: 1,523 / 2: 272 / **3: 30행(0.24%)** | 최고 위험 표본 30건 |
+
+**결론 1 — 모델은 "보행자가 움직이는 상황"을 한 번도 본 적이 없다.**
+보행자 관련 3개 feature가 상수라 학습 시 그 축에서 아무 정보도 얻지 못했다. 실제로
+`scaler.json`의 해당 `scale`이 전부 `1.0`인데, 이는 sklearn이 **표준편차 0을 1.0으로 대체**한
+결과다(`_handle_zeros_in_scale`).
+
+**결론 2 — 그래서 정규화가 보행자 좌표를 눌러주지 못한다.**
+`scale=1.0`이므로 정규화 후 값이 `(ped_x - 3600)`으로 **그대로 남는다.** 실시간 ENU 좌표를
+넣으면 보행자가 원점 근처(0)이므로 `-3600`이 되고, 나머지 feature는 z-score라 대개 `±3` 범위다.
+**한 축만 1000배 큰 입력**이 들어가 예측이 무의미해진다. 좌표계를 SUMO로 변환해도, 보행자가
+정확히 (3600, 1400) 근처가 아니면 같은 문제가 난다.
+
+→ **Part 2(좌표계)를 어떻게 합의하든 이 문제는 안 풀린다.** 재학습이 필요한 사안이다.
+
+### 최민서에게 물을 것
+- [ ] 보행자가 고정된 시나리오로만 학습한 게 의도인가? (SUMO에서 보행자를 안 움직인 건지,
+      아니면 궤적이 있는데 feature 추출에서 빠진 건지)
+- [ ] **움직이는 보행자 데이터로 재학습이 가능한가?** 아니면 보행자 3개 feature를 아예 빼고
+      차량 중심 8개 feature로 재학습하는 게 맞는가 (상수 feature는 어차피 정보가 0)
+- [ ] `risk_level=3`이 30건뿐인데 이 클래스 성능이 신뢰할 만한가? (test set에는 몇 건 들어갔나)
+- [ ] window 10프레임이 몇 Hz인가 (SUMO step-length)
+
+**그때까지 실시간 쪽 조치:** `predict_risk`는 규격을 맞춰 두되, 융합 러너에서 **AI는 기본 OFF**
+(`--model` 미지정 → `NullPredictor`)로 둔다. rule+zone만으로 안전 기능은 완결된다.
+
+담당: 최민서(모델·재학습) · 강현준(추론 슬롯 — 완료)
 
 ---
 
