@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V2X 보행 위험지도</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+  #map { width: 100%; height: 100vh; }
+
+  /* 좌상단 컨트롤 패널 (지도 종류 전환 + 등급 필터 + 상태) */
+  #panel {
+    position: absolute; top: 16px; left: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.97);
+    padding: 14px 16px; border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    min-width: 230px;
+  }
+  #panel h1 { font-size: 16px; margin: 0 0 10px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .tabs button {
+    flex: 1; padding: 7px 4px; border: 1px solid #d1d5db; background: #f5f5f5;
+    border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit;
+  }
+  .tabs button.on { background: #1f2937; color: #fff; border-color: #1f2937; }
+  #minGrade {
+    width: 100%; padding: 7px; margin-bottom: 8px; font-size: 13px;
+    border-radius: 8px; border: 1px solid #d1d5db; font-family: inherit; background: #fff;
+  }
+  #status { font-size: 12px; color: #555; line-height: 1.5; }
+
+  /* 우상단 범례 */
+  #legend {
+    position: absolute; top: 16px; right: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 12px 16px; border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    font-size: 13px; line-height: 1.7;
+  }
+  #legend h4 { margin: 0 0 6px 0; font-size: 14px; }
+  .legend-swatch {
+    display: inline-block; width: 14px; height: 14px;
+    border-radius: 3px; margin-right: 6px; vertical-align: middle;
+  }
+
+  /* 좌하단 클릭 상세 카드 */
+  #detail-card {
+    position: absolute; bottom: 20px; left: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.97);
+    padding: 14px 18px; border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    font-size: 14px; min-width: 240px; display: none;
+  }
+  #detail-card h4 { margin: 0 0 8px 0; font-size: 15px; padding-right: 18px; }
+  #detail-card .row { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+  #detail-card .row span:first-child { color: #555; white-space: nowrap; }
+  #detail-card .close-btn {
+    position: absolute; top: 8px; right: 12px;
+    cursor: pointer; color: #999; font-weight: bold; font-size: 16px;
+  }
+  .grade-badge {
+    display: inline-block; padding: 1px 8px; border-radius: 6px;
+    color: #fff; font-weight: bold; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h1>V2X 보행 위험지도</h1>
+  <div class="tabs">
+    <button id="b-live" class="on" onclick="setSource('live')">실측</button>
+    <button id="b-sumo" onclick="setSource('sumo')">시뮬</button>
+    <button id="b-combined" onclick="setSource('combined')">종합</button>
+  </div>
+  <select id="minGrade" onchange="loadSegments()">
+    <option value="0">전체 등급 보기</option>
+    <option value="1">1(주의) 이상</option>
+    <option value="2">2(위험) 이상</option>
+    <option value="3">3(매우 위험)만</option>
+  </select>
+  <div id="status">데이터 불러오는 중...</div>
+</div>
+
+<div id="legend">
+  <h4>누적 위험 등급</h4>
+  <div><span class="legend-swatch" style="background:#22c55e"></span>0 · 안전</div>
+  <div><span class="legend-swatch" style="background:#eab308"></span>1 · 주의</div>
+  <div><span class="legend-swatch" style="background:#f97316"></span>2 · 위험</div>
+  <div><span class="legend-swatch" style="background:#ef4444"></span>3 · 매우 위험</div>
+  <div style="margin-top:4px"><span class="legend-swatch" style="background:#9b59b6;border-radius:50%"></span>위험구역</div>
+</div>
+
+<div id="detail-card">
+  <span class="close-btn" onclick="hideCard()">&times;</span>
+  <h4 id="d-title">도로 구간 상세</h4>
+  <div id="d-rows"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const COLORS = { 0: "#22c55e", 1: "#eab308", 2: "#f97316", 3: "#ef4444" };
+const GRADE_LABELS = { 0: "안전", 1: "주의", 2: "위험", 3: "매우 위험" };
+const AGR = { both: "실측·시뮬 모두 위험", live_only: "실측만 위험", sumo_only: "시뮬만 위험" };
+const SRC = { live: "실측", sumo: "시뮬레이션", combined: "종합" };
+
+let source = "live";
+const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
+const map = L.map("map").setView([37.4965, 126.9571], 16);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+segLayer.addTo(map); zoneLayer.addTo(map);
+
+function setSource(s) {
+  source = s;
+  ["live", "sumo", "combined"].forEach(x =>
+    document.getElementById("b-" + x).className = (x === s ? "on" : ""));
+  hideCard();
+  loadSegments();
+}
+
+function hideCard() { document.getElementById("detail-card").style.display = "none"; }
+
+function row(label, value) {
+  return '<div class="row"><span>' + label + '</span><span>' + value + '</span></div>';
+}
+
+function showSegmentCard(s) {
+  document.getElementById("d-title").textContent = "도로 구간 상세";
+  let badge = '<span class="grade-badge" style="background:' + COLORS[s.grade] + '">'
+            + s.grade + " · " + GRADE_LABELS[s.grade] + "</span>";
+  let h = row("누적 등급", badge) + row("이벤트 건수", s.events + "건");
+  if (s.avg != null) h += row("평균 위험도", s.avg);
+  if (s.ttc != null) h += row("평균 TTC", s.ttc + "s");
+  h += row("출처", SRC[s.source] || s.source);
+  if (s.agreement) h += row("일치도", AGR[s.agreement] || s.agreement);
+  if (s.updated_at) h += row("갱신", s.updated_at.replace("T", " ").slice(0, 19));
+  document.getElementById("d-rows").innerHTML = h;
+  document.getElementById("detail-card").style.display = "block";
+}
+
+function showZoneCard(z) {
+  document.getElementById("d-title").textContent = z.zone_name;
+  let h = row("유형", z.zone_type) + row("기본 위험", z.base_risk) + row("반경", z.radius + "m");
+  document.getElementById("d-rows").innerHTML = h;
+  document.getElementById("detail-card").style.display = "block";
+}
+
+function loadSegments() {
+  segLayer.clearLayers();
+  const st = document.getElementById("status");
+  st.textContent = "데이터 불러오는 중...";
+  const minG = parseInt(document.getElementById("minGrade").value, 10);
+
+  fetch("/api/segments?source=" + source).then(r => r.json()).then(all => {
+    const rows = (all || []).filter(s => s.grade >= minG);
+    if (rows.length === 0) {
+      st.textContent = "표시할 데이터가 없습니다.";
+      return;
+    }
+    rows.forEach(s => {
+      const line = L.polyline(s.points, {
+        color: COLORS[s.grade], weight: 7, opacity: 0.85, lineCap: "round",
+      });
+      line.on("click", () => showSegmentCard(s));
+      line.addTo(segLayer);
+    });
+    fetch("/api/status").then(r => r.json()).then(info => {
+      let t = rows.length + "개 구간 표시 중";
+      if (info.last_updated) t += "<br>갱신 " + info.last_updated.replace("T", " ").slice(0, 16);
+      st.innerHTML = t;
+    }).catch(() => { st.textContent = rows.length + "개 구간 표시 중"; });
+  }).catch(() => { st.textContent = "데이터를 불러오지 못했습니다. 새로고침 해보세요."; });
+}
+
+function loadZones() {
+  fetch("/api/zones").then(r => r.json()).then(zs => {
+    zoneLayer.clearLayers();
+    zs.forEach(z => {
+      const c = L.circle([z.lat, z.lng], {
+        radius: z.radius, color: "#9b59b6", fillColor: "#9b59b6", fillOpacity: 0.15, weight: 2,
+      });
+      c.on("click", () => showZoneCard(z));
+      c.addTo(zoneLayer);
+    });
+  }).catch(() => {});
+}
+
+loadZones();
+loadSegments();
+</script>
+
+</body>
+</html>
