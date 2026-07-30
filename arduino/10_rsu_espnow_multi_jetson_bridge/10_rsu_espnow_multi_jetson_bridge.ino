@@ -10,7 +10,7 @@
 #define JETSON_LINE_MAX 220
 
 #define V2X_MAGIC 0x56325831UL  // "V2X1"
-#define V2X_VERSION 1
+#define V2X_VERSION 2  // cane_bt_debug / car_bt_debug 노드와 반드시 같아야 함
 
 #define MSG_VEHICLE_STATUS 1
 #define MSG_RSU_REPLY 2
@@ -54,6 +54,12 @@ typedef struct __attribute__((packed)) v2x_risk_message {
 
   uint32_t target_id;
   uint32_t src_id;
+
+  // 차량/지팡이 노드의 v2x_risk_message와 구조가 같아야 함.
+  float distance_m;
+  float closing_speed_mps;
+  float ttc_s;
+
   uint32_t timestamp_ms;
   uint16_t seq_num;
 } v2x_risk_message_t;
