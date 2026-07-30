@@ -1,0 +1,1 @@
+pc_time,type,node_id,seq,gps_valid,lat,lng,speed_mps,heading_deg,node_risk,tx_ms,rx_ms,recv_count,lost_count,rssi,src_mac,source_mode

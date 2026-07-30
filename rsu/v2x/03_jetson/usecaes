@@ -1,0 +1,96 @@
+# V2X Serial Monitor 사용법
+
+이 파일은 Jetson/Ubuntu에서 ESP32 수신 보드를 USB로 연결한 뒤, 터미널에 수신 데이터를 계속 출력하는 방법입니다.
+
+## 넣어둘 위치
+
+아래 파일을 Jetson의 이 폴더에 넣습니다.
+
+```bash
+/home/ssu212324/v2x/03_jetson/serial_link_monitor.py
+```
+
+## 실행 전에 포트 확인
+
+```bash
+ls /dev/ttyUSB*
+```
+
+현재 확인된 포트가 아래처럼 나오면:
+
+```text
+/dev/ttyUSB0
+```
+
+실행할 때도 반드시 `/dev/ttyUSB0`를 씁니다. `/dev/ttyUSB1`은 없는 포트라서 에러가 납니다.
+
+## 터미널에 쭈루룩 나오게 실행
+
+```bash
+cd /home/ssu212324/v2x/03_jetson
+python3 serial_link_monitor.py /dev/ttyUSB0
+```
+
+정상 시작 화면:
+
+```text
+[MONITOR] port=/dev/ttyUSB0, baud=115200
+[LOG] /home/ssu212324/v2x/03_jetson/serial_link_monitor_log.csv
+[OK 기준] vehicle/cane/json/RISK 메시지가 timeout 안에 계속 들어오면 연결 정상
+Stop: Ctrl + C
+```
+
+수신이 들어오면 이런 식으로 계속 출력됩니다.
+
+```text
+[RX] type=vehicle  gap= 0.201 raw={"type":"vehicle","node_id":1,...}
+[RX] type=RISK     gap= 0.198 raw=RISK,2,15
+```
+
+## 멈추는 방법
+
+```text
+Ctrl + C
+```
+
+멈추면 로그가 아래 파일에 저장됩니다.
+
+```bash
+/home/ssu212324/v2x/03_jetson/serial_link_monitor_log.csv
+```
+
+## 권한 에러가 날 때
+
+아래처럼 실행합니다.
+
+```bash
+sudo python3 serial_link_monitor.py /dev/ttyUSB0
+```
+
+## pyserial이 없다고 나올 때
+
+```bash
+python3 -m pip install pyserial
+```
+
+## 아무것도 안 찍힐 때 확인할 것
+
+1. 포트는 `/dev/ttyUSB0`인지 확인합니다.
+2. ESP32 수신 보드의 리셋 버튼을 눌러 부팅 로그라도 뜨는지 확인합니다.
+3. 송신 ESP32가 켜져 있고 같은 ESP-NOW 설정/MAC/채널을 쓰는지 확인합니다.
+4. 보드 코드에 `Serial.begin(115200)`과 수신 시 `Serial.println(...)` 또는 `Serial.printf(...)`가 있는지 확인합니다.
+
+## 로그까지 남기는 다른 명령
+
+CSV 로그 파일 이름을 직접 정하고 싶으면:
+
+```bash
+python3 serial_link_monitor.py /dev/ttyUSB0 --log test_rx.csv
+```
+
+baud rate가 다르면:
+
+```bash
+python3 serial_link_monitor.py /dev/ttyUSB0 --baud 9600
+```
+

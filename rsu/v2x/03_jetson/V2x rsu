@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+# =====================================================================
+# v2x_rsu.py  -  V2X RSU 메인 루프 (현준 / 통신·시스템통합 파트)
+#
+#   차량 ESP --(ESP-NOW)--> 브리지 ESP --(UART)--> [이 프로그램]
+#                                                      |
+#                                  9컬럼 합치기 + TTC/RISK 계산
+#                                                      |
+#   차량/지팡이 <--(ESP-NOW)-- 브리지 ESP <--(UART)-- {"risk":N} 회신
+#
+# 동작:
+#   1) /dev/ttyUSB0 에서 브리지가 올려주는 JSON 한 줄씩 읽기
+#   2) 최신 차량 상태 보관 (여러 대면 node_id별로)
+#   3) 보행자(고정 좌표) 기준 TTC 계산 -> RISK 0~3
+#      - heading 반영: 다가오는 차만 점수, 멀어지면 RISK 0
+#      - 여러 대면 가장 위험한 값 max() 채택 (옵션 A)
+#   4) RISK 가 바뀌면 브리지로 {"target_id":..,"risk":N} 회신
+#   5) 동시에 CSV 로깅
+#
+# 사용법:
+#   python3 v2x_rsu.py              # 실측 모드 (차량 GPS로 계산)
+#   python3 v2x_rsu.py --sim        # 시뮬 모드 (거리 강제 감소로 RISK 0->3 검증)
+#   python3 v2x_rsu.py --reply-off  # 회신 안 보냄 (수신/계산만)
+# 종료: Ctrl+C
+# =====================================================================
+
+import serial
+import json
+import time
+import math
+import csv
+import sys
+
+# ---------------------------------------------------------------------
+# 설정
+# ---------------------------------------------------------------------
+PORT = "/dev/ttyUSB0"
+BAUD = 115200
+
+# 보행자(지팡이) 고정 좌표 - 차량이 보내는 좌표 근처로 박음
+# 차량 데이터가 lat=37.000000, lng=127.000046 이므로 그 라인 위에 둠
+PED_LAT = 37.000000
+PED_LNG = 127.000150     # 차량보다 동쪽에 보행자가 서 있다고 가정
+PED_HEADING = 0.0        # 보행자 진행방향 (고정, 정지 가정)
+
+# TTC -> RISK 임계치 (메모리: van der Horst 1991 / FHWA SSAM)
+#   TTC >= 5.5s : 0 (safe)
+#   3.0~5.5s    : 1 (caution)
+#   1.5~3.0s    : 2 (warning)
+#   < 1.5s      : 3 (danger)
+TTC_CAUTION = 5.5
+TTC_WARNING = 3.0
+TTC_DANGER  = 1.5
+
+# 차량 상태가 이 시간(초) 넘게 안 오면 stale 로 보고 계산 제외
+STALE_SEC = 2.0
+
+# 회신은 RISK가 바뀔 때만 (매번 보내면 시리얼 폭주)
+SEND_ON_CHANGE_ONLY = True
+
+LOG_FILE = "v2x_risk_log.csv"
+
+# ---------------------------------------------------------------------
+# 지리 계산 유틸
+# ---------------------------------------------------------------------
+def haversine_m(lat1, lon1, lat2, lon2):
+    """두 좌표 사이 거리 (m)"""
+    R = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+def bearing_deg(lat1, lon1, lat2, lon2):
+    """1->2 방위각 (0=북, 시계방향 deg). '차량에서 보행자를 향하는 방향'"""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1)*math.sin(p2) - math.sin(p1)*math.cos(p2)*math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+# ---------------------------------------------------------------------
+# 핵심: TTC / RISK 계산
+# ---------------------------------------------------------------------
+def compute_risk(veh, ped_lat, ped_lng):
+    """
+    veh: dict (veh_lat, veh_lng, veh_speed, veh_heading)
+    반환: (risk_level, ttc_s, distance_m, closing_speed_mps, reason)
+    """
+    dist = haversine_m(veh["lat"], veh["lng"], ped_lat, ped_lng)
+
+    speed = max(0.0, veh.get("speed_mps", 0.0))   # 차량 속력 (m/s)
+    veh_hdg = veh.get("heading_deg", 0.0)          # 차량 진행방향
+
+    # 차량 -> 보행자 방향 (이 방향으로 차가 가고 있으면 접근)
+    to_ped = bearing_deg(veh["lat"], veh["lng"], ped_lat, ped_lng)
+
+    # 차량 진행방향과 '보행자 방향' 사이 각도차
+    diff = abs((veh_hdg - to_ped + 180) % 360 - 180)   # 0~180
+
+    # 접근속도 = 속력 * cos(각도차)
+    #   정면으로 향함(diff=0) -> +speed  (다가옴)
+    #   직각(90)            -> 0
+    #   반대(180)           -> -speed   (멀어짐)
+    closing = speed * math.cos(math.radians(diff))
+
+    # TTC: 다가올 때만 의미. 멀어지거나 정지면 무한대 -> RISK 0
+    if closing <= 0.1:
+        return 0, float("inf"), dist, closing, "receding_or_stopped"
+
+    ttc = dist / closing
+
+    if ttc < TTC_DANGER:
+        risk = 3; reason = "ttc<1.5s"
+    elif ttc < TTC_WARNING:
+        risk = 2; reason = "ttc<3.0s"
+    elif ttc < TTC_CAUTION:
+        risk = 1; reason = "ttc<5.5s"
+    else:
+        risk = 0; reason = "ttc>=5.5s"
+
+    return risk, ttc, dist, closing, reason
+
+# ---------------------------------------------------------------------
+# 메인
+# ---------------------------------------------------------------------
+def main():
+    sim_mode  = "--sim" in sys.argv
+    reply_off = "--reply-off" in sys.argv
+
+    ser = serial.Serial(PORT, BAUD, timeout=1)
+    print(f"[연결] {PORT} @ {BAUD}")
+    print(f"[모드] {'SIM (거리 강제 감소)' if sim_mode else '실측 (차량 GPS)'}"
+          f"{' / 회신 OFF' if reply_off else ''}")
+    print(f"[보행자] lat={PED_LAT}, lng={PED_LNG}")
+    print("-" * 78)
+
+    vehicles = {}          # node_id -> {lat,lng,speed_mps,heading_deg,last_rx}
+    last_sent_risk = None  # 마지막으로 회신한 RISK
+    sim_dist = 60.0        # 시뮬 모드 시작 거리(m), 점점 줄임
+
+    # CSV 로그 열기
+    logf = open(LOG_FILE, "w", newline="")
+    writer = csv.writer(logf)
+    writer.writerow(["rx_wall","node_id","distance_m","closing_mps",
+                     "ttc_s","risk_level","reason","sent"])
+
+    try:
+        while True:
+            raw = ser.readline().decode(errors="ignore").strip()
+            if not raw.startswith("{"):
+                continue
+            try:
+                d = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            t = d.get("type")
+            if t != "vehicle":
+                # cane(지팡이)나 bridge 메시지는 지금은 무시 (B 단계)
+                continue
+
+            nid = d.get("node_id", 0)
+            vehicles[nid] = {
+                "lat": d.get("lat", 0.0),
+                "lng": d.get("lng", 0.0),
+                "speed_mps": d.get("speed_mps", 0.0),
+                "heading_deg": d.get("heading_deg", 0.0),
+                "last_rx": time.time(),
+            }
+
+            # --- 모든 차량에 대해 RISK 계산, 가장 위험한 것 채택 (옵션 A) ---
+            now = time.time()
+            best = (0, float("inf"), 0.0, 0.0, "no_vehicle", None)  # risk,ttc,dist,closing,reason,nid
+            for vid, v in vehicles.items():
+                if now - v["last_rx"] > STALE_SEC:
+                    continue
+
+                if sim_mode:
+                    # 시뮬: GPS 무시, 거리 강제로 줄이고 8m/s 정면접근 가정
+                    vtest = {"lat": PED_LAT, "lng": PED_LNG,
+                             "speed_mps": 8.0, "heading_deg": 0.0}
+                    # 거리만 직접 주입해서 TTC 계산
+                    closing = 8.0
+                    ttc = sim_dist / closing
+                    if   ttc < TTC_DANGER:  r, rs = 3, "sim ttc<1.5s"
+                    elif ttc < TTC_WARNING: r, rs = 2, "sim ttc<3.0s"
+                    elif ttc < TTC_CAUTION: r, rs = 1, "sim ttc<5.5s"
+                    else:                   r, rs = 0, "sim ttc>=5.5s"
+                    cand = (r, ttc, sim_dist, closing, rs, vid)
+                else:
+                    r, ttc, dist, closing, rs = compute_risk(v, PED_LAT, PED_LNG)
+                    cand = (r, ttc, dist, closing, rs, vid)
+
+                if cand[0] > best[0]:
+                    best = cand
+
+            risk, ttc, dist, closing, reason, src_nid = best
+
+            if sim_mode:
+                sim_dist = max(2.0, sim_dist - 0.5)   # 매 패킷마다 0.5m씩 접근
+
+            # --- 화면 출력 ---
+            ttc_str = f"{ttc:5.1f}s" if ttc != float("inf") else "  inf"
+            print(f"RISK={risk}  dist={dist:6.1f}m  closing={closing:5.2f}m/s  "
+                  f"TTC={ttc_str}  ({reason})  veh={src_nid}")
+
+            # --- 회신 (RISK 바뀔 때만) ---
+            sent = ""
+            if not reply_off:
+                if (not SEND_ON_CHANGE_ONLY) or (risk != last_sent_risk):
+                    # target_id 0 = 브리지가 본 적 있는 모든 기기에 회신 (브로드캐스트)
+                    msg = json.dumps({"target_id": 0, "risk": risk})
+                    ser.write((msg + "\n").encode())
+                    last_sent_risk = risk
+                    sent = msg
+                    print(f"   -> 회신: {msg}")
+
+            # --- 로그 ---
+            writer.writerow([f"{time.time():.3f}", src_nid, f"{dist:.2f}",
+                             f"{closing:.2f}", f"{ttc:.2f}", risk, reason, sent])
+            logf.flush()
+
+    except KeyboardInterrupt:
+        print("\n[종료] 안전을 위해 RISK 0 회신")
+        if not reply_off:
+            ser.write(b'{"target_id":0,"risk":0}\n')
+        logf.close()
+        print(f"[로그 저장] {LOG_FILE}")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except serial.SerialException as e:
+        print(f"[포트 에러] {e}")
+        print("→ 포트 점유 해제: sudo fuser -k /dev/ttyUSB0")

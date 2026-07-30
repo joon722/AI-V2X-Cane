@@ -1,0 +1,8 @@
+pc_time,cane_seq,computed_level,effective_level,trusted,reason,target_id
+1784715623.373,49970,0,0,1,change,0
+1784715624.187,49978,1,1,1,change,0
+1784715625.207,49988,1,1,1,heartbeat,0
+1784715626.227,49998,1,1,1,heartbeat,0
+1784715627.247,50008,1,1,1,heartbeat,0
+1784715628.267,50018,1,1,1,heartbeat,0
+1784715628.369,50019,2,2,1,change,0
