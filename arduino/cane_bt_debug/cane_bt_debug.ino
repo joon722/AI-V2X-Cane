@@ -157,6 +157,10 @@ uint32_t caneId = 0;
 uint16_t seq = 0;
 uint32_t sendCount = 0;
 uint32_t lastSendMs = 0;
+
+uint32_t lastBtTelemetryMs = 0;
+uint32_t lastBtCheckMs = 0;
+
 uint32_t vehicleRxCount = 0;
 uint32_t lastVehicleRxMs = 0;
 
@@ -733,17 +737,48 @@ void setupEspNow() {
 // 뷰어의 "현재 값" 표에 뜨도록 "이름:값" 형식으로 상태를 전송.
 // 송신 주기(100ms)에 맞춰 호출된다.
 void sendBtTelemetry() {
-  if (!SerialBT.hasClient()) return;  // 연결된 뷰어/폰이 없으면 스킵
+  if (!SerialBT.hasClient()) {
+    return;
+  }
 
-  SerialBT.printf("위험:%u\n", currentRisk == 255 ? 0 : currentRisk);
-  SerialBT.printf("GPS유효:%u\n", lastGpsValid);
-  SerialBT.printf("위도:%.6f\n", lastLat);
-  SerialBT.printf("경도:%.6f\n", lastLng);
-  SerialBT.printf("속도:%.2f\n", lastSpeed);
-  SerialBT.printf("방향:%.1f\n", lastHeading);
-  SerialBT.printf("가속도:%.2f,%.2f,%.2f\n", lastAccelX, lastAccelY, lastAccelZ);
-  SerialBT.printf("송신:%lu\n", (unsigned long)sendCount);
-  SerialBT.printf("차량수신:%lu\n", (unsigned long)vehicleRxCount);
+  char btBuffer[384];
+
+  int written = snprintf(
+    btBuffer,
+    sizeof(btBuffer),
+    "위험:%u\n"
+    "GPS유효:%u\n"
+    "위도:%.6f\n"
+    "경도:%.6f\n"
+    "속도:%.2f\n"
+    "방향:%.1f\n"
+    "가속도:%.2f,%.2f,%.2f\n"
+    "송신:%lu\n"
+    "차량수신:%lu\n",
+    currentRisk == 255 ? 0 : currentRisk,
+    lastGpsValid,
+    lastLat,
+    lastLng,
+    lastSpeed,
+    lastHeading,
+    lastAccelX,
+    lastAccelY,
+    lastAccelZ,
+    (unsigned long)sendCount,
+    (unsigned long)vehicleRxCount
+  );
+
+  if (written > 0) {
+    size_t sendLength =
+      written < (int)sizeof(btBuffer)
+        ? (size_t)written
+        : sizeof(btBuffer) - 1;
+
+    SerialBT.write(
+      (const uint8_t *)btBuffer,
+      sendLength
+    );
+  }
 }
 #endif
 
@@ -782,16 +817,30 @@ void loop() {
 
   uint32_t now = millis();
 
-  if (now - lastSendMs >= SEND_INTERVAL_MS) {
-    lastSendMs = now;
+if (now - lastSendMs >= SEND_INTERVAL_MS) {
+  lastSendMs = now;
 
-    digitalWrite(LED_PIN, HIGH);
-    sendCaneStatus();
+  digitalWrite(LED_PIN, HIGH);
+  sendCaneStatus();
+  digitalWrite(LED_PIN, LOW);
+}
+
 #if USE_BT_DEBUG
-    sendBtTelemetry();
+// Bluetooth 로그는 1초마다 전송
+if (now - lastBtTelemetryMs >= 1000UL) {
+  lastBtTelemetryMs = now;
+  sendBtTelemetry();
+}
+
+// USB 시리얼 모니터에 실제 Bluetooth 연결 상태 출력
+if (now - lastBtCheckMs >= 1000UL) {
+  lastBtCheckMs = now;
+  Serial.printf(
+    "[BT CHECK] ESP32-Cane client=%d\n",
+    SerialBT.hasClient() ? 1 : 0
+  );
+}
 #endif
-    digitalWrite(LED_PIN, LOW);
-  }
 
   // 수신 콜백이 loop 도중 타임스탬프를 갱신하면 미리 재둔 now보다
   // 미래 값이 되어 부호 없는 뺄셈이 거대한 값으로 오버플로우하고,
