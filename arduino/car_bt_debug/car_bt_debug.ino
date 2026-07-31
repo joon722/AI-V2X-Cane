@@ -99,6 +99,17 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
 
+// GPS 품질/이상치 필터 설정: 실제 차량 속도 기준.
+#define GPS_MIN_SATELLITES 4
+#define GPS_MAX_HDOP 3.0f
+#define GPS_NODE_MAX_SPEED_MPS 55.0f
+#define GPS_OUTLIER_BASE_M 7.0f
+#define GPS_FILTER_ALPHA 0.65f
+#define GPS_FILTER_BETA 0.18f
+#define GPS_RELOCALIZE_AFTER_REJECTS 3
+#define GPS_FILTER_RESET_GAP_MS 5000UL
+#define GPS_PREDICTION_MAX_MS 1200UL
+
 // GPS 진행 방향을 신뢰하기 위한 최소 차량 속도.
 // 이 속도보다 느리면 GPS 방향값을 새로 갱신하지 않는다.
 #define MIN_VALID_HEADING_SPEED_MPS 0.8f
@@ -244,6 +255,235 @@ float vehicleHeading = 0.0f;
 bool vehicleHeadingValid = false;
 uint8_t vehicleGpsValid = 0;
 bool usingDemoGps = false;
+
+// 원시 GPS 값과 필터 진단값. UDP 로그에서 원시/보정 좌표를 비교한다.
+double rawGpsLat = 0.0;
+double rawGpsLng = 0.0;
+float rawGpsHdop = 99.0f;
+uint32_t rawGpsSatellites = 0;
+uint32_t gpsAcceptedCount = 0;
+uint32_t gpsRejectedCount = 0;
+uint32_t gpsQualityRejectedCount = 0;
+uint32_t gpsRelocalizedCount = 0;
+
+typedef struct {
+  bool initialized;
+  double originLat;
+  double originLng;
+  float xM;       // 동쪽 방향 위치(m)
+  float yM;       // 북쪽 방향 위치(m)
+  float vxMps;    // 동쪽 방향 속도(m/s)
+  float vyMps;    // 북쪽 방향 속도(m/s)
+  uint32_t lastFixMs;
+  uint8_t consecutiveOutliers;
+  bool hasRelocationCandidate;
+  float relocationX;
+  float relocationY;
+} GpsFilterState;
+
+GpsFilterState gpsFilter = {};
+
+float normalizeHeading(float headingDeg) {
+  while (headingDeg < 0.0f) headingDeg += 360.0f;
+  while (headingDeg >= 360.0f) headingDeg -= 360.0f;
+  return headingDeg;
+}
+
+float blendHeading(float previousDeg, float measuredDeg, float alpha) {
+  float difference =
+    fmodf(measuredDeg - previousDeg + 540.0f, 360.0f) - 180.0f;
+  return normalizeHeading(previousDeg + alpha * difference);
+}
+
+void initializeGpsFilter(double lat,
+                         double lng,
+                         float speedMps,
+                         float courseDeg,
+                         bool velocityValid,
+                         uint32_t now) {
+  memset(&gpsFilter, 0, sizeof(gpsFilter));
+  gpsFilter.initialized = true;
+  gpsFilter.originLat = lat;
+  gpsFilter.originLng = lng;
+  gpsFilter.lastFixMs = now;
+
+  if (velocityValid) {
+    float courseRad = courseDeg * DEG_TO_RAD;
+    gpsFilter.vxMps = speedMps * sinf(courseRad);
+    gpsFilter.vyMps = speedMps * cosf(courseRad);
+  }
+}
+
+bool updateGpsFilter(double lat,
+                     double lng,
+                     float speedMps,
+                     float courseDeg,
+                     bool velocityValid,
+                     uint32_t now) {
+  if (!gpsFilter.initialized ||
+      now - gpsFilter.lastFixMs > GPS_FILTER_RESET_GAP_MS) {
+    initializeGpsFilter(
+      lat, lng, speedMps, courseDeg, velocityValid, now
+    );
+    gpsAcceptedCount++;
+    return true;
+  }
+
+  float dt = (now - gpsFilter.lastFixMs) / 1000.0f;
+  if (dt < 0.05f) {
+    return false;
+  }
+
+  float metersPerDegLat = 111132.0f;
+  float metersPerDegLng =
+    111320.0f * cosf((float)gpsFilter.originLat * DEG_TO_RAD);
+  if (fabsf(metersPerDegLng) < 1.0f) {
+    metersPerDegLng = 1.0f;
+  }
+
+  float measuredX =
+    (float)((lng - gpsFilter.originLng) * metersPerDegLng);
+  float measuredY =
+    (float)((lat - gpsFilter.originLat) * metersPerDegLat);
+
+  float predictedX = gpsFilter.xM + gpsFilter.vxMps * dt;
+  float predictedY = gpsFilter.yM + gpsFilter.vyMps * dt;
+  float residualX = measuredX - predictedX;
+  float residualY = measuredY - predictedY;
+  float residualM = sqrtf(
+    residualX * residualX + residualY * residualY
+  );
+
+  float estimatedSpeed = sqrtf(
+    gpsFilter.vxMps * gpsFilter.vxMps +
+    gpsFilter.vyMps * gpsFilter.vyMps
+  );
+  float expectedSpeed = max(
+    estimatedSpeed,
+    velocityValid ? speedMps : 0.0f
+  );
+  expectedSpeed = constrain(
+    expectedSpeed, 0.0f, GPS_NODE_MAX_SPEED_MPS
+  );
+
+  float outlierGateM =
+    GPS_OUTLIER_BASE_M + expectedSpeed * dt * 1.5f;
+
+  if (residualM > outlierGateM) {
+    gpsRejectedCount++;
+
+    // 랜덤한 이상치 3개가 아니라 서로 가까운 새 좌표가 반복될 때만
+    // 실제 이동/재수신 위치로 인정한다.
+    float relocationDifferenceM = 0.0f;
+    if (gpsFilter.hasRelocationCandidate) {
+      float dx = measuredX - gpsFilter.relocationX;
+      float dy = measuredY - gpsFilter.relocationY;
+      relocationDifferenceM = sqrtf(dx * dx + dy * dy);
+    }
+
+    if (!gpsFilter.hasRelocationCandidate ||
+        relocationDifferenceM > GPS_OUTLIER_BASE_M) {
+      gpsFilter.hasRelocationCandidate = true;
+      gpsFilter.relocationX = measuredX;
+      gpsFilter.relocationY = measuredY;
+      gpsFilter.consecutiveOutliers = 1;
+    } else {
+      gpsFilter.relocationX =
+        0.5f * gpsFilter.relocationX + 0.5f * measuredX;
+      gpsFilter.relocationY =
+        0.5f * gpsFilter.relocationY + 0.5f * measuredY;
+      gpsFilter.consecutiveOutliers++;
+    }
+
+    Serial.printf(
+      "[GPS FILTER] jump rejected residual=%.1fm gate=%.1fm count=%u\n",
+      residualM,
+      outlierGateM,
+      gpsFilter.consecutiveOutliers
+    );
+
+    // 같은 새 위치가 연속해서 들어오면 실제 이동 또는 GPS 재수신으로 판단.
+    if (gpsFilter.consecutiveOutliers <
+        GPS_RELOCALIZE_AFTER_REJECTS) {
+      return false;
+    }
+
+    initializeGpsFilter(
+      lat, lng, speedMps, courseDeg, velocityValid, now
+    );
+    gpsRelocalizedCount++;
+    gpsAcceptedCount++;
+    Serial.println("[GPS FILTER] relocalized after repeated jumps");
+    return true;
+  }
+
+  gpsFilter.consecutiveOutliers = 0;
+  gpsFilter.hasRelocationCandidate = false;
+  gpsFilter.xM = predictedX + GPS_FILTER_ALPHA * residualX;
+  gpsFilter.yM = predictedY + GPS_FILTER_ALPHA * residualY;
+  gpsFilter.vxMps += GPS_FILTER_BETA * residualX / dt;
+  gpsFilter.vyMps += GPS_FILTER_BETA * residualY / dt;
+
+  // GPS가 제공한 speed/course도 약하게 섞어 이동 시 지연을 줄인다.
+  if (velocityValid) {
+    float courseRad = courseDeg * DEG_TO_RAD;
+    float measuredVx = speedMps * sinf(courseRad);
+    float measuredVy = speedMps * cosf(courseRad);
+    gpsFilter.vxMps =
+      0.75f * gpsFilter.vxMps + 0.25f * measuredVx;
+    gpsFilter.vyMps =
+      0.75f * gpsFilter.vyMps + 0.25f * measuredVy;
+  }
+
+  float filteredSpeed = sqrtf(
+    gpsFilter.vxMps * gpsFilter.vxMps +
+    gpsFilter.vyMps * gpsFilter.vyMps
+  );
+  if (filteredSpeed > GPS_NODE_MAX_SPEED_MPS) {
+    float scale = GPS_NODE_MAX_SPEED_MPS / filteredSpeed;
+    gpsFilter.vxMps *= scale;
+    gpsFilter.vyMps *= scale;
+  }
+
+  // 정지 상태에서 작은 속도 오차로 좌표가 계속 흘러가는 것을 억제.
+  if (velocityValid && speedMps < 0.25f) {
+    gpsFilter.vxMps *= 0.35f;
+    gpsFilter.vyMps *= 0.35f;
+  }
+
+  gpsFilter.lastFixMs = now;
+  gpsAcceptedCount++;
+  return true;
+}
+
+void projectGpsPosition(uint32_t now,
+                        double *outLat,
+                        double *outLng) {
+  float predictionMs =
+    min((float)(now - gpsFilter.lastFixMs),
+        (float)GPS_PREDICTION_MAX_MS);
+  float dt = predictionMs / 1000.0f;
+
+  float projectedX = gpsFilter.xM + gpsFilter.vxMps * dt;
+  float projectedY = gpsFilter.yM + gpsFilter.vyMps * dt;
+  float metersPerDegLng =
+    111320.0f * cosf((float)gpsFilter.originLat * DEG_TO_RAD);
+  if (fabsf(metersPerDegLng) < 1.0f) {
+    metersPerDegLng = 1.0f;
+  }
+
+  *outLat = gpsFilter.originLat + projectedY / 111132.0f;
+  *outLng = gpsFilter.originLng + projectedX / metersPerDegLng;
+}
+
+bool gpsQualityIsGood() {
+  if (!gps.satellites.isValid() || !gps.hdop.isValid()) {
+    return false;
+  }
+
+  return gps.satellites.value() >= GPS_MIN_SATELLITES &&
+         gps.hdop.hdop() <= GPS_MAX_HDOP;
+}
 
 bool imuReady = false;
 bool imuHasSample = false;
@@ -467,25 +707,73 @@ void readGps() {
     gps.encode(gpsSerial.read());
   }
 
-  bool gpsOk = gps.location.isValid() &&
-               gps.location.age() < GPS_FIX_MAX_AGE_MS;
+  uint32_t now = millis();
 
-  if (gpsOk) {
-    vehicleLat = gps.location.lat();
-    vehicleLng = gps.location.lng();
+  if (gps.location.isUpdated()) {
+    rawGpsLat = gps.location.lat();
+    rawGpsLng = gps.location.lng();
+    rawGpsSatellites =
+      gps.satellites.isValid() ? gps.satellites.value() : 0;
+    rawGpsHdop =
+      gps.hdop.isValid() ? gps.hdop.hdop() : 99.0f;
 
-    vehicleSpeed = gps.speed.isValid()
-                     ? gps.speed.mps()
-                     : 0.0f;
+    bool locationOk =
+      gps.location.isValid() &&
+      fabs(rawGpsLat) <= 90.0 &&
+      fabs(rawGpsLng) <= 180.0 &&
+      !(rawGpsLat == 0.0 && rawGpsLng == 0.0);
 
-    // GPS course는 차량 차체 방향이 아니라 실제 이동 방향이다.
-    // 저속에서는 값이 크게 흔들리므로 일정 속도 이상에서만 갱신한다.
-    if (gps.course.isValid() &&
-        vehicleSpeed >= MIN_VALID_HEADING_SPEED_MPS) {
-      vehicleHeading = gps.course.deg();
-      vehicleHeadingValid = true;
+    float rawSpeed =
+      gps.speed.isValid() ? gps.speed.mps() : 0.0f;
+    bool speedOk =
+      gps.speed.isValid() &&
+      rawSpeed >= 0.0f &&
+      rawSpeed <= GPS_NODE_MAX_SPEED_MPS;
+    bool courseOk = gps.course.isValid();
+    bool velocityOk = speedOk && courseOk;
+
+    if (!locationOk || !gpsQualityIsGood()) {
+      gpsQualityRejectedCount++;
+      Serial.printf(
+        "[GPS FILTER] quality rejected sats=%lu hdop=%.2f\n",
+        (unsigned long)rawGpsSatellites,
+        rawGpsHdop
+      );
+    } else {
+      bool accepted = updateGpsFilter(
+        rawGpsLat,
+        rawGpsLng,
+        rawSpeed,
+        courseOk ? gps.course.deg() : 0.0f,
+        velocityOk,
+        now
+      );
+
+      if (accepted) {
+        if (speedOk) {
+          vehicleSpeed =
+            gpsAcceptedCount <= 1
+              ? rawSpeed
+              : 0.50f * vehicleSpeed + 0.50f * rawSpeed;
+        }
+
+        // 359도와 1도를 단순 평균해 180도가 되는 문제를 피하는 원형 평균.
+        if (courseOk &&
+            rawSpeed >= MIN_VALID_HEADING_SPEED_MPS) {
+          float rawHeading = gps.course.deg();
+          vehicleHeading =
+            vehicleHeadingValid
+              ? blendHeading(vehicleHeading, rawHeading, 0.35f)
+              : rawHeading;
+          vehicleHeadingValid = true;
+        }
+      }
     }
+  }
 
+  if (gpsFilter.initialized &&
+      now - gpsFilter.lastFixMs <= GPS_FIX_MAX_AGE_MS) {
+    projectGpsPosition(now, &vehicleLat, &vehicleLng);
     vehicleGpsValid = 1;
     usingDemoGps = false;
   } else {
@@ -1071,7 +1359,7 @@ void logSensors() {
 
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
-  char udpBuffer[512];
+  char udpBuffer[768];
 
   int written = snprintf(
     udpBuffer,
@@ -1087,6 +1375,14 @@ void sendUdpTelemetry() {
     "충격값:%.2f\n"
     "송신:%lu\n"
     "지팡이수신:%lu\n"
+    "GPS위성:%lu\n"
+    "GPS_HDOP:%.2f\n"
+    "원시위도:%.6f\n"
+    "원시경도:%.6f\n"
+    "GPS채택:%lu\n"
+    "GPS이상치거부:%lu\n"
+    "GPS품질거부:%lu\n"
+    "GPS재기준:%lu\n"
     "위험송신:%lu\n",
     lastRiskLevel,
     vehicleGpsValid,
@@ -1103,6 +1399,14 @@ void sendUdpTelemetry() {
     linearAccelMagnitude,
     (unsigned long)sendCount,
     (unsigned long)caneRxCount,
+    (unsigned long)rawGpsSatellites,
+    rawGpsHdop,
+    rawGpsLat,
+    rawGpsLng,
+    (unsigned long)gpsAcceptedCount,
+    (unsigned long)gpsRejectedCount,
+    (unsigned long)gpsQualityRejectedCount,
+    (unsigned long)gpsRelocalizedCount,
     (unsigned long)riskSendCount
   );
 
