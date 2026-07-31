@@ -1,6 +1,7 @@
 // Cane V2X endpoint: broadcast cane GPS status and alert with vibration motor + beep buzzer.
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <esp_now.h>
 #include "esp_wifi.h"
 #include <Wire.h>
@@ -15,7 +16,7 @@
 #define USE_GPS 1
 #define USE_IMU 1
 #define USE_FIXED_GPS_FALLBACK 0
-#define USE_BT_DEBUG 1  // 블루투스 디버그 (뷰어/폰용). 시연/실전 때는 0
+#define USE_BT_DEBUG 0  // 블루투스 디버그 (뷰어/폰용). 시연/실전 때는 0
 
 #if USE_BT_DEBUG
 #include "BluetoothSerial.h"
@@ -66,6 +67,10 @@
 #define RISK_DANGER 3
 
 #define SEND_INTERVAL_MS 100UL
+
+#define V2X_WIFI_SSID "V2X-LOG"
+#define V2X_WIFI_PASSWORD "12345678"
+#define CANE_UDP_PORT 4210
 
 // =====================
 // 위험 단계별 진동/부저 패턴
@@ -148,6 +153,10 @@ HardwareSerial gpsSerial(2);
 #if USE_BT_DEBUG
 BluetoothSerial SerialBT;
 #endif
+
+WiFiUDP logUdp;
+IPAddress udpBroadcastAddress(192, 168, 4, 255);
+uint32_t lastUdpTelemetryMs = 0;
 
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txStatus;
@@ -710,27 +719,97 @@ void onDataRecv(const esp_now_recv_info_t *info,
 }
 
 void setupEspNow() {
+  // 지팡이를 Wi-Fi 접속 모드로 설정
   WiFi.mode(WIFI_STA);
-  delay(300);
+  WiFi.setSleep(false);
+  delay(100);
+
+  Serial.printf(
+    "[WIFI] connecting to %s",
+    V2X_WIFI_SSID
+  );
+
+  // 차량 ESP32가 만든 V2X-LOG Wi-Fi에 접속
+  WiFi.begin(
+    V2X_WIFI_SSID,
+    V2X_WIFI_PASSWORD
+  );
+
+  uint32_t connectStartedMs = millis();
+
+  // 최대 20초 동안 연결 대기
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - connectStartedMs < 20000UL
+  ) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  Serial.println();
+
+  // 20초 안에 연결하지 못하면 재부팅 후 다시 시도
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println(
+      "[WIFI] vehicle Wi-Fi connection failed"
+    );
+    Serial.println(
+      "[WIFI] restarting ESP32"
+    );
+
+    delay(1000);
+    ESP.restart();
+    return;
+  }
+
+  Serial.println("[WIFI] connected to vehicle");
+
+  Serial.print("[WIFI] IP=");
+  Serial.println(WiFi.localIP());
+
+  Serial.printf(
+    "[WIFI] channel=%d\n",
+    WiFi.channel()
+  );
+
+  // Wi-Fi 연결 후 지팡이 ID 생성
   setupCaneId();
 
+  // 같은 Wi-Fi 채널에서 ESP-NOW 시작
   if (esp_now_init() != ESP_OK) {
-    Serial.println("[ESP-NOW] init failed, restart");
+    Serial.println(
+      "[ESP-NOW] init failed, restarting"
+    );
+
+    delay(1000);
     ESP.restart();
+    return;
   }
 
   esp_now_register_recv_cb(onDataRecv);
 
   esp_now_peer_info_t peer = {};
-  memcpy(peer.peer_addr, broadcastMAC, 6);
+  memcpy(
+    peer.peer_addr,
+    broadcastMAC,
+    6
+  );
+
+  // 0으로 설정하면 현재 Wi-Fi 채널을 사용함
   peer.channel = 0;
   peer.encrypt = false;
 
   if (esp_now_add_peer(&peer) == ESP_OK) {
-    Serial.println("[ESP-NOW] broadcast peer added");
+    Serial.println(
+      "[ESP-NOW] broadcast peer added"
+    );
   } else {
-    Serial.println("[ESP-NOW] broadcast peer add failed");
+    Serial.println(
+      "[ESP-NOW] broadcast peer add failed"
+    );
   }
+
+  Serial.println("[ESP-NOW] ready");
 }
 
 #if USE_BT_DEBUG
