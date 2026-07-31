@@ -26,6 +26,7 @@
 
 
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <esp_now.h>
 #include "esp_wifi.h"
 #include <Wire.h>
@@ -51,11 +52,15 @@
 #define USE_INDOOR_RISK_DISTANCE 0
 
 // 블루투스 디버그 (뷰어/폰용). 시연/실전 때는 0.
-#define USE_BT_DEBUG 1
+#define USE_BT_DEBUG 0
 
 #if USE_BT_DEBUG
 #include "BluetoothSerial.h"
 #endif
+
+WiFiUDP logUdp;
+IPAddress udpBroadcastAddress(192, 168, 4, 255);
+uint32_t lastUdpTelemetryMs = 0;
 
 // =====================
 // 핀/통신 설정
@@ -79,6 +84,16 @@
 // =====================
 // 동작 설정
 // =====================
+
+// =====================
+// 차량 ESP32 자체 Wi-Fi 및 UDP 로그
+// =====================
+#define V2X_WIFI_CHANNEL 6
+#define VEHICLE_UDP_PORT 4211
+
+const char *V2X_AP_SSID = "V2X-LOG";
+const char *V2X_AP_PASSWORD = "12345678";
+
 #define SEND_INTERVAL_MS 100UL
 #define CANE_TIMEOUT_MS 2000UL
 #define SENSOR_LOG_INTERVAL_MS 1000UL
@@ -882,8 +897,31 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 }
 
 void setupEspNow() {
-  WiFi.mode(WIFI_STA);
+  // 차량은 Wi-Fi 공유기 역할과 ESP-NOW를 동시에 사용한다.
+  WiFi.mode(WIFI_AP_STA);
+  delay(100);
+
+  bool apStarted = WiFi.softAP(
+    V2X_AP_SSID,
+    V2X_AP_PASSWORD,
+    V2X_WIFI_CHANNEL
+  );
+
+  if (!apStarted) {
+    Serial.println("[WIFI AP] start failed, restarting");
+    delay(1000);
+    ESP.restart();
+  }
+
   delay(300);
+
+  Serial.println("[WIFI AP] started");
+  Serial.printf("[WIFI AP] SSID=%s\n", V2X_AP_SSID);
+  Serial.printf("[WIFI AP] PASSWORD=%s\n", V2X_AP_PASSWORD);
+  Serial.printf("[WIFI AP] CHANNEL=%d\n", V2X_WIFI_CHANNEL);
+  Serial.print("[WIFI AP] IP=");
+  Serial.println(WiFi.softAPIP());
+
   setupVehicleId();
 
   if (esp_now_init() != ESP_OK) {
@@ -894,6 +932,7 @@ void setupEspNow() {
 
   esp_now_register_recv_cb(onDataRecv);
   addPeerIfNeeded(broadcastMAC, "broadcast");
+
   Serial.println("[ESP-NOW] ready");
 }
 
@@ -1033,16 +1072,13 @@ void logSensors() {
 #if USE_BT_DEBUG
 // 뷰어의 "현재 값" 표에 뜨도록 "이름:값" 형식으로 상태를 전송.
 // 송신 주기(100ms)에 맞춰 호출된다.
-void sendBtTelemetry() {
-  if (!SerialBT.hasClient()) {
-    return;
-  }
-
-  char btBuffer[512];
+// 차량 상태를 UDP 4211로 전송한다.
+void sendUdpTelemetry() {
+  char udpBuffer[512];
 
   int written = snprintf(
-    btBuffer,
-    sizeof(btBuffer),
+    udpBuffer,
+    sizeof(udpBuffer),
     "위험:%u\n"
     "GPS유효:%u\n"
     "위도:%.6f\n"
@@ -1073,16 +1109,30 @@ void sendBtTelemetry() {
     (unsigned long)riskSendCount
   );
 
-  if (written > 0) {
-    size_t sendLength =
-      written < (int)sizeof(btBuffer)
-        ? (size_t)written
-        : sizeof(btBuffer) - 1;
+  if (written <= 0) {
+    return;
+  }
 
-    SerialBT.write(
-      (const uint8_t *)btBuffer,
-      sendLength
-    );
+  size_t sendLength =
+    written < (int)sizeof(udpBuffer)
+      ? (size_t)written
+      : sizeof(udpBuffer) - 1;
+
+  if (!logUdp.beginPacket(
+        udpBroadcastAddress,
+        VEHICLE_UDP_PORT
+      )) {
+    Serial.println("[UDP] beginPacket failed");
+    return;
+  }
+
+  logUdp.write(
+    (const uint8_t *)udpBuffer,
+    sendLength
+  );
+
+  if (logUdp.endPacket() != 1) {
+    Serial.println("[UDP] send failed");
   }
 }
 #endif
@@ -1130,6 +1180,12 @@ uint32_t now = millis();
 if (now - lastSendMs >= SEND_INTERVAL_MS) {
   lastSendMs = now;
   sendVehicleStatus();
+}
+
+  // 차량 로그는 1초마다 UDP 4211로 전송
+if (now - lastUdpTelemetryMs >= 1000UL) {
+  lastUdpTelemetryMs = now;
+  sendUdpTelemetry();
 }
 
 #if USE_BT_DEBUG
