@@ -1069,9 +1069,6 @@ void logSensors() {
   );
 }
 
-#if USE_BT_DEBUG
-// 뷰어의 "현재 값" 표에 뜨도록 "이름:값" 형식으로 상태를 전송.
-// 송신 주기(100ms)에 맞춰 호출된다.
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
   char udpBuffer[512];
@@ -1135,7 +1132,6 @@ void sendUdpTelemetry() {
     Serial.println("[UDP] send failed");
   }
 }
-#endif
 
 // =====================
 // Arduino setup / loop
