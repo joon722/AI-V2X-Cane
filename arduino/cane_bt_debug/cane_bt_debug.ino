@@ -812,6 +812,66 @@ void setupEspNow() {
   Serial.println("[ESP-NOW] ready");
 }
 
+// 지팡이 상태를 UDP 4210으로 전송
+void sendUdpTelemetry() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  char udpBuffer[384];
+
+  int written = snprintf(
+    udpBuffer,
+    sizeof(udpBuffer),
+    "위험:%u\n"
+    "GPS유효:%u\n"
+    "위도:%.6f\n"
+    "경도:%.6f\n"
+    "속도:%.2f\n"
+    "방향:%.1f\n"
+    "가속도:%.2f,%.2f,%.2f\n"
+    "송신:%lu\n"
+    "차량수신:%lu\n",
+    currentRisk == 255 ? 0 : currentRisk,
+    lastGpsValid,
+    lastLat,
+    lastLng,
+    lastSpeed,
+    lastHeading,
+    lastAccelX,
+    lastAccelY,
+    lastAccelZ,
+    (unsigned long)sendCount,
+    (unsigned long)vehicleRxCount
+  );
+
+  if (written <= 0) {
+    return;
+  }
+
+  size_t sendLength =
+    written < (int)sizeof(udpBuffer)
+      ? (size_t)written
+      : sizeof(udpBuffer) - 1;
+
+  if (!logUdp.beginPacket(
+        udpBroadcastAddress,
+        CANE_UDP_PORT
+      )) {
+    Serial.println("[UDP] beginPacket failed");
+    return;
+  }
+
+  logUdp.write(
+    (const uint8_t *)udpBuffer,
+    sendLength
+  );
+
+  if (logUdp.endPacket() != 1) {
+    Serial.println("[UDP] send failed");
+  }
+}
+
 #if USE_BT_DEBUG
 // 뷰어의 "현재 값" 표에 뜨도록 "이름:값" 형식으로 상태를 전송.
 // 송신 주기(100ms)에 맞춰 호출된다.
@@ -902,6 +962,12 @@ if (now - lastSendMs >= SEND_INTERVAL_MS) {
   digitalWrite(LED_PIN, HIGH);
   sendCaneStatus();
   digitalWrite(LED_PIN, LOW);
+}
+
+// 지팡이 UDP 로그를 1초마다 전송
+if (now - lastUdpTelemetryMs >= 1000UL) {
+  lastUdpTelemetryMs = now;
+  sendUdpTelemetry();
 }
 
 #if USE_BT_DEBUG
