@@ -215,6 +215,10 @@ uint32_t sendCount = 0;
 uint32_t caneRxCount = 0;
 uint32_t riskSendCount = 0;
 uint32_t lastSendMs = 0;
+
+uint32_t lastBtTelemetryMs = 0;
+uint32_t lastBtCheckMs = 0;
+
 uint32_t lastCaneRxMs = 0;
 uint32_t lastSensorLogMs = 0;
 
@@ -1030,20 +1034,56 @@ void logSensors() {
 // 뷰어의 "현재 값" 표에 뜨도록 "이름:값" 형식으로 상태를 전송.
 // 송신 주기(100ms)에 맞춰 호출된다.
 void sendBtTelemetry() {
-  if (!SerialBT.hasClient()) return;  // 연결된 뷰어/폰이 없으면 스킵
+  if (!SerialBT.hasClient()) {
+    return;
+  }
 
-  SerialBT.printf("위험:%u\n", lastRiskLevel);
-  SerialBT.printf("GPS유효:%u\n", vehicleGpsValid);
-  SerialBT.printf("위도:%.6f\n", vehicleLat);
-  SerialBT.printf("경도:%.6f\n", vehicleLng);
-  SerialBT.printf("속도:%.2f\n", vehicleSpeed);
-  SerialBT.printf("방향:%.1f\n", vehicleHeading);
-  SerialBT.printf("가속도:%.2f,%.2f,%.2f\n", accelX, accelY, accelZ);
-  SerialBT.printf("자이로:%.1f,%.1f,%.1f\n", gyroX, gyroY, gyroZ);
-  SerialBT.printf("충격값:%.2f\n", linearAccelMagnitude);
-  SerialBT.printf("송신:%lu\n", (unsigned long)sendCount);
-  SerialBT.printf("지팡이수신:%lu\n", (unsigned long)caneRxCount);
-  SerialBT.printf("위험송신:%lu\n", (unsigned long)riskSendCount);
+  char btBuffer[512];
+
+  int written = snprintf(
+    btBuffer,
+    sizeof(btBuffer),
+    "위험:%u\n"
+    "GPS유효:%u\n"
+    "위도:%.6f\n"
+    "경도:%.6f\n"
+    "속도:%.2f\n"
+    "방향:%.1f\n"
+    "가속도:%.2f,%.2f,%.2f\n"
+    "자이로:%.1f,%.1f,%.1f\n"
+    "충격값:%.2f\n"
+    "송신:%lu\n"
+    "지팡이수신:%lu\n"
+    "위험송신:%lu\n",
+    lastRiskLevel,
+    vehicleGpsValid,
+    vehicleLat,
+    vehicleLng,
+    vehicleSpeed,
+    vehicleHeading,
+    accelX,
+    accelY,
+    accelZ,
+    gyroX,
+    gyroY,
+    gyroZ,
+    linearAccelMagnitude,
+    (unsigned long)sendCount,
+    (unsigned long)caneRxCount,
+    (unsigned long)riskSendCount
+  );
+
+  if (written > 0) {
+    size_t sendLength =
+      written < (int)sizeof(btBuffer)
+        ? (size_t)written
+        : sizeof(btBuffer) - 1;
+
+    SerialBT.write(
+      (const uint8_t *)btBuffer,
+      sendLength
+    );
+  }
 }
 #endif
 
@@ -1085,14 +1125,29 @@ void loop() {
   resetStaleCaneRisk();
   logSensors();
 
-  uint32_t now = millis();
-  if (now - lastSendMs >= SEND_INTERVAL_MS) {
-    lastSendMs = now;
-    sendVehicleStatus();
+uint32_t now = millis();
+
+if (now - lastSendMs >= SEND_INTERVAL_MS) {
+  lastSendMs = now;
+  sendVehicleStatus();
+}
+
 #if USE_BT_DEBUG
-    sendBtTelemetry();
+// Bluetooth 로그는 1초마다 전송
+if (now - lastBtTelemetryMs >= 1000UL) {
+  lastBtTelemetryMs = now;
+  sendBtTelemetry();
+}
+
+// USB 시리얼 모니터에 실제 Bluetooth 연결 상태 출력
+if (now - lastBtCheckMs >= 1000UL) {
+  lastBtCheckMs = now;
+  Serial.printf(
+    "[BT CHECK] ESP32-Car client=%d\n",
+    SerialBT.hasClient() ? 1 : 0
+  );
+}
 #endif
-  }
 
   // 최근 지팡이 패킷이 있으면 점등, 없으면 천천히 점멸.
   if (lastCaneRxMs > 0 && now - lastCaneRxMs < 1000UL) {
