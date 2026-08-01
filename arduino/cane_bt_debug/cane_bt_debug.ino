@@ -97,18 +97,13 @@
 #define GPS_MIN_SATELLITES 4
 #define GPS_MAX_HDOP 3.0f
 #define GPS_NODE_MAX_SPEED_MPS 4.0f
-#define GPS_OUTLIER_BASE_M 4.0f
-#define GPS_FILTER_ALPHA 0.30f
-#define GPS_FILTER_BETA 0.05f
+#define GPS_OUTLIER_BASE_M 5.0f
+#define GPS_FILTER_ALPHA 0.40f
+#define GPS_FILTER_BETA 0.08f
 #define GPS_RELOCALIZE_AFTER_REJECTS 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
-#define GPS_PREDICTION_MAX_MS 700UL
+#define GPS_PREDICTION_MAX_MS 1200UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
-
-// GPS Doppler 속도가 이 값보다 낮으면 정지 상태로 간주.
-#define GPS_STATIONARY_SPEED_MPS 0.45f
-#define GPS_STATIONARY_ALPHA 0.08f
-#define GPS_STATIONARY_BETA 0.01f
 
 // 차량에서 직접 보내는 위험 패킷의 유효시간.
 // 이 시간 동안에는 지팡이 자체 계산보다 차량 계산 결과를 우선한다.
@@ -120,6 +115,9 @@
 
 // 차량 상태 패킷이 끊겼다고 판단할 시간.
 #define VEHICLE_STATUS_TIMEOUT_MS 2000UL
+
+// ESP-NOW RSSI 평활 계수. 작을수록 순간 흔들림을 더 강하게 줄인다.
+#define VEHICLE_RSSI_FILTER_ALPHA 0.20f
 
 // Fallback demo position. Used only while cane GPS is not fixed.
 #define CANE_FIXED_LAT 37.000000
@@ -189,6 +187,14 @@ uint32_t lastBtCheckMs = 0;
 
 uint32_t vehicleRxCount = 0;
 uint32_t lastVehicleRxMs = 0;
+
+// 차량 -> 지팡이 ESP-NOW 수신 신호 세기 진단값.
+int8_t latestVehicleRssiDbm = -127;
+float filteredVehicleRssiDbm = -127.0f;
+bool hasVehicleRssi = false;
+uint32_t vehicleRssiSampleCount = 0;
+uint32_t lastVehicleRssiMs = 0;
+portMUX_TYPE rssiMux = portMUX_INITIALIZER_UNLOCKED;
 
 uint8_t currentRisk = 255;
 uint32_t lastRiskMs = 0;
@@ -370,20 +376,10 @@ bool updateGpsFilter(double lat,
 
   gpsFilter.consecutiveOutliers = 0;
   gpsFilter.hasRelocationCandidate = false;
-
-  bool likelyStationary =
-    velocityValid && speedMps < GPS_STATIONARY_SPEED_MPS;
-
-  float positionAlpha =
-    likelyStationary ? GPS_STATIONARY_ALPHA : GPS_FILTER_ALPHA;
-
-  float velocityBeta =
-    likelyStationary ? GPS_STATIONARY_BETA : GPS_FILTER_BETA;
-
-  gpsFilter.xM = predictedX + positionAlpha * residualX;
-  gpsFilter.yM = predictedY + positionAlpha * residualY;
-  gpsFilter.vxMps += velocityBeta * residualX / dt;
-  gpsFilter.vyMps += velocityBeta * residualY / dt;
+  gpsFilter.xM = predictedX + GPS_FILTER_ALPHA * residualX;
+  gpsFilter.yM = predictedY + GPS_FILTER_ALPHA * residualY;
+  gpsFilter.vxMps += GPS_FILTER_BETA * residualX / dt;
+  gpsFilter.vyMps += GPS_FILTER_BETA * residualY / dt;
 
   // GPS가 제공한 speed/course도 약하게 섞어 이동 시 지연을 줄인다.
   if (velocityValid) {
@@ -407,9 +403,9 @@ bool updateGpsFilter(double lat,
   }
 
   // 정지 상태에서 작은 속도 오차로 좌표가 계속 흘러가는 것을 억제.
-  if (likelyStationary) {
-    gpsFilter.vxMps *= 0.15f;
-    gpsFilter.vyMps *= 0.15f;
+  if (velocityValid && speedMps < 0.25f) {
+    gpsFilter.vxMps *= 0.35f;
+    gpsFilter.vyMps *= 0.35f;
   }
 
   gpsFilter.lastFixMs = now;
@@ -968,6 +964,7 @@ void onDataRecv(const esp_now_recv_info_t *info,
   // data[4] = version, data[5] = msg_type, data[6] = node_type
   uint8_t receivedVersion = data[4];
   uint8_t receivedMsgType = data[5];
+  uint8_t receivedNodeType = data[6];
 
   if (receivedMagic != V2X_MAGIC ||
       receivedVersion != V2X_VERSION) {
@@ -977,6 +974,30 @@ void onDataRecv(const esp_now_recv_info_t *info,
       receivedVersion
     );
     return;
+  }
+
+  // 차량에서 온 정상 V2X 패킷이면 종류와 관계없이 RSSI를 기록한다.
+  if (receivedNodeType == NODE_VEHICLE &&
+      info != nullptr &&
+      info->rx_ctrl != nullptr) {
+    int8_t receivedRssiDbm = info->rx_ctrl->rssi;
+    uint32_t receivedAtMs = millis();
+
+    portENTER_CRITICAL(&rssiMux);
+    latestVehicleRssiDbm = receivedRssiDbm;
+
+    if (!hasVehicleRssi) {
+      filteredVehicleRssiDbm = (float)receivedRssiDbm;
+      hasVehicleRssi = true;
+    } else {
+      filteredVehicleRssiDbm =
+        VEHICLE_RSSI_FILTER_ALPHA * (float)receivedRssiDbm +
+        (1.0f - VEHICLE_RSSI_FILTER_ALPHA) * filteredVehicleRssiDbm;
+    }
+
+    vehicleRssiSampleCount++;
+    lastVehicleRssiMs = receivedAtMs;
+    portEXIT_CRITICAL(&rssiMux);
   }
 
   if (receivedMsgType == MSG_RISK_ALERT) {
@@ -1127,7 +1148,25 @@ void sendUdpTelemetry() {
     return;
   }
 
-  char udpBuffer[640];
+  char udpBuffer[768];
+
+  int8_t rssiRawSnapshot;
+  float rssiFilteredSnapshot;
+  bool rssiValidSnapshot;
+  uint32_t rssiSampleCountSnapshot;
+  uint32_t rssiLastMsSnapshot;
+
+  portENTER_CRITICAL(&rssiMux);
+  rssiRawSnapshot = latestVehicleRssiDbm;
+  rssiFilteredSnapshot = filteredVehicleRssiDbm;
+  rssiValidSnapshot = hasVehicleRssi;
+  rssiSampleCountSnapshot = vehicleRssiSampleCount;
+  rssiLastMsSnapshot = lastVehicleRssiMs;
+  portEXIT_CRITICAL(&rssiMux);
+
+  long rssiAgeMs = rssiValidSnapshot
+    ? (long)(millis() - rssiLastMsSnapshot)
+    : -1L;
 
   int written = snprintf(
     udpBuffer,
@@ -1148,6 +1187,10 @@ void sendUdpTelemetry() {
     "GPS이상치거부:%lu\n"
     "GPS품질거부:%lu\n"
     "GPS재기준:%lu\n"
+    "RSSI원시:%d\n"
+    "RSSI평활:%.1f\n"
+    "RSSI샘플:%lu\n"
+    "RSSI경과ms:%ld\n"
     "차량수신:%lu\n",
     currentRisk == 255 ? 0 : currentRisk,
     lastGpsValid,
@@ -1167,6 +1210,10 @@ void sendUdpTelemetry() {
     (unsigned long)gpsRejectedCount,
     (unsigned long)gpsQualityRejectedCount,
     (unsigned long)gpsRelocalizedCount,
+    (int)rssiRawSnapshot,
+    rssiFilteredSnapshot,
+    (unsigned long)rssiSampleCountSnapshot,
+    rssiAgeMs,
     (unsigned long)vehicleRxCount
   );
 
