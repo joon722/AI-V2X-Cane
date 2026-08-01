@@ -79,7 +79,7 @@ uint32_t lastUdpTelemetryMs = 0;
 #define DFPLAYER_RX 26  // ESP32 RX1 <- DFPlayer TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
 #define DFPLAYER_BAUD 115200
-#define DFPLAYER_VOLUME 15  // 0~30
+#define DFPLAYER_VOLUME 30  // 0~30
 
 // =====================
 // 동작 설정
@@ -98,6 +98,9 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define CANE_TIMEOUT_MS 2000UL
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
+
+// ESP-NOW RSSI 평활 계수. 작을수록 순간 흔들림을 더 강하게 줄인다.
+#define CANE_RSSI_FILTER_ALPHA 0.20f
 
 // GPS 품질/이상치 필터 설정: RC카 기준.
 #define GPS_MIN_SATELLITES 4
@@ -256,6 +259,14 @@ uint32_t lastBtCheckMs = 0;
 
 uint32_t lastCaneRxMs = 0;
 uint32_t lastSensorLogMs = 0;
+
+// 지팡이 -> 차량 ESP-NOW 수신 신호 세기 진단값.
+// 실제 거리 보정 전에는 거리값으로 단정하지 않고 dBm 원시/평활값을 모두 기록한다.
+int8_t latestCaneRssiDbm = -127;
+float filteredCaneRssiDbm = -127.0f;
+bool hasCaneRssi = false;
+uint32_t caneRssiSampleCount = 0;
+uint32_t lastCaneRssiMs = 0;
 
 double vehicleLat = 0.0;
 double vehicleLng = 0.0;
@@ -552,6 +563,9 @@ typedef struct {
   uint32_t prevCalcMs;
   uint32_t lastUpdateMs;
 } CaneRiskState;
+
+// Arduino 전처리기가 이 함수의 자동 원형을 typedef보다 위에 만드는 것을 방지한다.
+CaneRiskState *getCaneRiskState(uint32_t caneNodeId);
 
 CaneRiskState caneRiskStates[MAX_TRACKED_CANES];
 
@@ -1256,14 +1270,34 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
 
   if (message.msg_type != MSG_CANE_STATUS || message.node_type != NODE_CANE) return;
 
+  bool rssiValid = info != nullptr && info->rx_ctrl != nullptr;
+  int8_t receivedRssiDbm = rssiValid ? info->rx_ctrl->rssi : -127;
+  uint32_t receivedAtMs = millis();
+
   portENTER_CRITICAL(&caneMux);
   memcpy(&latestCaneStatus, &message, sizeof(latestCaneStatus));
   memcpy(latestCaneMAC, info->src_addr, 6);
   hasCaneMAC = true;
   hasLatestCane = true;
   newCanePacket = true;
-  lastCaneRxMs = millis();
+  lastCaneRxMs = receivedAtMs;
   caneRxCount++;
+
+  if (rssiValid) {
+    latestCaneRssiDbm = receivedRssiDbm;
+
+    if (!hasCaneRssi) {
+      filteredCaneRssiDbm = (float)receivedRssiDbm;
+      hasCaneRssi = true;
+    } else {
+      filteredCaneRssiDbm =
+        CANE_RSSI_FILTER_ALPHA * (float)receivedRssiDbm +
+        (1.0f - CANE_RSSI_FILTER_ALPHA) * filteredCaneRssiDbm;
+    }
+
+    caneRssiSampleCount++;
+    lastCaneRssiMs = receivedAtMs;
+  }
   portEXIT_CRITICAL(&caneMux);
 }
 
@@ -1469,6 +1503,24 @@ void logSensors() {
 void sendUdpTelemetry() {
   char udpBuffer[1024];
 
+  int8_t rssiRawSnapshot;
+  float rssiFilteredSnapshot;
+  bool rssiValidSnapshot;
+  uint32_t rssiSampleCountSnapshot;
+  uint32_t rssiLastMsSnapshot;
+
+  portENTER_CRITICAL(&caneMux);
+  rssiRawSnapshot = latestCaneRssiDbm;
+  rssiFilteredSnapshot = filteredCaneRssiDbm;
+  rssiValidSnapshot = hasCaneRssi;
+  rssiSampleCountSnapshot = caneRssiSampleCount;
+  rssiLastMsSnapshot = lastCaneRssiMs;
+  portEXIT_CRITICAL(&caneMux);
+
+  long rssiAgeMs = rssiValidSnapshot
+    ? (long)(millis() - rssiLastMsSnapshot)
+    : -1L;
+
   int written = snprintf(
     udpBuffer,
     sizeof(udpBuffer),
@@ -1500,6 +1552,10 @@ void sendUdpTelemetry() {
     "위험음성횟수:%lu\n"
     "충격음성횟수:%lu\n"
     "마지막위험음성:%u\n"
+    "RSSI원시:%d\n"
+    "RSSI평활:%.1f\n"
+    "RSSI샘플:%lu\n"
+    "RSSI경과ms:%ld\n"
     "위험송신:%lu\n",
     lastRiskLevel,
     rawRiskLevel,
@@ -1533,6 +1589,10 @@ void sendUdpTelemetry() {
     (unsigned long)riskAudioPlayCount,
     (unsigned long)impactAudioPlayCount,
     lastPlayedRiskAudio,
+    (int)rssiRawSnapshot,
+    rssiFilteredSnapshot,
+    (unsigned long)rssiSampleCountSnapshot,
+    rssiAgeMs,
     (unsigned long)riskSendCount
   );
 
