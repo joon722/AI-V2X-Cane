@@ -1,0 +1,10 @@
+# 부팅 2분 후 첫 업로드, 이후 5분마다 반복.
+[Unit]
+Description=Run V2X log upload periodically
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

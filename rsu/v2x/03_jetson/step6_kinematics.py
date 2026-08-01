@@ -39,6 +39,33 @@ ACCEL_SIGMA_MPS2 = 3.0
 # few fixes pull it in.
 INITIAL_SPEED_SIGMA_MPS = 10.0
 
+# The GPS produces one fix per second while the radio repeats it every 100 ms,
+# and transport adds its own delay. The fix timestamp (gps_time_ms, UTC
+# milliseconds into the day, shared by every receiver) is therefore the honest
+# time axis; arrival time is the fallback for rows that lack it.
+GPS_TIME_INVALID_MS = 0xFFFFFFFF
+MS_PER_DAY = 86_400_000
+
+# A node silent for this long restarts its filter: extrapolating a stale
+# velocity across a gap fabricates motion that was never measured.
+MAX_TRACK_GAP_S = 10.0
+
+
+def measurement_time(row):
+    """(seconds, is_gps): when the row's fix was measured, not when it arrived.
+
+    Rows without a usable GPS timestamp (older firmware, replayed logs, the
+    0xFFFFFFFF no-fix sentinel) fall back to arrival time, which then carries
+    the transport delay and fix age as error.
+    """
+    try:
+        ms = int(float(row.get("gps_time_ms")))
+    except (TypeError, ValueError):
+        return float(row["pc_time"]), False
+    if not 0 <= ms < MS_PER_DAY:
+        return float(row["pc_time"]), False
+    return ms / 1000.0, True
+
 CSV_FIELDS = (
     "pc_time",
     "cane_seq",
@@ -217,26 +244,60 @@ class NodeTracker:
     """Kalman-filtered position and velocity for one node."""
 
     def __init__(self, sigma_pos=GPS_SIGMA_M, sigma_accel=ACCEL_SIGMA_MPS2):
+        self.sigma_pos = sigma_pos
+        self.sigma_accel = sigma_accel
         self.east = KalmanCV1D(sigma_pos, sigma_accel)
         self.north = KalmanCV1D(sigma_pos, sigma_accel)
         self.last_time = None
+        self.time_is_gps = None
+        self.day_offset = 0.0
 
     @property
     def ready(self):
         return self.last_time is not None
 
-    def observe(self, east, north, timestamp):
-        dt = 0.0 if self.last_time is None else max(0.0, timestamp - self.last_time)
+    def _reset(self):
+        self.east = KalmanCV1D(self.sigma_pos, self.sigma_accel)
+        self.north = KalmanCV1D(self.sigma_pos, self.sigma_accel)
+        self.last_time = None
+        self.day_offset = 0.0
+
+    def observe(self, east, north, timestamp, is_gps=False):
+        # Switching between the GPS clock and the arrival clock mid-track would
+        # make dt meaningless, so a base change starts the track over.
+        if self.time_is_gps is not None and is_gps != self.time_is_gps:
+            self._reset()
+        self.time_is_gps = is_gps
+
+        timestamp += self.day_offset
+        if self.last_time is not None:
+            if is_gps and timestamp < self.last_time - 43200.0:
+                # GPS time-of-day wrapped past midnight.
+                self.day_offset += 86400.0
+                timestamp += 86400.0
+            if timestamp <= self.last_time:
+                # The same fix arriving again through the faster send loop
+                # carries no new information; feeding it again would only
+                # shrink the covariance without cause.
+                return
+            if timestamp - self.last_time > MAX_TRACK_GAP_S:
+                self._reset()
+
+        dt = 0.0 if self.last_time is None else timestamp - self.last_time
         self.east.observe(east, dt)
         self.north.observe(north, dt)
         self.last_time = timestamp
 
-    def state_at(self, timestamp):
-        """Extrapolate to a shared clock so both nodes are compared at one instant."""
-        dt = max(0.0, timestamp - self.last_time)
+    def state_ahead(self, dt):
+        """Position and velocity `dt` seconds past the last accepted fix."""
+        dt = max(0.0, dt)
         pos_e, vel_e = self.east.predict_to(dt)
         pos_n, vel_n = self.north.predict_to(dt)
         return pos_e, pos_n, vel_e, vel_n
+
+    def state_at(self, timestamp):
+        """Extrapolate to a shared clock so both nodes are compared at one instant."""
+        return self.state_ahead(timestamp - self.last_time)
 
 
 def to_float(value, default=0.0):
@@ -286,7 +347,8 @@ class KinematicsPipeline:
                 return
             self.frame = LocalFrame(lat, lng)
         east, north = self.frame.to_enu(lat, lng)
-        self.trackers[row["type"]].observe(east, north, row["pc_time"])
+        t_meas, is_gps = measurement_time(row)
+        self.trackers[row["type"]].observe(east, north, t_meas, is_gps)
 
     def compute(self):
         """Kinematics for the current pair, or None when it is not computable."""
@@ -298,12 +360,22 @@ class KinematicsPipeline:
 
         cane = self.store.latest["cane"]
         vehicle = self.store.latest["vehicle"]
+
+        # Compare both nodes on one clock: the GPS fix times when both sides
+        # carry them, arrival times otherwise. A mixed pair shares no clock
+        # except arrival, so it falls back wholesale.
+        cane_t, cane_gps = measurement_time(cane)
+        veh_t, veh_gps = measurement_time(vehicle)
+        if cane_gps != veh_gps:
+            cane_t = float(cane["pc_time"])
+            veh_t = float(vehicle["pc_time"])
+
         # The filter can extrapolate, so it reports at the newest timestamp.
-        now = max(cane["pc_time"], vehicle["pc_time"])
+        now = max(cane_t, veh_t)
         # The raw distance cannot. It is only as current as its stalest input,
         # and dating it any later makes the derivative below read a time gap
         # across which the distance never actually moved.
-        raw_time = min(cane["pc_time"], vehicle["pc_time"])
+        raw_time = min(cane_t, veh_t)
 
         cane_pos = self.frame.to_enu(to_float(cane["lat"]), to_float(cane["lng"]))
         veh_pos = self.frame.to_enu(to_float(vehicle["lat"]), to_float(vehicle["lng"]))
@@ -323,6 +395,11 @@ class KinematicsPipeline:
         if self.anchor is not None and self.anchor.is_superseded_by(cane, vehicle):
             prev_distance = self.anchor.distance_m
             dt_s = raw_time - self.anchor.raw_time
+            # A clock-base change (GPS time <-> arrival time) makes the two
+            # anchor times incomparable; drop the derivative for that round.
+            if not 0.0 < dt_s <= MAX_TRACK_GAP_S:
+                prev_distance = None
+                dt_s = None
 
         raw = relative_kinematics(
             cane_pos,
@@ -340,8 +417,11 @@ class KinematicsPipeline:
                 vehicle_time=vehicle["pc_time"],
             )
 
-        cane_e, cane_n, cane_ve, cane_vn = self.trackers["cane"].state_at(now)
-        veh_e, veh_n, veh_ve, veh_vn = self.trackers["vehicle"].state_at(now)
+        # Each tracker extrapolates by how far the shared instant sits past its
+        # own newest fix, so a node whose GPS clock differs from its arrival
+        # clock still projects the right amount.
+        cane_e, cane_n, cane_ve, cane_vn = self.trackers["cane"].state_ahead(now - cane_t)
+        veh_e, veh_n, veh_ve, veh_vn = self.trackers["vehicle"].state_ahead(now - veh_t)
         filtered = relative_kinematics(
             (cane_e, cane_n),
             (cane_ve, cane_vn),

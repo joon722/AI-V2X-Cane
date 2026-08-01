@@ -77,15 +77,18 @@ def distance_meters(lat1, lng1, lat2, lng2):
     return radius_m * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
 
 
+def has_valid_fix(node):
+    lat = node["lat"]
+    lng = node["lng"]
+    if lat is None or lng is None:
+        return False
+    return abs(lat) > 1e-6 or abs(lng) > 1e-6
+
+
 def compute_pair_metrics(vehicle, cane):
     if vehicle is None or cane is None:
         return None, None, None, "waiting_for_vehicle_or_cane"
-    if (
-        vehicle["lat"] is None
-        or vehicle["lng"] is None
-        or cane["lat"] is None
-        or cane["lng"] is None
-    ):
+    if not has_valid_fix(vehicle) or not has_valid_fix(cane):
         return None, None, None, "missing_lat_lng"
 
     distance_m = distance_meters(vehicle["lat"], vehicle["lng"], cane["lat"], cane["lng"])
@@ -250,10 +253,12 @@ def main():
     print(f"[ALERT_TX] {'off' if args.no_send_alerts else 'on'}")
     print("Stop: Ctrl + C")
 
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_exists = log_path.exists() and log_path.stat().st_size > 0
     ser = serial.Serial(args.port, args.baud, timeout=args.timeout)
 
     try:
-        with log_path.open("w", newline="", encoding="utf-8") as f:
+        with log_path.open("a", newline="", encoding="utf-8") as f:
             fieldnames = [
                 "wall_time",
                 "elapsed_s",
@@ -279,7 +284,8 @@ def main():
                 escapechar="\\",
                 doublequote=True,
             )
-            writer.writeheader()
+            if not log_exists:
+                writer.writeheader()
             start = time.time()
             serial_buffer = ""
 

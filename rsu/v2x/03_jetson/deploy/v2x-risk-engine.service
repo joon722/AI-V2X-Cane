@@ -1,0 +1,15 @@
+# V2X 실시간 위험 엔진 systemd 서비스.
+# install.sh 가 @DEPLOY_DIR@ 를 실제 경로로 바꿔서 /etc/systemd/system/ 에 복사한다.
+[Unit]
+Description=V2X realtime risk engine (step8_send_risk.py)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=@DEPLOY_DIR@/run_v2x_risk_engine.sh
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

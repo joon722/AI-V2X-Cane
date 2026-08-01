@@ -1,0 +1,13 @@
+# 실시간 위험 로그를 서버로 업로드하는 단발 작업.
+# v2x-log-upload.timer 가 주기적으로 실행한다.
+# install.sh 가 @DEPLOY_DIR@/@RUN_USER@ 를 실제 값으로 바꿔서 설치한다.
+[Unit]
+Description=V2X risk log upload to server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# SSH 키(~/.ssh/risk_server_key)가 일반 사용자 홈에 있으므로 그 사용자로 실행
+User=@RUN_USER@
+ExecStart=@DEPLOY_DIR@/upload_logs.sh
