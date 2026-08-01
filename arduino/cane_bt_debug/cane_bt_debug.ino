@@ -97,13 +97,18 @@
 #define GPS_MIN_SATELLITES 4
 #define GPS_MAX_HDOP 3.0f
 #define GPS_NODE_MAX_SPEED_MPS 4.0f
-#define GPS_OUTLIER_BASE_M 5.0f
-#define GPS_FILTER_ALPHA 0.40f
-#define GPS_FILTER_BETA 0.08f
+#define GPS_OUTLIER_BASE_M 4.0f
+#define GPS_FILTER_ALPHA 0.30f
+#define GPS_FILTER_BETA 0.05f
 #define GPS_RELOCALIZE_AFTER_REJECTS 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
-#define GPS_PREDICTION_MAX_MS 1200UL
+#define GPS_PREDICTION_MAX_MS 700UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
+
+// GPS Doppler 속도가 이 값보다 낮으면 정지 상태로 간주.
+#define GPS_STATIONARY_SPEED_MPS 0.45f
+#define GPS_STATIONARY_ALPHA 0.08f
+#define GPS_STATIONARY_BETA 0.01f
 
 // 차량에서 직접 보내는 위험 패킷의 유효시간.
 // 이 시간 동안에는 지팡이 자체 계산보다 차량 계산 결과를 우선한다.
@@ -365,10 +370,20 @@ bool updateGpsFilter(double lat,
 
   gpsFilter.consecutiveOutliers = 0;
   gpsFilter.hasRelocationCandidate = false;
-  gpsFilter.xM = predictedX + GPS_FILTER_ALPHA * residualX;
-  gpsFilter.yM = predictedY + GPS_FILTER_ALPHA * residualY;
-  gpsFilter.vxMps += GPS_FILTER_BETA * residualX / dt;
-  gpsFilter.vyMps += GPS_FILTER_BETA * residualY / dt;
+
+  bool likelyStationary =
+    velocityValid && speedMps < GPS_STATIONARY_SPEED_MPS;
+
+  float positionAlpha =
+    likelyStationary ? GPS_STATIONARY_ALPHA : GPS_FILTER_ALPHA;
+
+  float velocityBeta =
+    likelyStationary ? GPS_STATIONARY_BETA : GPS_FILTER_BETA;
+
+  gpsFilter.xM = predictedX + positionAlpha * residualX;
+  gpsFilter.yM = predictedY + positionAlpha * residualY;
+  gpsFilter.vxMps += velocityBeta * residualX / dt;
+  gpsFilter.vyMps += velocityBeta * residualY / dt;
 
   // GPS가 제공한 speed/course도 약하게 섞어 이동 시 지연을 줄인다.
   if (velocityValid) {
@@ -392,9 +407,9 @@ bool updateGpsFilter(double lat,
   }
 
   // 정지 상태에서 작은 속도 오차로 좌표가 계속 흘러가는 것을 억제.
-  if (velocityValid && speedMps < 0.25f) {
-    gpsFilter.vxMps *= 0.35f;
-    gpsFilter.vyMps *= 0.35f;
+  if (likelyStationary) {
+    gpsFilter.vxMps *= 0.15f;
+    gpsFilter.vyMps *= 0.15f;
   }
 
   gpsFilter.lastFixMs = now;
