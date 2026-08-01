@@ -99,26 +99,35 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
 
-// GPS 품질/이상치 필터 설정: 실제 차량 속도 기준.
+// GPS 품질/이상치 필터 설정: RC카 기준.
 #define GPS_MIN_SATELLITES 4
 #define GPS_MAX_HDOP 3.0f
-#define GPS_NODE_MAX_SPEED_MPS 55.0f
-#define GPS_OUTLIER_BASE_M 7.0f
-#define GPS_FILTER_ALPHA 0.65f
-#define GPS_FILTER_BETA 0.18f
+#define GPS_NODE_MAX_SPEED_MPS 6.0f
+#define GPS_OUTLIER_BASE_M 4.0f
+#define GPS_FILTER_ALPHA 0.50f
+#define GPS_FILTER_BETA 0.08f
 #define GPS_RELOCALIZE_AFTER_REJECTS 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
-#define GPS_PREDICTION_MAX_MS 1200UL
+#define GPS_PREDICTION_MAX_MS 700UL
+
+// 정지 상태용 GPS 필터.
+#define GPS_STATIONARY_SPEED_MPS 0.45f
+#define GPS_STATIONARY_ALPHA 0.08f
+#define GPS_STATIONARY_BETA 0.01f
 
 // GPS 진행 방향을 신뢰하기 위한 최소 차량 속도.
-// 이 속도보다 느리면 GPS 방향값을 새로 갱신하지 않는다.
-#define MIN_VALID_HEADING_SPEED_MPS 0.8f
+#define MIN_VALID_HEADING_SPEED_MPS 0.5f
 
 // 차량 진행 방향을 기준으로 좌우 몇 도까지 전방으로 볼 것인지 설정.
 #define FORWARD_CONE_HALF_ANGLE_DEG 45.0f
 
-// TTC 계산에 사용할 최소 접근속도.
+// TTC 계산에 사용할 최소 접근속도와 차량 속도.
 #define MIN_TTC_CLOSING_SPEED_MPS 0.3f
+#define MIN_TTC_VEHICLE_SPEED_MPS 0.70f
+
+// 위험 상승은 빠르게, 위험 해제는 천천히 확정.
+#define RISK_ESCALATE_CONFIRM_COUNT 3
+#define RISK_CLEAR_CONFIRM_COUNT 12
 
 // GPS 거리 변화가 너무 짧은 주기로 계산되지 않도록 제한.
 #define TTC_SAMPLE_INTERVAL_MS 500UL
@@ -419,10 +428,20 @@ bool updateGpsFilter(double lat,
 
   gpsFilter.consecutiveOutliers = 0;
   gpsFilter.hasRelocationCandidate = false;
-  gpsFilter.xM = predictedX + GPS_FILTER_ALPHA * residualX;
-  gpsFilter.yM = predictedY + GPS_FILTER_ALPHA * residualY;
-  gpsFilter.vxMps += GPS_FILTER_BETA * residualX / dt;
-  gpsFilter.vyMps += GPS_FILTER_BETA * residualY / dt;
+
+  bool likelyStationary =
+    velocityValid && speedMps < GPS_STATIONARY_SPEED_MPS;
+
+  float positionAlpha =
+    likelyStationary ? GPS_STATIONARY_ALPHA : GPS_FILTER_ALPHA;
+
+  float velocityBeta =
+    likelyStationary ? GPS_STATIONARY_BETA : GPS_FILTER_BETA;
+
+  gpsFilter.xM = predictedX + positionAlpha * residualX;
+  gpsFilter.yM = predictedY + positionAlpha * residualY;
+  gpsFilter.vxMps += velocityBeta * residualX / dt;
+  gpsFilter.vyMps += velocityBeta * residualY / dt;
 
   // GPS가 제공한 speed/course도 약하게 섞어 이동 시 지연을 줄인다.
   if (velocityValid) {
@@ -446,9 +465,9 @@ bool updateGpsFilter(double lat,
   }
 
   // 정지 상태에서 작은 속도 오차로 좌표가 계속 흘러가는 것을 억제.
-  if (velocityValid && speedMps < 0.25f) {
-    gpsFilter.vxMps *= 0.35f;
-    gpsFilter.vyMps *= 0.35f;
+  if (likelyStationary) {
+    gpsFilter.vxMps *= 0.15f;
+    gpsFilter.vyMps *= 0.15f;
   }
 
   gpsFilter.lastFixMs = now;
@@ -503,6 +522,24 @@ bool dfPlayerReady = false;
 uint8_t lastAnnouncedRisk = RISK_SAFE;
 
 uint8_t lastRiskLevel = RISK_SAFE;
+
+// 위험 판정 안정화 상태.
+uint8_t rawRiskLevel = RISK_SAFE;
+uint8_t stableRiskLevel = RISK_SAFE;
+uint8_t candidateRiskLevel = RISK_SAFE;
+uint8_t candidateRiskCount = 0;
+
+// 마지막 위험 계산 결과: UDP 1초 로그에 보존.
+float lastCalculatedDistanceM = -1.0f;
+float lastCalculatedClosingSpeedMps = 0.0f;
+float lastCalculatedTtcS = 999.0f;
+float lastCalculatedHeadingErrorDeg = 0.0f;
+bool lastCalculatedInPath = false;
+
+// 실제로 재생된 음성 원인을 구분하기 위한 카운터.
+uint32_t riskAudioPlayCount = 0;
+uint32_t impactAudioPlayCount = 0;
+uint8_t lastPlayedRiskAudio = RISK_SAFE;
 
 // 지팡이 노드마다 이전 거리와 접근속도를 따로 저장.
 // 여러 지팡이의 거리 기록이 섞이는 문제를 막는다.
@@ -626,10 +663,27 @@ void playAudioFile(const char *filePath) {
 void announceRisk(uint8_t risk) {
   if (risk == lastAnnouncedRisk) return;
 
+  bool playedRiskAudio = false;
+
   // 안전 복귀 시에는 음원을 재생하지 않고 상태만 초기화.
-  if (risk == RISK_CAUTION) playAudioFile(TRACK_CAUTION_FILE);
-  if (risk == RISK_WARNING) playAudioFile(TRACK_WARNING_FILE);
-  if (risk == RISK_DANGER) playAudioFile(TRACK_DANGER_FILE);
+  if (risk == RISK_CAUTION) {
+    playAudioFile(TRACK_CAUTION_FILE);
+    playedRiskAudio = true;
+  }
+  else if (risk == RISK_WARNING) {
+    playAudioFile(TRACK_WARNING_FILE);
+    playedRiskAudio = true;
+  }
+  else if (risk == RISK_DANGER) {
+    playAudioFile(TRACK_DANGER_FILE);
+    playedRiskAudio = true;
+  }
+
+  if (playedRiskAudio) {
+    riskAudioPlayCount++;
+    lastPlayedRiskAudio = risk;
+  }
+
   lastAnnouncedRisk = risk;
 }
 
@@ -844,6 +898,7 @@ void readImu() {
   if (cooldownDone && linearAccelMagnitude >= IMPACT_THRESHOLD_MPS2) {
     lastImpactMs = now;
     Serial.printf("[IMU IMPACT] linear=%.2f m/s^2\n", linearAccelMagnitude);
+    impactAudioPlayCount++;
     playAudioFile(TRACK_IMPACT_FILE);
   }
 #endif
@@ -969,6 +1024,33 @@ CaneRiskState *getCaneRiskState(uint32_t caneNodeId) {
   return &caneRiskStates[oldestIndex];
 }
 
+uint8_t stabilizeRiskLevel(uint8_t rawRisk) {
+  if (rawRisk == stableRiskLevel) {
+    candidateRiskLevel = rawRisk;
+    candidateRiskCount = 0;
+    return stableRiskLevel;
+  }
+
+  if (rawRisk != candidateRiskLevel) {
+    candidateRiskLevel = rawRisk;
+    candidateRiskCount = 1;
+  } else if (candidateRiskCount < 255) {
+    candidateRiskCount++;
+  }
+
+  uint8_t requiredCount =
+    rawRisk > stableRiskLevel
+      ? RISK_ESCALATE_CONFIRM_COUNT
+      : RISK_CLEAR_CONFIRM_COUNT;
+
+  if (candidateRiskCount >= requiredCount) {
+    stableRiskLevel = rawRisk;
+    candidateRiskCount = 0;
+  }
+
+  return stableRiskLevel;
+}
+
 uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
                               float *outDistance,
                               float *outClosingSpeed,
@@ -1031,6 +1113,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
 
   // 차량 전방에 있고 실제로 가까워질 때만 TTC를 유효하게 계산한다.
   if (inVehiclePath &&
+      vehicleSpeed >= MIN_TTC_VEHICLE_SPEED_MPS &&
       closingSpeed >= MIN_TTC_CLOSING_SPEED_MPS) {
     ttc = distanceM / closingSpeed;
   }
@@ -1237,6 +1320,17 @@ void processLatestCanePacket() {
   portEXIT_CRITICAL(&caneMux);
 
   if (!vehicleGpsValid || !cane.gps_valid) {
+    rawRiskLevel = RISK_SAFE;
+    stableRiskLevel = RISK_SAFE;
+    candidateRiskLevel = RISK_SAFE;
+    candidateRiskCount = 0;
+
+    lastCalculatedDistanceM = -1.0f;
+    lastCalculatedClosingSpeedMps = 0.0f;
+    lastCalculatedTtcS = 999.0f;
+    lastCalculatedHeadingErrorDeg = 0.0f;
+    lastCalculatedInPath = false;
+
     lastRiskLevel = RISK_SAFE;
     announceRisk(RISK_SAFE);
 
@@ -1264,7 +1358,7 @@ void processLatestCanePacket() {
   float headingError = 0.0f;
   bool inVehiclePath = false;
 
-  uint8_t risk = calculateRiskFromCane(
+  uint8_t calculatedRawRisk = calculateRiskFromCane(
     cane,
     &distanceM,
     &closingSpeed,
@@ -1273,6 +1367,15 @@ void processLatestCanePacket() {
     &headingError,
     &inVehiclePath
   );
+
+  rawRiskLevel = calculatedRawRisk;
+  uint8_t risk = stabilizeRiskLevel(calculatedRawRisk);
+
+  lastCalculatedDistanceM = distanceM;
+  lastCalculatedClosingSpeedMps = closingSpeed;
+  lastCalculatedTtcS = ttc;
+  lastCalculatedHeadingErrorDeg = headingError;
+  lastCalculatedInPath = inVehiclePath;
 
   lastRiskLevel = risk;
   announceRisk(risk);
@@ -1322,6 +1425,11 @@ void resetStaleCaneRisk() {
   newCanePacket = false;
   portEXIT_CRITICAL(&caneMux);
 
+  rawRiskLevel = RISK_SAFE;
+  stableRiskLevel = RISK_SAFE;
+  candidateRiskLevel = RISK_SAFE;
+  candidateRiskCount = 0;
+
   lastRiskLevel = RISK_SAFE;
   announceRisk(RISK_SAFE);
 
@@ -1359,12 +1467,13 @@ void logSensors() {
 
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
-  char udpBuffer[768];
+  char udpBuffer[1024];
 
   int written = snprintf(
     udpBuffer,
     sizeof(udpBuffer),
     "위험:%u\n"
+    "원시위험:%u\n"
     "GPS유효:%u\n"
     "위도:%.6f\n"
     "경도:%.6f\n"
@@ -1383,8 +1492,17 @@ void sendUdpTelemetry() {
     "GPS이상치거부:%lu\n"
     "GPS품질거부:%lu\n"
     "GPS재기준:%lu\n"
+    "계산거리:%.2f\n"
+    "접근속도:%.2f\n"
+    "TTC:%.2f\n"
+    "방향오차:%.1f\n"
+    "전방여부:%u\n"
+    "위험음성횟수:%lu\n"
+    "충격음성횟수:%lu\n"
+    "마지막위험음성:%u\n"
     "위험송신:%lu\n",
     lastRiskLevel,
+    rawRiskLevel,
     vehicleGpsValid,
     vehicleLat,
     vehicleLng,
@@ -1407,6 +1525,14 @@ void sendUdpTelemetry() {
     (unsigned long)gpsRejectedCount,
     (unsigned long)gpsQualityRejectedCount,
     (unsigned long)gpsRelocalizedCount,
+    lastCalculatedDistanceM,
+    lastCalculatedClosingSpeedMps,
+    lastCalculatedTtcS,
+    lastCalculatedHeadingErrorDeg,
+    lastCalculatedInPath ? 1 : 0,
+    (unsigned long)riskAudioPlayCount,
+    (unsigned long)impactAudioPlayCount,
+    lastPlayedRiskAudio,
     (unsigned long)riskSendCount
   );
 
