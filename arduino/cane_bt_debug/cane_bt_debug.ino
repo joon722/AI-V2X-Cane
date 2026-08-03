@@ -612,7 +612,7 @@ void readGps() {
         rawGpsLat,
         rawGpsLng,
         rawSpeed,
-        courseOk ? rawGpsCourseDeg : 0.0f
+        courseOk ? rawGpsCourseDeg : 0.0f,
         velocityOk,
         now
       );
