@@ -612,7 +612,7 @@ void readGps() {
         rawGpsLat,
         rawGpsLng,
         rawSpeed,
-        float rawHeading = rawGpsCourseDeg;
+        courseOk ? rawGpsCourseDeg : 0.0f
         velocityOk,
         now
       );
@@ -627,7 +627,7 @@ void readGps() {
 
         if (courseOk &&
             rawSpeed >= GPS_MIN_COURSE_SPEED_MPS) {
-          float rawHeading = gps.course.deg();
+          float rawHeading = rawGpsCourseDeg;
           lastHeading =
             gpsAcceptedCount <= 1
               ? rawHeading
