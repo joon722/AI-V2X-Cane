@@ -20,6 +20,8 @@ CSV_FIELDS = (
     "lng",
     "speed_mps",
     "heading_deg",
+    "hdop",
+    "gps_time_ms",
     "node_risk",
     "tx_ms",
     "rx_ms",

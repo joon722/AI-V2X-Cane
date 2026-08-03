@@ -103,10 +103,22 @@ CSV_FIELDS = (
     "trusted",
     "reason",
     "target_id",
+    "distance_m",
+    "closing_mps",
+    "ttc_s",
+    "risk_score",
+    "cane_gps_valid",
+    "cane_speed_mps",
+    "cane_heading_deg",
+    "veh_gps_valid",
+    "veh_speed_mps",
+    "veh_heading_deg",
 )
 
 
-def csv_row(now, store, transmitter, decision):
+def csv_row(now, store, transmitter, decision, assessment):
+    cane = store.latest["cane"]
+    vehicle = store.latest["vehicle"]
     return {
         "pc_time": round(now, 3),
         "cane_seq": store.latest["cane"]["seq"],
@@ -115,6 +127,17 @@ def csv_row(now, store, transmitter, decision):
         "trusted": int(decision.trusted),
         "reason": decision.reason,
         "target_id": transmitter.target_id,
+        # closing_mps: 양수 = 접근 중, 음수 = 멀어지는 중.
+        "distance_m": round(assessment.distance_m, 2),
+        "closing_mps": round(assessment.closing_los, 2),
+        "ttc_s": round(assessment.ttc, 2),
+        "risk_score": assessment.final_score,
+        "cane_gps_valid": cane["gps_valid"],
+        "cane_speed_mps": cane["speed_mps"],
+        "cane_heading_deg": cane["heading_deg"],
+        "veh_gps_valid": vehicle["gps_valid"],
+        "veh_speed_mps": vehicle["speed_mps"],
+        "veh_heading_deg": vehicle["heading_deg"],
     }
 
 
@@ -185,7 +208,10 @@ class RiskSender:
 
         self.transport(self.transmitter.command(decision.effective_level))
         print(format_tx(decision), flush=True)
-        append_row(self.csv_path, csv_row(now, store, self.transmitter, decision))
+        append_row(
+            self.csv_path,
+            csv_row(now, store, self.transmitter, decision, assessment),
+        )
 
 
 def inject_vehicle(vehicle, sender, source_mode, now):

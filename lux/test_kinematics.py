@@ -11,6 +11,7 @@ from kinematics import (
     KinematicsPipeline,
     LocalFrame,
     NodeTracker,
+    measurement_time,
     relative_kinematics,
     velocity_from_heading,
 )
@@ -230,6 +231,96 @@ def _vehicle_payload(seq, distance_m):
         "node_risk": 0,
         "source_mode": "simulation",
     }
+
+
+class MeasurementTimeTest(unittest.TestCase):
+    def test_valid_gps_time_is_preferred_over_arrival_time(self):
+        row = {"pc_time": 1000.0, "gps_time_ms": 45_296_500}
+        seconds, is_gps = measurement_time(row)
+        self.assertTrue(is_gps)
+        self.assertAlmostEqual(seconds, 45_296.5)
+
+    def test_missing_empty_and_sentinel_values_fall_back_to_arrival_time(self):
+        for raw in ("missing", "", 4294967295, -1, 86_400_000):
+            row = {"pc_time": 1000.0}
+            if raw != "missing":
+                row["gps_time_ms"] = raw
+            seconds, is_gps = measurement_time(row)
+            self.assertFalse(is_gps, f"gps_time_ms={raw!r}")
+            self.assertAlmostEqual(seconds, 1000.0)
+
+
+class FixDedupAndResetTest(unittest.TestCase):
+    def test_the_same_fix_repeated_by_the_send_loop_is_only_counted_once(self):
+        """10 Hz packets carry a 1 Hz fix; repeats must not tighten the filter."""
+        fed_once = NodeTracker()
+        fed_once.observe(0.0, 0.0, 100.0, True)
+        fed_once.observe(0.0, 5.0, 101.0, True)
+
+        fed_repeats = NodeTracker()
+        for _ in range(10):
+            fed_repeats.observe(0.0, 0.0, 100.0, True)
+        for _ in range(10):
+            fed_repeats.observe(0.0, 5.0, 101.0, True)
+
+        self.assertEqual(fed_once.north.cov, fed_repeats.north.cov)
+        self.assertAlmostEqual(fed_once.north.pos, fed_repeats.north.pos, places=9)
+
+    def test_clock_base_change_restarts_the_track(self):
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 1000.0, False)  # arrival clock
+        tracker.observe(0.0, 5.0, 50.0, True)     # gps clock
+        # A restart treats the second sample as a first observation:
+        # position taken as-is, speed unknown (zero).
+        pos_n = tracker.state_ahead(0.0)[1]
+        vel_n = tracker.state_ahead(0.0)[3]
+        self.assertAlmostEqual(pos_n, 5.0, places=6)
+        self.assertAlmostEqual(vel_n, 0.0, places=6)
+
+    def test_a_long_gap_restarts_the_track_instead_of_extrapolating(self):
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 100.0, True)
+        tracker.observe(0.0, 5.0, 101.0, True)    # learned ~5 m/s northward
+        tracker.observe(0.0, 5.0, 200.0, True)    # 99 s of silence
+        vel_n = tracker.state_ahead(0.0)[3]
+        self.assertAlmostEqual(vel_n, 0.0, places=6)
+
+    def test_midnight_wrap_keeps_time_monotonic(self):
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 86_399.0, True)  # 23:59:59
+        tracker.observe(0.0, 5.0, 0.0, True)       # 00:00:00 next day
+        self.assertAlmostEqual(tracker.last_time, 86_400.0, places=6)
+
+
+class GpsTimeAlignmentTest(unittest.TestCase):
+    """Packets repeat each 1 Hz fix ten times; gps_time must deduplicate them."""
+
+    def test_filtered_closing_speed_converges_despite_repeated_fixes(self):
+        store = StateStore(fresh_window_s=10.0)
+        pipeline = KinematicsPipeline(store)
+        results = []
+        for tick in range(200):
+            now = 1000.0 + tick * 0.1
+            fix_second = tick // 10
+            gps_ms = 43_200_000 + fix_second * 1000
+
+            cane = _cane_payload(tick)
+            cane["gps_time_ms"] = gps_ms
+            vehicle = _vehicle_payload(tick, 150.0 - 5.0 * fix_second)
+            vehicle["gps_time_ms"] = gps_ms
+
+            for payload, stamp in ((cane, now), (vehicle, now + 0.003)):
+                row = normalize_record(payload, "test", now=stamp)
+                store.update(row)
+                pipeline.observe(row)
+                result = pipeline.compute()
+                if result is not None:
+                    results.append(result)
+
+        filtered = [f.closing_los for _, _, f in results]
+        self.assertTrue(filtered, "pipeline never produced a result")
+        for value in filtered[-10:]:
+            self.assertAlmostEqual(value, 5.0, delta=0.5)
 
 
 class NodeTrackerTest(unittest.TestCase):
