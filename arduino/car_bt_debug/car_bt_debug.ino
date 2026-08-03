@@ -95,6 +95,8 @@ const char *V2X_AP_SSID = "V2X-LOG";
 const char *V2X_AP_PASSWORD = "12345678";
 
 #define SEND_INTERVAL_MS 100UL
+// IMU 장착/스윙 분석 로그용 20Hz. 보정 완료 후 1000UL로 되돌릴 것.
+#define UDP_TELEMETRY_INTERVAL_MS 50UL
 #define CANE_TIMEOUT_MS 2000UL
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
@@ -280,6 +282,9 @@ bool usingDemoGps = false;
 double rawGpsLat = 0.0;
 double rawGpsLng = 0.0;
 float rawGpsHdop = 99.0f;
+float rawGpsSpeedMps = 0.0f;
+float rawGpsCourseDeg = 0.0f;
+bool rawGpsCourseValid = false;
 uint32_t rawGpsSatellites = 0;
 uint32_t gpsAcceptedCount = 0;
 uint32_t gpsRejectedCount = 0;
@@ -523,6 +528,10 @@ float accelZ = 0.0f;
 float gyroX = 0.0f;
 float gyroY = 0.0f;
 float gyroZ = 0.0f;
+float magX = 0.0f;
+float magY = 0.0f;
+float magZ = 0.0f;
+uint32_t lastImuSampleMs = 0;
 float gravityX = 0.0f;
 float gravityY = 0.0f;
 float gravityZ = 9.80665f;
@@ -791,13 +800,18 @@ void readGps() {
       fabs(rawGpsLng) <= 180.0 &&
       !(rawGpsLat == 0.0 && rawGpsLng == 0.0);
 
-    float rawSpeed =
+    rawGpsSpeedMps =
       gps.speed.isValid() ? gps.speed.mps() : 0.0f;
+    rawGpsCourseValid = gps.course.isValid();
+    rawGpsCourseDeg =
+      rawGpsCourseValid ? gps.course.deg() : 0.0f;
+
+    float rawSpeed = rawGpsSpeedMps;
     bool speedOk =
       gps.speed.isValid() &&
       rawSpeed >= 0.0f &&
       rawSpeed <= GPS_NODE_MAX_SPEED_MPS;
-    bool courseOk = gps.course.isValid();
+    bool courseOk = rawGpsCourseValid;
     bool velocityOk = speedOk && courseOk;
 
     if (!locationOk || !gpsQualityIsGood()) {
@@ -812,7 +826,7 @@ void readGps() {
         rawGpsLat,
         rawGpsLng,
         rawSpeed,
-        courseOk ? gps.course.deg() : 0.0f,
+        courseOk ? rawGpsCourseDeg : 0.0f,
         velocityOk,
         now
       );
@@ -828,7 +842,7 @@ void readGps() {
         // 359도와 1도를 단순 평균해 180도가 되는 문제를 피하는 원형 평균.
         if (courseOk &&
             rawSpeed >= MIN_VALID_HEADING_SPEED_MPS) {
-          float rawHeading = gps.course.deg();
+          float rawHeading = rawGpsCourseDeg;
           vehicleHeading =
             vehicleHeadingValid
               ? blendHeading(vehicleHeading, rawHeading, 0.35f)
@@ -885,6 +899,10 @@ void readImu() {
   gyroX = imu.gyrX();
   gyroY = imu.gyrY();
   gyroZ = imu.gyrZ();
+  magX = imu.magX();
+  magY = imu.magY();
+  magZ = imu.magZ();
+  lastImuSampleMs = millis();
 
   if (!imuHasSample) {
     gravityX = accelX;
@@ -1481,7 +1499,7 @@ void logSensors() {
     "[SENSOR] GPS=%s lat=%.6f lng=%.6f "
     "speed=%.2fm/s heading=%.1f headingValid=%u | "
     "IMU=%s acc=(%.2f,%.2f,%.2f) "
-    "gyro=(%.1f,%.1f,%.1f) linear=%.2f\n",
+    "gyro=(%.1f,%.1f,%.1f) mag=(%.1f,%.1f,%.1f) linear=%.2f\n",
     vehicleGpsValid ? (usingDemoGps ? "DEMO" : "FIX") : "NO_FIX",
     vehicleLat,
     vehicleLng,
@@ -1495,13 +1513,16 @@ void logSensors() {
     gyroX,
     gyroY,
     gyroZ,
+    magX,
+    magY,
+    magZ,
     linearAccelMagnitude
   );
 }
 
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
-  char udpBuffer[1024];
+  char udpBuffer[1280];
 
   int8_t rssiRawSnapshot;
   float rssiFilteredSnapshot;
@@ -1517,13 +1538,17 @@ void sendUdpTelemetry() {
   rssiLastMsSnapshot = lastCaneRssiMs;
   portEXIT_CRITICAL(&caneMux);
 
+  uint32_t telemetryMs = millis();
+  
   long rssiAgeMs = rssiValidSnapshot
-    ? (long)(millis() - rssiLastMsSnapshot)
+    ? (long)(telemetryMs - rssiLastMsSnapshot)
     : -1L;
 
   int written = snprintf(
     udpBuffer,
     sizeof(udpBuffer),
+    "시각ms:%lu\n"
+    "IMU시각ms:%lu\n"
     "위험:%u\n"
     "원시위험:%u\n"
     "GPS유효:%u\n"
@@ -1531,8 +1556,12 @@ void sendUdpTelemetry() {
     "경도:%.6f\n"
     "속도:%.2f\n"
     "방향:%.1f\n"
+    "GPS원시속도:%.3f\n"
+    "GPS원시방향유효:%u\n"
+    "GPS원시방향:%.1f\n"
     "가속도:%.2f,%.2f,%.2f\n"
     "자이로:%.1f,%.1f,%.1f\n"
+    "자력계:%.3f,%.3f,%.3f\n"
     "충격값:%.2f\n"
     "송신:%lu\n"
     "지팡이수신:%lu\n"
@@ -1557,6 +1586,8 @@ void sendUdpTelemetry() {
     "RSSI샘플:%lu\n"
     "RSSI경과ms:%ld\n"
     "위험송신:%lu\n",
+    (unsigned long)telemetryMs,
+    (unsigned long)lastImuSampleMs,
     lastRiskLevel,
     rawRiskLevel,
     vehicleGpsValid,
@@ -1564,12 +1595,18 @@ void sendUdpTelemetry() {
     vehicleLng,
     vehicleSpeed,
     vehicleHeading,
+    rawGpsSpeedMps,
+    rawGpsCourseValid ? 1u : 0u,
+    rawGpsCourseDeg,
     accelX,
     accelY,
     accelZ,
     gyroX,
     gyroY,
     gyroZ,
+    magX,
+    magY,
+    magZ,
     linearAccelMagnitude,
     (unsigned long)sendCount,
     (unsigned long)caneRxCount,
