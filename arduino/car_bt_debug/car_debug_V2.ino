@@ -879,8 +879,23 @@ void setupImu() {
   imu.begin(Wire, IMU_AD0_VAL);
 
   if (imu.status == ICM_20948_Stat_Ok) {
+    // 기본 ±2g에서는 평범한 노면 충격에도 센서가 포화되므로
+    // 차량 충격 측정 범위를 ±8g로 확장한다.
+    ICM_20948_fss_t imuFullScale;
+    imuFullScale.a = gpm8;
+
+    imu.setFullScale(
+      ICM_20948_Internal_Acc,
+      imuFullScale
+    );
+
+    if (imu.status != ICM_20948_Stat_Ok) {
+      Serial.print("[IMU] accel ±8g 설정 실패: ");
+      Serial.println(imu.statusString());
+    }
+
     imuReady = true;
-    Serial.println("[IMU] ICM-20948 connected");
+    Serial.println("[IMU] ICM-20948 connected, accel=±8g");
   } else {
     Serial.print("[IMU] 연결 실패: ");
     Serial.println(imu.statusString());
