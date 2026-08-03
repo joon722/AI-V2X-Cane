@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Hysteresis for the transmitted risk level: rise instantly, fall only after a hold.
+
+Field log 2026-08-01 (risk_tx_20260801_145449.csv) showed the level flapping
+0<->1 up to 15 transitions in 2 seconds while the vehicle sat nearly still.
+Cause: with closing speed hovering around zero, the TTC sentinel (9999) and the
+DCPA miss gate switch on and off together, so the score jumps between ~30 and
+~6.6 across the level-1 boundary on almost every fix.
+
+Smoothing the score would blunt real alarms, so the fix sits one layer up: the
+level itself gets asymmetric hysteresis.
+
+  rise   a higher level is adopted immediately - never delay a warning.
+  fall   a lower level must persist for hold_s before it is adopted; until
+         then the previous level is held. A brief dip is noise, a sustained
+         drop is a real all-clear (worst case it vibrates hold_s longer).
+
+Pure state machine like RiskTransmitter: `now` is passed in, no clock of its
+own, so the behaviour is testable and deterministic. Trust gating is NOT this
+module's job - step 8 still forces 0 when the fix is untrusted, and that path
+bypasses the hold on purpose (a fake position must not keep an alarm alive).
+"""
+
+HOLD_S = 2.0
+
+
+class LevelStabilizer:
+    """Feed every computed level through stabilize(); transmit what it returns."""
+
+    def __init__(self, hold_s=HOLD_S):
+        self.hold_s = hold_s
+        self.level = None
+        self.lower_since = None  # when the current run of lower candidates began
+
+    def stabilize(self, candidate, now):
+        if self.level is None or candidate >= self.level:
+            # First value, a rise, or confirmation of the held level: adopt and
+            # forget any pending drop - the danger is (still) real.
+            self.level = candidate
+            self.lower_since = None
+            return self.level
+
+        # candidate < held level: don't drop yet, start (or continue) the clock.
+        if self.lower_since is None:
+            self.lower_since = now
+        if now - self.lower_since >= self.hold_s:
+            self.level = candidate
+            self.lower_since = None
+        return self.level

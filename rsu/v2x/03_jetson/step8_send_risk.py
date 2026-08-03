@@ -31,9 +31,15 @@ from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
 from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
 from step6_kinematics import KinematicsPipeline, to_float
 from step7_risk import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
+from step8_stability import HOLD_S, LevelStabilizer
 
 
 HEARTBEAT_S = 1.0
+
+# After the RSU accepts a downlink it echoes these two record types back on the
+# same serial line (documented in the session summary). They confirm the command
+# landed; they are not pipeline input, so step 8 consumes them without warning.
+RSU_ACK_TYPES = ("risk_tx", "risk_broadcast_to_seen")
 
 
 def _gps_trusted(cane_gps_valid):
@@ -160,12 +166,14 @@ def format_tx(decision):
 class RiskSender:
     """Scores each record and pushes the resulting level through the transmitter."""
 
-    def __init__(self, pipeline, transmitter, transport, csv_path, gate_params):
+    def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
+                 stabilizer=None):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
         self.csv_path = csv_path
         self.gate_params = gate_params
+        self.stabilizer = stabilizer
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -178,6 +186,9 @@ class RiskSender:
             row = normalize_record(payload, source_mode)
         except (json.JSONDecodeError, ValueError) as exc:
             print(f"[WARN] parse_failed error={exc} source={source_mode}", file=sys.stderr)
+            return
+
+        if row["type"] in RSU_ACK_TYPES:
             return
 
         if not self.pipeline.store.update(row):
@@ -195,7 +206,13 @@ class RiskSender:
         assessment = assess_risk(filtered, vehicle_speed, **self.gate_params)
 
         cane_gps_valid = store.latest["cane"]["gps_valid"]
-        decision = self.transmitter.consider(assessment.risk_level, cane_gps_valid, now)
+        # Hysteresis (step8_stability): rises pass through instantly, drops must
+        # persist hold_s. Applied before trust gating so an untrusted fix still
+        # clears to 0 immediately inside the transmitter.
+        level = assessment.risk_level
+        if self.stabilizer is not None:
+            level = self.stabilizer.stabilize(level, now)
+        decision = self.transmitter.consider(level, cane_gps_valid, now)
         if not decision.should_send:
             return
 
@@ -273,6 +290,13 @@ def parse_args():
         action="store_true",
         help="transmit risk even when the cane fix is a fallback (gps_valid=0)",
     )
+    parser.add_argument(
+        "--level-hold-s",
+        type=float,
+        default=HOLD_S,
+        help=f"a lower level must persist this long before the alarm drops; "
+        f"0 disables the hysteresis (default: {HOLD_S})",
+    )
     parser.add_argument("--dcpa-near-m", type=float, default=DCPA_NEAR_M)
     parser.add_argument("--dcpa-far-m", type=float, default=DCPA_FAR_M)
     parser.add_argument("--dcpa-floor", type=float, default=DCPA_FLOOR)
@@ -293,9 +317,11 @@ def main():
         "far_m": args.dcpa_far_m,
         "floor": args.dcpa_floor,
     }
+    stabilizer = LevelStabilizer(hold_s=args.level_hold_s) if args.level_hold_s > 0 else None
     print(
         f"[INFO] source_mode={args.source_mode} csv={args.csv} target_id={args.target_id} "
-        f"heartbeat_s={args.tx_heartbeat_s} tx_untrusted={args.tx_untrusted}",
+        f"heartbeat_s={args.tx_heartbeat_s} tx_untrusted={args.tx_untrusted} "
+        f"level_hold_s={args.level_hold_s}",
         file=sys.stderr,
     )
 
@@ -310,7 +336,10 @@ def main():
         )
 
     if args.stdin:
-        sender = RiskSender(pipeline, transmitter, stdout_transport, args.csv, gate_params)
+        sender = RiskSender(
+            pipeline, transmitter, stdout_transport, args.csv, gate_params,
+            stabilizer=stabilizer,
+        )
         _run(sender, sys.stdin, args.source_mode, vehicle)
         return
 
@@ -323,7 +352,8 @@ def main():
         connection.reset_input_buffer()
         print(f"[INFO] port={args.port} baud={args.baud}", file=sys.stderr)
         sender = RiskSender(
-            pipeline, transmitter, serial_transport(connection), args.csv, gate_params
+            pipeline, transmitter, serial_transport(connection), args.csv, gate_params,
+            stabilizer=stabilizer,
         )
         _run(sender, _serial_lines(connection), args.source_mode, vehicle)
 

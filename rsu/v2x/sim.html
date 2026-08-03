@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>V2X 시뮬레이션 위험지도 — 자동 생성 248 시나리오</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+  #map { width: 100%; height: 100vh; }
+
+  #panel {
+    position: absolute; top: 16px; left: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.97);
+    padding: 14px 16px; border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    max-width: 275px;
+  }
+  #panel h1 { font-size: 16px; margin: 0 0 4px; }
+  #panel .sub { font-size: 11.5px; color: #777; margin-bottom: 10px; line-height: 1.45; }
+  .stats { display: flex; gap: 6px; margin-bottom: 8px; }
+  .stat {
+    flex: 1; background: #f4f6fb; border-radius: 8px; padding: 6px 4px; text-align: center;
+  }
+  .stat b { display: block; font-size: 14px; color: #1e2761; }
+  .stat span { font-size: 10px; color: #666; }
+  #minGrade {
+    width: 100%; padding: 7px; margin-bottom: 8px; font-size: 13px;
+    border-radius: 8px; border: 1px solid #d1d5db; font-family: inherit; background: #fff;
+  }
+  #howto { font-size: 11.5px; color: #555; line-height: 1.55; border-top: 1px solid #eee; padding-top: 8px; }
+  #howto b { color: #1e2761; }
+
+  #legend {
+    position: absolute; top: 16px; right: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 12px 16px; border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    font-size: 13px; line-height: 1.7;
+  }
+  #legend h4 { margin: 0 0 6px 0; font-size: 14px; }
+  .legend-swatch {
+    display: inline-block; width: 14px; height: 14px;
+    border-radius: 3px; margin-right: 6px; vertical-align: middle;
+  }
+  #legend .note { font-size: 10.5px; color: #888; margin-top: 6px; max-width: 170px; line-height: 1.4; }
+
+  #detail-card {
+    position: absolute; bottom: 20px; left: 16px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.97);
+    padding: 14px 18px; border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    font-size: 14px; min-width: 250px; display: none;
+  }
+  #detail-card h4 { margin: 0 0 8px 0; font-size: 15px; padding-right: 18px; }
+  #detail-card .row { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 4px; }
+  #detail-card .row span:first-child { color: #555; white-space: nowrap; }
+  #detail-card .close-btn {
+    position: absolute; top: 8px; right: 12px;
+    cursor: pointer; color: #999; font-weight: bold; font-size: 16px;
+  }
+  .grade-badge {
+    display: inline-block; padding: 1px 8px; border-radius: 6px;
+    color: #fff; font-weight: bold; font-size: 13px;
+  }
+  .mini-dist { display: flex; gap: 4px; margin-top: 8px; }
+  .mini-dist div { flex: 1; text-align: center; border-radius: 6px; padding: 3px 0; font-size: 11px; color: #fff; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h1>시뮬레이션 위험지도</h1>
+  <div class="sub">클라우드가 자동 생성한 SUMO 시나리오를 실제 도로 위에 누적한 지도입니다.</div>
+  <div class="stats">
+    <div class="stat"><b id="s-scen">-</b><span>시나리오</span></div>
+    <div class="stat"><b id="s-ev">-</b><span>위험 이벤트</span></div>
+    <div class="stat"><b id="s-seg">-</b><span>위험 구간</span></div>
+  </div>
+  <select id="minGrade" onchange="draw()">
+    <option value="1">전체 위험 구간 보기</option>
+    <option value="2">2(위험) 이상만</option>
+    <option value="3">3(매우 위험)만</option>
+  </select>
+  <div id="howto">
+    <b>읽는 법</b> — 색이 붉을수록, 선이 굵을수록 위험이 자주 발생한 도로입니다.
+    도로를 클릭하면 상세 수치, 보라 원(위험구역)을 클릭하면 구역 정보가 나옵니다.
+  </div>
+</div>
+
+<div id="legend">
+  <h4>누적 위험 등급</h4>
+  <div><span class="legend-swatch" style="background:#eab308"></span>1 · 위험 이벤트 관측</div>
+  <div><span class="legend-swatch" style="background:#f97316"></span>2 · 위험 다발 (200건+)</div>
+  <div><span class="legend-swatch" style="background:#ef4444"></span>3 · 매우 위험 다발 (L3 50건+)</div>
+  <div style="margin-top:4px"><span class="legend-swatch" style="background:#9b59b6;border-radius:50%"></span>위험구역 (시뮬 정의)</div>
+  <div class="note">선 굵기 = 이벤트 빈도<br>좌표는 궤적–도로망 정합 기반 근사 (중앙오차 ≈ 3.4m)</div>
+</div>
+
+<div id="detail-card">
+  <span class="close-btn" onclick="hideCard()">&times;</span>
+  <h4 id="d-title">도로 구간 상세</h4>
+  <div id="d-rows"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const COLORS = { 1: "#eab308", 2: "#f97316", 3: "#ef4444" };
+const GRADE_LABELS = { 1: "주의", 2: "위험", 3: "매우 위험" };
+
+const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
+const map = L.map("map").setView([37.4957, 126.9585], 16);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+segLayer.addTo(map); zoneLayer.addTo(map);
+
+let DATA = null;
+
+function hideCard() { document.getElementById("detail-card").style.display = "none"; }
+function row(label, value) {
+  return '<div class="row"><span>' + label + '</span><span>' + value + '</span></div>';
+}
+
+function showSegmentCard(s) {
+  document.getElementById("d-title").textContent = "도로 구간 상세";
+  let badge = '<span class="grade-badge" style="background:' + COLORS[s.grade] + '">'
+            + s.grade + " · " + GRADE_LABELS[s.grade] + "</span>";
+  let h = row("누적 등급", badge)
+        + row("위험 이벤트", s.events.toLocaleString() + "건")
+        + row("평균 위험점수", s.avg_score + " / 100");
+  if (s.avg_ttc != null) h += row("평균 TTC", s.avg_ttc + "s");
+  h += '<div class="mini-dist">'
+     + '<div style="background:#eab308">주의 ' + s.l1.toLocaleString() + '</div>'
+     + '<div style="background:#f97316">위험 ' + s.l2.toLocaleString() + '</div>'
+     + '<div style="background:#ef4444">매우 ' + s.l3.toLocaleString() + '</div>'
+     + '</div>';
+  document.getElementById("d-rows").innerHTML = h;
+  document.getElementById("detail-card").style.display = "block";
+}
+
+function showZoneCard(z) {
+  document.getElementById("d-title").textContent = z.zone_name;
+  let h = row("유형", z.zone_type) + row("기본 위험 가중치", z.base_risk)
+        + row("반경", z.radius + "m");
+  document.getElementById("d-rows").innerHTML = h;
+  document.getElementById("detail-card").style.display = "block";
+}
+
+function weight(events) {
+  return Math.max(3, Math.min(13, 2 + 2.4 * Math.log10(events)));
+}
+
+function draw() {
+  if (!DATA) return;
+  segLayer.clearLayers();
+  hideCard();
+  const minG = parseInt(document.getElementById("minGrade").value, 10);
+  // 낮은 등급 먼저 그려서 높은 등급이 위로 오게
+  const rows = DATA.edges.filter(e => e.grade >= minG).sort((a, b) => a.grade - b.grade);
+  rows.forEach(s => {
+    const line = L.polyline(s.pts, {
+      color: COLORS[s.grade], weight: weight(s.events), opacity: 0.85, lineCap: "round",
+    });
+    line.on("click", () => showSegmentCard(s));
+    line.addTo(segLayer);
+  });
+  document.getElementById("s-seg").textContent = rows.length;
+}
+
+fetch("sim_data.json").then(r => r.json()).then(d => {
+  DATA = d;
+  document.getElementById("s-scen").textContent = d.meta.scenarios;
+  const ev = d.meta.events.l1 + d.meta.events.l2 + d.meta.events.l3;
+  document.getElementById("s-ev").textContent = (ev / 10000).toFixed(1) + "만";
+  d.zones.forEach(z => {
+    const c = L.circle([z.lat, z.lng], {
+      radius: z.radius, color: "#9b59b6", fillColor: "#9b59b6", fillOpacity: 0.15, weight: 2,
+    });
+    c.on("click", () => showZoneCard(z));
+    c.addTo(zoneLayer);
+  });
+  draw();
+}).catch(() => {
+  document.getElementById("howto").textContent = "sim_data.json을 불러오지 못했습니다.";
+});
+</script>
+
+</body>
+</html>
