@@ -96,7 +96,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 
 #define SEND_INTERVAL_MS 100UL
 // IMU 장착/스윙 분석 로그용 20Hz. 보정 완료 후 1000UL로 되돌릴 것.
-#define UDP_TELEMETRY_INTERVAL_MS 50UL
+#define UDP_TELEMETRY_INTERVAL_MS 20UL
 #define CANE_TIMEOUT_MS 2000UL
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
@@ -536,6 +536,9 @@ float gravityX = 0.0f;
 float gravityY = 0.0f;
 float gravityZ = 9.80665f;
 float linearAccelMagnitude = 0.0f;
+float impactPeakSinceTelemetry = 0.0f;
+float lastImpactTriggerMagnitude = 0.0f;
+uint32_t lastImpactTriggerAtMs = 0;
 uint32_t lastImpactMs = 0;
 
 bool dfPlayerReady = false;
@@ -925,11 +928,29 @@ void readImu() {
                                linearY * linearY +
                                linearZ * linearZ);
 
+  // 직전 UDP 전송 이후 발생한 가장 큰 충격값을 보존한다.
+  if (linearAccelMagnitude > impactPeakSinceTelemetry) {
+    impactPeakSinceTelemetry = linearAccelMagnitude;
+  }
+
   uint32_t now = millis();
-  bool cooldownDone = lastImpactMs == 0 || now - lastImpactMs >= IMPACT_COOLDOWN_MS;
-  if (cooldownDone && linearAccelMagnitude >= IMPACT_THRESHOLD_MPS2) {
+  bool cooldownDone =
+    lastImpactMs == 0 ||
+    now - lastImpactMs >= IMPACT_COOLDOWN_MS;
+
+  if (cooldownDone &&
+      linearAccelMagnitude >= IMPACT_THRESHOLD_MPS2) {
     lastImpactMs = now;
-    Serial.printf("[IMU IMPACT] linear=%.2f m/s^2\n", linearAccelMagnitude);
+
+    // 충격음이 실제로 발생한 순간의 값과 시각을 보존한다.
+    lastImpactTriggerMagnitude = linearAccelMagnitude;
+    lastImpactTriggerAtMs = now;
+
+    Serial.printf(
+      "[IMU IMPACT] linear=%.2f m/s^2\n",
+      linearAccelMagnitude
+    );
+
     impactAudioPlayCount++;
     playAudioFile(TRACK_IMPACT_FILE);
   }
@@ -1523,6 +1544,9 @@ void logSensors() {
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
   char udpBuffer[1280];
+  
+  float impactPeakSnapshot = impactPeakSinceTelemetry;
+  impactPeakSinceTelemetry = 0.0f;
 
   int8_t rssiRawSnapshot;
   float rssiFilteredSnapshot;
@@ -1563,6 +1587,9 @@ void sendUdpTelemetry() {
     "자이로:%.1f,%.1f,%.1f\n"
     "자력계:%.3f,%.3f,%.3f\n"
     "충격값:%.2f\n"
+    "충격피크:%.2f\n"
+    "마지막충격발생값:%.2f\n"
+    "마지막충격발생ms:%lu\n"
     "송신:%lu\n"
     "지팡이수신:%lu\n"
     "GPS위성:%lu\n"
@@ -1608,6 +1635,9 @@ void sendUdpTelemetry() {
     magY,
     magZ,
     linearAccelMagnitude,
+    impactPeakSnapshot,
+    lastImpactTriggerMagnitude,
+    (unsigned long)lastImpactTriggerAtMs,
     (unsigned long)sendCount,
     (unsigned long)caneRxCount,
     (unsigned long)rawGpsSatellites,
