@@ -68,6 +68,9 @@
 
 #define SEND_INTERVAL_MS 100UL
 
+// IMU 장착/스윙 분석 로그용 20Hz. 보정 완료 후 1000UL로 되돌릴 것.
+#define UDP_TELEMETRY_INTERVAL_MS 50UL
+
 #define V2X_WIFI_SSID "V2X-LOG"
 #define V2X_WIFI_PASSWORD "12345678"
 #define CANE_UDP_PORT 4210
@@ -217,6 +220,9 @@ uint8_t lastGpsValid = 0;
 double rawGpsLat = 0.0;
 double rawGpsLng = 0.0;
 float rawGpsHdop = 99.0f;
+float rawGpsSpeedMps = 0.0f;
+float rawGpsCourseDeg = 0.0f;
+bool rawGpsCourseValid = false;
 uint32_t rawGpsSatellites = 0;
 uint32_t gpsAcceptedCount = 0;
 uint32_t gpsRejectedCount = 0;
@@ -445,6 +451,13 @@ bool gpsQualityIsGood() {
 float lastAccelX = 0.0f;
 float lastAccelY = 0.0f;
 float lastAccelZ = 0.0f;
+float lastGyroX = 0.0f;
+float lastGyroY = 0.0f;
+float lastGyroZ = 0.0f;
+float lastMagX = 0.0f;
+float lastMagY = 0.0f;
+float lastMagZ = 0.0f;
+uint32_t lastImuSampleMs = 0;
 
 // 현재 위험 단계의 진동 패턴이 시작된 시간.
 uint32_t riskPatternStartMs = 0;
@@ -573,13 +586,18 @@ void readGps() {
       fabs(rawGpsLng) <= 180.0 &&
       !(rawGpsLat == 0.0 && rawGpsLng == 0.0);
 
-    float rawSpeed =
+    rawGpsSpeedMps =
       gps.speed.isValid() ? gps.speed.mps() : 0.0f;
+    rawGpsCourseValid = gps.course.isValid();
+    rawGpsCourseDeg =
+      rawGpsCourseValid ? gps.course.deg() : 0.0f;
+
+    float rawSpeed = rawGpsSpeedMps;
     bool speedOk =
       gps.speed.isValid() &&
       rawSpeed >= 0.0f &&
       rawSpeed <= GPS_NODE_MAX_SPEED_MPS;
-    bool courseOk = gps.course.isValid();
+    bool courseOk = rawGpsCourseValid;
     bool velocityOk = speedOk && courseOk;
 
     if (!locationOk || !gpsQualityIsGood()) {
@@ -594,7 +612,7 @@ void readGps() {
         rawGpsLat,
         rawGpsLng,
         rawSpeed,
-        courseOk ? gps.course.deg() : 0.0f,
+        float rawHeading = rawGpsCourseDeg;
         velocityOk,
         now
       );
@@ -637,12 +655,21 @@ void readGps() {
 
 void readImu() {
 #if USE_IMU
-  if (imu.dataReady()) {
-    imu.getAGMT();
-    lastAccelX = (imu.accX() / 1000.0f) * 9.80665f;
-    lastAccelY = (imu.accY() / 1000.0f) * 9.80665f;
-    lastAccelZ = (imu.accZ() / 1000.0f) * 9.80665f;
-  }
+  if (!imu.dataReady()) return;
+
+  imu.getAGMT();
+
+  // SparkFun 라이브러리: acc=mg, gyro=dps, mag=uT.
+  lastAccelX = imu.accX() * 0.00980665f;
+  lastAccelY = imu.accY() * 0.00980665f;
+  lastAccelZ = imu.accZ() * 0.00980665f;
+  lastGyroX = imu.gyrX();
+  lastGyroY = imu.gyrY();
+  lastGyroZ = imu.gyrZ();
+  lastMagX = imu.magX();
+  lastMagY = imu.magY();
+  lastMagZ = imu.magZ();
+  lastImuSampleMs = millis();
 #endif
 }
 
@@ -1144,11 +1171,9 @@ void setupEspNow() {
 
 // 지팡이 상태를 UDP 4210으로 전송
 void sendUdpTelemetry() {
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
+  if (WiFi.status() != WL_CONNECTED) return;
 
-  char udpBuffer[768];
+  char udpBuffer[1024];
 
   int8_t rssiRawSnapshot;
   float rssiFilteredSnapshot;
@@ -1164,20 +1189,28 @@ void sendUdpTelemetry() {
   rssiLastMsSnapshot = lastVehicleRssiMs;
   portEXIT_CRITICAL(&rssiMux);
 
+  uint32_t telemetryMs = millis();
   long rssiAgeMs = rssiValidSnapshot
-    ? (long)(millis() - rssiLastMsSnapshot)
+    ? (long)(telemetryMs - rssiLastMsSnapshot)
     : -1L;
 
   int written = snprintf(
     udpBuffer,
     sizeof(udpBuffer),
+    "시각ms:%lu\n"
+    "IMU시각ms:%lu\n"
     "위험:%u\n"
     "GPS유효:%u\n"
     "위도:%.6f\n"
     "경도:%.6f\n"
-    "속도:%.2f\n"
+    "속도:%.3f\n"
     "방향:%.1f\n"
-    "가속도:%.2f,%.2f,%.2f\n"
+    "GPS원시속도:%.3f\n"
+    "GPS원시방향유효:%u\n"
+    "GPS원시방향:%.1f\n"
+    "가속도:%.3f,%.3f,%.3f\n"
+    "자이로:%.3f,%.3f,%.3f\n"
+    "자력계:%.3f,%.3f,%.3f\n"
     "송신:%lu\n"
     "GPS위성:%lu\n"
     "GPS_HDOP:%.2f\n"
@@ -1192,15 +1225,26 @@ void sendUdpTelemetry() {
     "RSSI샘플:%lu\n"
     "RSSI경과ms:%ld\n"
     "차량수신:%lu\n",
+    (unsigned long)telemetryMs,
+    (unsigned long)lastImuSampleMs,
     currentRisk == 255 ? 0 : currentRisk,
     lastGpsValid,
     lastLat,
     lastLng,
     lastSpeed,
     lastHeading,
+    rawGpsSpeedMps,
+    rawGpsCourseValid ? 1u : 0u,
+    rawGpsCourseDeg,
     lastAccelX,
     lastAccelY,
     lastAccelZ,
+    lastGyroX,
+    lastGyroY,
+    lastGyroZ,
+    lastMagX,
+    lastMagY,
+    lastMagZ,
     (unsigned long)sendCount,
     (unsigned long)rawGpsSatellites,
     rawGpsHdop,
@@ -1217,27 +1261,19 @@ void sendUdpTelemetry() {
     (unsigned long)vehicleRxCount
   );
 
-  if (written <= 0) {
-    return;
-  }
+  if (written <= 0) return;
 
   size_t sendLength =
     written < (int)sizeof(udpBuffer)
       ? (size_t)written
       : sizeof(udpBuffer) - 1;
 
-  if (!logUdp.beginPacket(
-        udpBroadcastAddress,
-        CANE_UDP_PORT
-      )) {
+  if (!logUdp.beginPacket(udpBroadcastAddress, CANE_UDP_PORT)) {
     Serial.println("[UDP] beginPacket failed");
     return;
   }
 
-  logUdp.write(
-    (const uint8_t *)udpBuffer,
-    sendLength
-  );
+  logUdp.write((const uint8_t *)udpBuffer, sendLength);
 
   if (logUdp.endPacket() != 1) {
     Serial.println("[UDP] send failed");
@@ -1337,7 +1373,7 @@ if (now - lastSendMs >= SEND_INTERVAL_MS) {
 }
 
 // 지팡이 UDP 로그를 1초마다 전송
-if (now - lastUdpTelemetryMs >= 1000UL) {
+if (now - lastUdpTelemetryMs >= UDP_TELEMETRY_INTERVAL_MS) {
   lastUdpTelemetryMs = now;
   sendUdpTelemetry();
 }
