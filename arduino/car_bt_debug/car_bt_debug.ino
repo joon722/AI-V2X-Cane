@@ -1706,7 +1706,7 @@ if (now - lastSendMs >= SEND_INTERVAL_MS) {
 }
 
   // 차량 로그는 1초마다 UDP 4211로 전송
-if (now - lastUdpTelemetryMs >= 1000UL) {
+if (now - lastUdpTelemetryMs >= UDP_TELEMETRY_INTERVAL_MS) {
   lastUdpTelemetryMs = now;
   sendUdpTelemetry();
 }
