@@ -1,3 +1,5 @@
+[← 프로젝트 개요](../README.ko.md)
+
 # AI_Model — Transformer 위험도 분류기
 
 SUMO 라벨 데이터로 시퀀스 분류 Transformer를 학습하고, ONNX로 내보내 Jetson 온디바이스 추론에 사용합니다.
