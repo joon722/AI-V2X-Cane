@@ -12,11 +12,26 @@ deploy/
   upload_logs.sh            로그 CSV를 서버(risk-server)로 rsync 업로드
   v2x-log-upload.service    업로드 단발 작업 (일반 사용자로 실행)
   v2x-log-upload.timer      부팅 2분 후 + 5분마다 업로드 실행
+  upload_events.py          위험 이벤트(레벨 1+)를 위험지도 서버로 POST
+  v2x-event-upload.service  이벤트 업로드 단발 작업
+  v2x-event-upload.timer    부팅 90초 후 + 1분마다 이벤트 업로드
   install.sh                설치 스크립트 (젯슨에서 한 번만 실행)
 ```
 
 로그 업로드는 서버 `~/v2x_logs/<젯슨호스트명>/` 에 쌓인다.
 인터넷이 없으면 경고만 남기고 다음 주기(5분 뒤)에 자동 재시도한다.
+
+이벤트 업로드는 위험지도 서버(riskmap-api, Cloud Run)의 `/api/events` 로 간다.
+설치 후 `/etc/default/v2x-riskmap` 에 `RISKMAP_API_KEY` 를 채워야 동작한다
+(키는 GCP Secret Manager의 `api-key`에서 확인). 오프라인이면 보낸 데까지
+기억해 뒀다가 인터넷이 연결되는 순간 밀린 이벤트를 이어서 올린다.
+
+서버 연결 확인용 테스트 이벤트 1건 보내기:
+
+```bash
+cd ~/v2x/03_jetson/deploy
+sudo sh -c '. /etc/default/v2x-riskmap && RISKMAP_URL=$RISKMAP_URL RISKMAP_API_KEY=$RISKMAP_API_KEY python3 upload_events.py --self-test'
+```
 
 메인 엔진은 `step8_send_risk.py`를 그대로 사용한다 (수정 없음).
 step8을 쓰는 이유: 지팡이 실좌표 사용 + GPS 신뢰도 게이팅 + 1초 heartbeat.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Run v2x-event-upload every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target

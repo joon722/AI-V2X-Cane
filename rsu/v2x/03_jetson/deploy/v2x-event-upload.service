@@ -1,0 +1,10 @@
+[Unit]
+Description=V2X risk event upload to riskmap-api
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=@RUN_USER@
+EnvironmentFile=/etc/default/v2x-riskmap
+ExecStart=/usr/bin/python3 @DEPLOY_DIR@/upload_events.py
