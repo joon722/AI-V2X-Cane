@@ -3,3 +3,5 @@ arduino/**/config.h
 *.log
 __pycache__/
 *.py[cod]
+*.lnk
+tmp/
