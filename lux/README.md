@@ -1,3 +1,5 @@
+[← 프로젝트 개요](../README.ko.md)
+
 # lux — Jetson 실시간 위험도 엔진
 
 RSU 브리지 ESP32가 USB 시리얼로 올려주는 V2X JSON을 받아 **파싱 → 상태 저장 → 운동학 계산 → 위험도 등급화 → RSU 다운링크 전송**까지 담당하는 Jetson(Linux) 배포용 패키지입니다.
