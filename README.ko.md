@@ -1,10 +1,14 @@
-# AI-V2X Smart Cane
+<div align="center">
 
-**AI 기반 V2X 협력형 시각장애인 보행 안전 지팡이 — 접근하는 차량을 실시간으로 감지해 진동·부저로 경고합니다.**
+# 🦯 AI-V2X Smart Cane
 
-> 🇺🇸 [English version](README.md)
+**AI 기반 V2X 협력형 시각장애인 보행 안전 지팡이<br/>접근하는 차량을 실시간으로 감지해 진동·부저로 경고합니다.**
 
 ![ESP32](https://img.shields.io/badge/ESP32-ESP--NOW-blue) ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white) ![PyTorch](https://img.shields.io/badge/PyTorch-Transformer-EE4C2C?logo=pytorch&logoColor=white) ![ONNX](https://img.shields.io/badge/ONNX-on--device-005CED?logo=onnx&logoColor=white) ![SUMO](https://img.shields.io/badge/SUMO-traffic%20simulation-green) ![FastAPI](https://img.shields.io/badge/FastAPI-risk%20map-009688?logo=fastapi&logoColor=white)
+
+🇺🇸 [English version](README.md)
+
+</div>
 
 지팡이와 주변 차량이 각자 GPS 위치를 ESP-NOW로 10Hz 브로드캐스트하면, 노변 장치(RSU)가 이를 모아 NVIDIA Jetson에 전달합니다. Jetson은 칼만 필터 기반 거리·TTC·DCPA로 충돌 위험도(0~3)를 판정해 지팡이로 되돌려 보내고, 지팡이는 등급별 진동·부저 패턴으로 사용자에게 경고합니다. 사용자 쪽에는 스마트폰도, 네트워크 연결도 필요 없습니다.
 

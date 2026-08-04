@@ -1,10 +1,14 @@
-# AI-V2X Smart Cane
+<div align="center">
 
-**An AI-powered V2X smart cane that warns visually impaired pedestrians of approaching vehicles in real time.**
+# 🦯 AI-V2X Smart Cane
 
-> 🇰🇷 [한국어 문서 (Korean version)](README.ko.md)
+**An AI-powered V2X smart cane that warns visually impaired pedestrians<br/>of approaching vehicles in real time.**
 
 ![ESP32](https://img.shields.io/badge/ESP32-ESP--NOW-blue) ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white) ![PyTorch](https://img.shields.io/badge/PyTorch-Transformer-EE4C2C?logo=pytorch&logoColor=white) ![ONNX](https://img.shields.io/badge/ONNX-on--device-005CED?logo=onnx&logoColor=white) ![SUMO](https://img.shields.io/badge/SUMO-traffic%20simulation-green) ![FastAPI](https://img.shields.io/badge/FastAPI-risk%20map-009688?logo=fastapi&logoColor=white)
+
+🇰🇷 [한국어 문서 (Korean version)](README.ko.md)
+
+</div>
 
 The cane and nearby vehicles each broadcast their GPS position over ESP-NOW at 10 Hz. A roadside unit (RSU) relays every packet to an NVIDIA Jetson, which estimates collision risk (distance, TTC, DCPA via Kalman filtering) and sends a risk level (0–3) back to the cane. The cane alerts the user through distinct vibration and buzzer patterns — no smartphone or network connection required on the user's side.
 
