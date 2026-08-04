@@ -100,6 +100,6 @@ Firmware upload order, Wi-Fi configuration, and pin maps: [docs/SETUP.ko.md](doc
 
 | Member | Role |
 | --- | --- |
-| 강현준 | Communications & system integration — ESP-NOW, Jetson UART, `lux/` real-time pipeline |
+| **강현준** ([@joon722](https://github.com/joon722)) | **Communications & system integration — ESP-NOW, Jetson UART, `lux/` real-time pipeline** |
 | 최민서 | AI & data — SUMO simulation, labeling, Transformer training, risk map |
 | 박중선 | Hardware — sensor/actuator circuits, power, enclosure |
