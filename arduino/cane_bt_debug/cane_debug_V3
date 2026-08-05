@@ -50,7 +50,7 @@
 // 차량 노드와 버전 및 구조체가 반드시 같아야 한다.
 // =====================
 #define V2X_MAGIC 0x56325831UL  // "V2X1"
-#define V2X_VERSION 2
+#define V2X_VERSION 3
 
 #define MSG_VEHICLE_STATUS 1
 #define MSG_RSU_REPLY 2
@@ -68,8 +68,8 @@
 
 #define SEND_INTERVAL_MS 100UL
 
-// IMU 장착/스윙 분석 로그용 20Hz. 보정 완료 후 1000UL로 되돌릴 것.
-#define UDP_TELEMETRY_INTERVAL_MS 20UL
+// 최종 진단 로그는 10Hz. IMU 판정 자체는 loop에서 계속 수행한다.
+#define UDP_TELEMETRY_INTERVAL_MS 100UL
 
 #define V2X_WIFI_SSID "V2X-LOG"
 #define V2X_WIFI_PASSWORD "12345678"
@@ -108,6 +108,45 @@
 #define GPS_PREDICTION_MAX_MS 1200UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
 
+// ===== 2026-08-03 지팡이 실제 장착 상태 전용 방향 보정 =====
+#define CANE_MAG_CENTER_X_UT (-48.675f)
+#define CANE_MAG_CENTER_Y_UT ( 69.750f)
+#define CANE_MAG_CENTER_Z_UT ( -8.025f)
+
+#define CANE_MAG_AXIS_A_X (  9.750f)
+#define CANE_MAG_AXIS_A_Y (-16.950f)
+#define CANE_MAG_AXIS_A_Z ( 21.300f)
+
+#define CANE_MAG_AXIS_90_X (-22.050f)
+#define CANE_MAG_AXIS_90_Y (-20.850f)
+#define CANE_MAG_AXIS_90_Z ( -3.900f)
+
+#define CANE_NEUTRAL_AX 5.545f
+#define CANE_NEUTRAL_AY 4.845f
+#define CANE_NEUTRAL_AZ 6.045f
+#define CANE_REFERENCE_HEADING_DEG 181.0f
+
+// 땅 접촉·스윙 순간을 버리고 기준 자세를 통과하는 샘플만 채택한다.
+#define CANE_HEADING_ACCEL_MIN_MPS2 7.0f
+#define CANE_HEADING_ACCEL_MAX_MPS2 13.0f
+#define CANE_HEADING_GYRO_MAX_DPS 45.0f
+#define CANE_HEADING_POSE_COS_MIN 0.98480775f  // cos(10도)
+#define CANE_MAG_MODEL_RESIDUAL_MAX_UT 12.0f
+#define CANE_MAG_MODEL_RADIUS_MIN 0.45f
+#define CANE_MAG_MODEL_RADIUS_MAX 1.70f
+#define CANE_HEADING_FILTER_TAU_S 0.80f
+#define CANE_HEADING_VALID_TIMEOUT_MS 1500UL
+
+// ===== 차량 상태만 받을 때 사용하는 예비 CPA 위험판정 =====
+#define MIN_PREDICT_VEHICLE_SPEED_MPS 0.50f
+#define MIN_PREDICT_CANE_SPEED_MPS 0.25f
+#define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
+#define CPA_DANGER_DISTANCE_M 1.5f
+#define CPA_WARNING_DISTANCE_M 2.5f
+#define CPA_CAUTION_DISTANCE_M 4.0f
+#define CPA_PREDICTION_HORIZON_S 5.0f
+#define EMERGENCY_DISTANCE_M 0.2f
+
 // 차량에서 직접 보내는 위험 패킷의 유효시간.
 // 이 시간 동안에는 지팡이 자체 계산보다 차량 계산 결과를 우선한다.
 #define DIRECT_RISK_TIMEOUT_MS 1500UL
@@ -133,6 +172,7 @@ typedef struct __attribute__((packed)) v2x_status_message {
   uint8_t node_type;
   uint8_t risk_level;
   uint8_t gps_valid;
+  uint8_t heading_valid;
 
   uint32_t node_id;
   float latitude;
@@ -143,6 +183,9 @@ typedef struct __attribute__((packed)) v2x_status_message {
   uint32_t timestamp_ms;
   uint16_t seq_num;
 } v2x_status_message_t;
+
+static_assert(sizeof(v2x_status_message_t) == 36,
+              "vehicle/cane status packet must be 36 bytes");
 
 typedef struct __attribute__((packed)) v2x_risk_message {
   uint32_t magic;
@@ -175,6 +218,7 @@ BluetoothSerial SerialBT;
 WiFiUDP logUdp;
 IPAddress udpBroadcastAddress(192, 168, 4, 255);
 uint32_t lastUdpTelemetryMs = 0;
+uint32_t lastWifiReconnectMs = 0;
 
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txStatus;
@@ -459,6 +503,19 @@ float lastMagY = 0.0f;
 float lastMagZ = 0.0f;
 uint32_t lastImuSampleMs = 0;
 
+float caneImuHeadingDeg = 0.0f;
+bool caneImuHeadingHasFix = false;
+uint32_t lastCaneHeadingAcceptedMs = 0;
+uint32_t caneHeadingAcceptedCount = 0;
+uint32_t caneHeadingRejectedCount = 0;
+
+// UDP 진단용 마지막 방향 판정값.
+float caneHeadingAccelNorm = 0.0f;
+float caneHeadingGyroNorm = 0.0f;
+float caneHeadingPoseCos = 0.0f;
+float caneMagModelResidual = 999.0f;
+float caneMagModelRadius = 0.0f;
+
 // 현재 위험 단계의 진동 패턴이 시작된 시간.
 uint32_t riskPatternStartMs = 0;
 
@@ -653,6 +710,144 @@ void readGps() {
 #endif
 }
 
+float caneDot3(float ax, float ay, float az,
+               float bx, float by, float bz) {
+  return ax * bx + ay * by + az * bz;
+}
+
+float caneNorm3(float x, float y, float z) {
+  return sqrtf(x * x + y * y + z * z);
+}
+
+bool estimateCaneHeadingFromMeasuredModel(float *outHeadingDeg) {
+  caneHeadingAccelNorm = caneNorm3(lastAccelX, lastAccelY, lastAccelZ);
+  caneHeadingGyroNorm = caneNorm3(lastGyroX, lastGyroY, lastGyroZ);
+
+  const float neutralNorm =
+    caneNorm3(CANE_NEUTRAL_AX, CANE_NEUTRAL_AY, CANE_NEUTRAL_AZ);
+
+  if (!isfinite(caneHeadingAccelNorm) ||
+      !isfinite(caneHeadingGyroNorm) ||
+      caneHeadingAccelNorm < CANE_HEADING_ACCEL_MIN_MPS2 ||
+      caneHeadingAccelNorm > CANE_HEADING_ACCEL_MAX_MPS2 ||
+      caneHeadingGyroNorm > CANE_HEADING_GYRO_MAX_DPS) {
+    return false;
+  }
+
+  caneHeadingPoseCos =
+    caneDot3(lastAccelX, lastAccelY, lastAccelZ,
+             CANE_NEUTRAL_AX, CANE_NEUTRAL_AY, CANE_NEUTRAL_AZ) /
+    (caneHeadingAccelNorm * neutralNorm);
+
+  if (!isfinite(caneHeadingPoseCos) ||
+      caneHeadingPoseCos < CANE_HEADING_POSE_COS_MIN) {
+    return false;
+  }
+
+  float mx = lastMagX - CANE_MAG_CENTER_X_UT;
+  float my = lastMagY - CANE_MAG_CENTER_Y_UT;
+  float mz = lastMagZ - CANE_MAG_CENTER_Z_UT;
+
+  float projectionA =
+    caneDot3(mx, my, mz,
+             CANE_MAG_AXIS_A_X,
+             CANE_MAG_AXIS_A_Y,
+             CANE_MAG_AXIS_A_Z);
+
+  float projection90 =
+    caneDot3(mx, my, mz,
+             CANE_MAG_AXIS_90_X,
+             CANE_MAG_AXIS_90_Y,
+             CANE_MAG_AXIS_90_Z);
+
+  float coefficientA =
+    0.00120079391f * projectionA -
+    0.00007099825f * projection90;
+
+  float coefficient90 =
+   -0.00007099825f * projectionA +
+    0.00107241985f * projection90;
+
+  caneMagModelRadius =
+    sqrtf(coefficientA * coefficientA +
+          coefficient90 * coefficient90);
+
+  float predictedX =
+    coefficientA * CANE_MAG_AXIS_A_X +
+    coefficient90 * CANE_MAG_AXIS_90_X;
+  float predictedY =
+    coefficientA * CANE_MAG_AXIS_A_Y +
+    coefficient90 * CANE_MAG_AXIS_90_Y;
+  float predictedZ =
+    coefficientA * CANE_MAG_AXIS_A_Z +
+    coefficient90 * CANE_MAG_AXIS_90_Z;
+
+  caneMagModelResidual =
+    caneNorm3(mx - predictedX,
+              my - predictedY,
+              mz - predictedZ);
+
+  if (!isfinite(caneMagModelRadius) ||
+      !isfinite(caneMagModelResidual) ||
+      caneMagModelRadius < CANE_MAG_MODEL_RADIUS_MIN ||
+      caneMagModelRadius > CANE_MAG_MODEL_RADIUS_MAX ||
+      caneMagModelResidual > CANE_MAG_MODEL_RESIDUAL_MAX_UT) {
+    return false;
+  }
+
+  float relativeHeadingDeg =
+    atan2f(coefficient90, coefficientA) * RAD_TO_DEG;
+
+  *outHeadingDeg = normalizeHeading(
+    CANE_REFERENCE_HEADING_DEG + relativeHeadingDeg
+  );
+  return true;
+}
+
+bool caneHeadingIsFresh() {
+  return caneImuHeadingHasFix &&
+         lastCaneHeadingAcceptedMs > 0 &&
+         millis() - lastCaneHeadingAcceptedMs <=
+           CANE_HEADING_VALID_TIMEOUT_MS;
+}
+
+void updateCaneHeading() {
+  uint32_t now = millis();
+  float measuredHeadingDeg = 0.0f;
+
+  if (estimateCaneHeadingFromMeasuredModel(&measuredHeadingDeg)) {
+    bool previousFresh = caneHeadingIsFresh();
+
+    if (!previousFresh) {
+      caneImuHeadingDeg = measuredHeadingDeg;
+    } else {
+      float dt =
+        (now - lastCaneHeadingAcceptedMs) / 1000.0f;
+      dt = constrain(dt, 0.001f, 0.50f);
+      float alpha =
+        1.0f - expf(-dt / CANE_HEADING_FILTER_TAU_S);
+
+      caneImuHeadingDeg = blendHeading(
+        caneImuHeadingDeg,
+        measuredHeadingDeg,
+        alpha
+      );
+    }
+
+    caneImuHeadingHasFix = true;
+    lastCaneHeadingAcceptedMs = now;
+    caneHeadingAcceptedCount++;
+  } else {
+    caneHeadingRejectedCount++;
+
+    if (lastCaneHeadingAcceptedMs == 0 ||
+        now - lastCaneHeadingAcceptedMs >
+          CANE_HEADING_VALID_TIMEOUT_MS) {
+      caneImuHeadingHasFix = false;
+    }
+  }
+}
+
 void readImu() {
 #if USE_IMU
   if (!imu.dataReady()) return;
@@ -670,6 +865,8 @@ void readImu() {
   lastMagY = imu.magY();
   lastMagZ = imu.magZ();
   lastImuSampleMs = millis();
+
+  updateCaneHeading();
 #endif
 }
 
@@ -698,39 +895,76 @@ uint8_t calculateRiskFromVehicle(
   float *outClosingSpeed,
   float *outTtc
 ) {
-  float caneLat = lastGpsValid ? lastLat : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f);
-  float caneLng = lastGpsValid ? lastLng : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f);
-  float d = distanceMeters(caneLat, caneLng, vehicle.latitude, vehicle.longitude);
+  float caneLat = lastGpsValid
+                    ? lastLat
+                    : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f);
+  float caneLng = lastGpsValid
+                    ? lastLng
+                    : (USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f);
 
-  uint32_t now = millis();
-  float closingSpeed = 0.0f;
-  float ttc = 999.0f;
+  float avgLatRad =
+    0.5f * (caneLat + vehicle.latitude) * DEG_TO_RAD;
+  float rx = (vehicle.longitude - caneLng) *
+             111320.0f * cosf(avgLatRad);
+  float ry = (vehicle.latitude - caneLat) * 111132.0f;
+  float distanceM = sqrtf(rx * rx + ry * ry);
 
-  if (prevVehicleDistanceM >= 0.0f && prevVehicleRiskCalcMs > 0 && now > prevVehicleRiskCalcMs) {
-    float dt = (now - prevVehicleRiskCalcMs) / 1000.0f;
-    closingSpeed = (prevVehicleDistanceM - d) / dt;
+  *outDistance = distanceM;
+  *outClosingSpeed = 0.0f;
+  *outTtc = 999.0f;
 
-    if (closingSpeed > 0.1f) {
-      ttc = d / closingSpeed;
-    }
+  if (distanceM < EMERGENCY_DISTANCE_M) return RISK_DANGER;
+
+  bool vehicleMoving =
+    vehicle.heading_valid &&
+    vehicle.speed_mps >= MIN_PREDICT_VEHICLE_SPEED_MPS;
+  if (!vehicleMoving) return RISK_SAFE;
+
+  float vehicleRad = vehicle.heading_deg * DEG_TO_RAD;
+  float vehicleVx = vehicle.speed_mps * sinf(vehicleRad);
+  float vehicleVy = vehicle.speed_mps * cosf(vehicleRad);
+
+  bool caneMoving =
+    caneHeadingIsFresh() &&
+    lastSpeed >= MIN_PREDICT_CANE_SPEED_MPS;
+
+  float caneVx = 0.0f;
+  float caneVy = 0.0f;
+  if (caneMoving) {
+    float caneRad = caneImuHeadingDeg * DEG_TO_RAD;
+    caneVx = lastSpeed * sinf(caneRad);
+    caneVy = lastSpeed * cosf(caneRad);
   }
 
-  prevVehicleDistanceM = d;
-  prevVehicleRiskCalcMs = now;
+  // 차량-지팡이 상대속도.
+  float rvx = vehicleVx - caneVx;
+  float rvy = vehicleVy - caneVy;
+  float relativeSpeedSq = rvx * rvx + rvy * rvy;
+  if (relativeSpeedSq < 0.01f) return RISK_SAFE;
 
-  *outDistance = d;
+  float dot = rx * rvx + ry * rvy;
+  float closingSpeed = -dot / fmaxf(distanceM, 0.1f);
+  float tCpa = -dot / relativeSpeedSq;
   *outClosingSpeed = closingSpeed;
-  *outTtc = ttc;
 
-  if (d < 3.0f) {
-  return RISK_DANGER;
-} else if (d < 5.0f) {
-  return RISK_WARNING;
-} else if (d < 8.0f) {
-  return RISK_CAUTION;
-} else {
+  if (closingSpeed < MIN_RADIAL_CLOSING_SPEED_MPS ||
+      tCpa <= 0.0f ||
+      tCpa > CPA_PREDICTION_HORIZON_S) {
+    return RISK_SAFE;
+  }
+
+  float closestX = rx + rvx * tCpa;
+  float closestY = ry + rvy * tCpa;
+  float dCpa = sqrtf(closestX * closestX + closestY * closestY);
+  *outTtc = tCpa;
+
+  if (dCpa <= CPA_DANGER_DISTANCE_M &&
+      tCpa <= 1.5f) return RISK_DANGER;
+  if (dCpa <= CPA_WARNING_DISTANCE_M &&
+      tCpa <= 3.0f) return RISK_WARNING;
+  if (dCpa <= CPA_CAUTION_DISTANCE_M &&
+      tCpa <= 5.0f) return RISK_CAUTION;
   return RISK_SAFE;
-}
 }
 
 void applyRisk(uint8_t risk) {
@@ -793,14 +1027,18 @@ void buildStatusPacket() {
     txStatus.latitude = lastLat;
     txStatus.longitude = lastLng;
     txStatus.speed_mps = lastSpeed;
-    txStatus.heading_deg = lastHeading;
   } else {
     txStatus.gps_valid = USE_FIXED_GPS_FALLBACK ? 1 : 0;
     txStatus.latitude = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LAT : 0.0f;
     txStatus.longitude = USE_FIXED_GPS_FALLBACK ? CANE_FIXED_LNG : 0.0f;
     txStatus.speed_mps = 0.0f;
-    txStatus.heading_deg = 0.0f;
   }
+
+  // 저속 보행 GPS course는 실측에서 100도 이상 어긋난 경우가 있어
+  // 지팡이 진행방향 fallback으로 사용하지 않는다.
+  bool headingFresh = caneHeadingIsFresh();
+  txStatus.heading_valid = headingFresh ? 1 : 0;
+  txStatus.heading_deg = headingFresh ? caneImuHeadingDeg : 0.0f;
 
   txStatus.timestamp_ms = millis();
   txStatus.seq_num = seq++;
@@ -812,10 +1050,14 @@ void sendCaneStatus() {
   sendCount++;
 
   Serial.printf(
-    "[CANE SEND] id=%lu seq=%u gps=%u lat=%.6f lng=%.6f spd=%.2f risk=%u ax=%.2f ay=%.2f az=%.2f send=%lu result=%s\n",
+    "[CANE SEND] id=%lu seq=%u gps=%u headingOk=%u heading=%.1f "
+    "lat=%.6f lng=%.6f spd=%.2f risk=%u "
+    "ax=%.2f ay=%.2f az=%.2f send=%lu result=%s\n",
     (unsigned long)txStatus.node_id,
     txStatus.seq_num,
     txStatus.gps_valid,
+    txStatus.heading_valid,
+    txStatus.heading_deg,
     txStatus.latitude,
     txStatus.longitude,
     txStatus.speed_mps,
@@ -1125,8 +1367,8 @@ void setupEspNow() {
   Serial.println(WiFi.localIP());
 
   Serial.printf(
-    "[WIFI] channel=%d\n",
-    WiFi.channel()
+    "[WIFI] channel=%ld\n",
+    (long)WiFi.channel()
   );
 
   // Wi-Fi 연결 후 지팡이 ID 생성
@@ -1173,7 +1415,7 @@ void setupEspNow() {
 void sendUdpTelemetry() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  char udpBuffer[1024];
+  char udpBuffer[1536];
 
   int8_t rssiRawSnapshot;
   float rssiFilteredSnapshot;
@@ -1211,6 +1453,15 @@ void sendUdpTelemetry() {
     "가속도:%.3f,%.3f,%.3f\n"
     "자이로:%.3f,%.3f,%.3f\n"
     "자력계:%.3f,%.3f,%.3f\n"
+    "IMU방향유효:%u\n"
+    "IMU방향:%.1f\n"
+    "방향가속도크기:%.2f\n"
+    "방향자이로크기:%.2f\n"
+    "방향자세cos:%.4f\n"
+    "자기모델잔차:%.2f\n"
+    "자기모델반경:%.3f\n"
+    "방향채택:%lu\n"
+    "방향거부:%lu\n"
     "송신:%lu\n"
     "GPS위성:%lu\n"
     "GPS_HDOP:%.2f\n"
@@ -1232,7 +1483,7 @@ void sendUdpTelemetry() {
     lastLat,
     lastLng,
     lastSpeed,
-    lastHeading,
+    caneHeadingIsFresh() ? caneImuHeadingDeg : 0.0f,
     rawGpsSpeedMps,
     rawGpsCourseValid ? 1u : 0u,
     rawGpsCourseDeg,
@@ -1245,6 +1496,15 @@ void sendUdpTelemetry() {
     lastMagX,
     lastMagY,
     lastMagZ,
+    caneHeadingIsFresh() ? 1u : 0u,
+    caneImuHeadingDeg,
+    caneHeadingAccelNorm,
+    caneHeadingGyroNorm,
+    caneHeadingPoseCos,
+    caneMagModelResidual,
+    caneMagModelRadius,
+    (unsigned long)caneHeadingAcceptedCount,
+    (unsigned long)caneHeadingRejectedCount,
     (unsigned long)sendCount,
     (unsigned long)rawGpsSatellites,
     rawGpsHdop,
@@ -1307,7 +1567,7 @@ void sendBtTelemetry() {
     lastLat,
     lastLng,
     lastSpeed,
-    lastHeading,
+    caneHeadingIsFresh() ? caneImuHeadingDeg : 0.0f,
     lastAccelX,
     lastAccelY,
     lastAccelZ,
@@ -1363,6 +1623,16 @@ void loop() {
   readImu();
 
   uint32_t now = millis();
+
+  // 차량 AP와 연결이 끊기면 5초마다 재접속을 시도한다.
+  // (ESP-NOW 통신은 STA 연결 여부와 무관하게 계속 동작한다.)
+  if (WiFi.status() != WL_CONNECTED &&
+      now - lastWifiReconnectMs >= 5000UL) {
+    lastWifiReconnectMs = now;
+    Serial.println("[WIFI] disconnected -> reconnecting");
+    WiFi.disconnect();
+    WiFi.begin(V2X_WIFI_SSID, V2X_WIFI_PASSWORD);
+  }
 
 if (now - lastSendMs >= SEND_INTERVAL_MS) {
   lastSendMs = now;
