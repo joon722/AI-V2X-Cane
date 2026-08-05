@@ -6,17 +6,40 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from google.cloud import storage
 import psycopg
+from psycopg_pool import ConnectionPool
 
 import roads  # [변경] 실제 도로망 스냅 모듈 (roads.json 필요)
 
 app = FastAPI(title="V2X Risk Map")
 
+_pool = None
+
+def _get_pool():
+    # 커넥션 풀: 매 요청마다 새로 접속하지 않고 미리 만든 연결을 재사용
+    global _pool
+    if _pool is None:
+        inst = os.environ["INSTANCE_CONNECTION_NAME"]
+        conninfo = (f"host=/cloudsql/{inst} "
+                    f"dbname={os.environ.get('DB_NAME', 'riskmap')} "
+                    f"user={os.environ.get('DB_USER', 'riskmap_app')} "
+                    f"password={os.environ['DB_PASS']}")
+        _pool = ConnectionPool(conninfo, min_size=1, max_size=4, timeout=20,
+                               kwargs={"autocommit": False})
+    return _pool
+
 def get_conn():
-    inst = os.environ["INSTANCE_CONNECTION_NAME"]
-    return psycopg.connect(host="/cloudsql/" + inst,
-        dbname=os.environ.get("DB_NAME", "riskmap"),
-        user=os.environ.get("DB_USER", "riskmap_app"),
-        password=os.environ["DB_PASS"])
+    # 풀에서 연결을 꺼내고, close() 호출 시 풀로 반환되도록 감싼다.
+    # (기존 코드가 conn = get_conn() / conn.close() 방식이라 이 형태를 유지)
+    cm = _get_pool().connection()
+    conn = cm.__enter__()
+    orig_close = conn.close
+    def _release(*a, **k):
+        try:
+            cm.__exit__(None, None, None)
+        except Exception:
+            orig_close()
+    conn.close = _release
+    return conn
 
 def require_key(x_api_key):
     expected = os.environ.get("API_KEY", "")
@@ -27,6 +50,20 @@ def edge_of(lat, lng):
     # [변경] 기존: 격자 id ("g%.3f_%.3f") -> 이제: 가장 가까운 실제 도로 엣지 id
     # 도로망에서 너무 멀면(300m+) None 저장 -> 집계/지도에서 제외됨
     return roads.nearest_edge_id(lat, lng)
+
+def reject_if_off_road(lat, lng):
+    """좌표를 두 번 거른다. 통과하면 확정된 엣지 id를 돌려준다."""
+    center_km = roads.distance_from_center_km(lat, lng)
+    if center_km > roads.MAX_CENTER_DISTANCE_KM:
+        raise HTTPException(status_code=400, detail=(
+            f"서비스 지역 밖입니다. 기준 좌표에서 {center_km:.1f}km "
+            f"(허용 {roads.MAX_CENTER_DISTANCE_KM}km)"))
+    edge_id, dist_m = roads.nearest_edge(lat, lng)
+    if edge_id is None or dist_m > roads.MAX_SNAP_DISTANCE_M:
+        raise HTTPException(status_code=400, detail=(
+            f"가까운 도로가 없습니다. 최단 거리 {dist_m:.1f}m "
+            f"(허용 {roads.MAX_SNAP_DISTANCE_M}m)"))
+    return edge_id
 
 def fetch_stats(cur, source):
     cur.execute("SELECT edge_id,p1_lat,p1_lng,p2_lat,p2_lng,event_count,avg_risk,grade,avg_ttc,updated_at "
@@ -99,11 +136,14 @@ def status():
             for r in cur.fetchall():
                 counts[r[0]] = r[1]
                 if r[2] and (last is None or r[2] > last): last = r[2]
-            return JSONResponse({"counts": counts, "last_updated": last.isoformat() if last else None})
+            cur.execute("SELECT source,count(*) FROM events WHERE edge_id IS NULL GROUP BY source")
+            unsnapped = {r[0]: r[1] for r in cur.fetchall()}
+            return JSONResponse({"counts": counts, "unsnapped": unsnapped,
+                                 "last_updated": last.isoformat() if last else None})
         finally:
             conn.close()
     except Exception as ex:
-        print("DB error:", ex); return JSONResponse({"counts": {}, "last_updated": None})
+        print("DB error:", ex); return JSONResponse({"counts": {}, "unsnapped": {}, "last_updated": None})
 
 class EventIn(BaseModel):
     event_uid: str
@@ -121,6 +161,7 @@ class EventIn(BaseModel):
 @app.post("/api/events")
 def add_event(ev: EventIn, x_api_key: str = Header(default="")):
     require_key(x_api_key)
+    edge_id = reject_if_off_road(ev.lat, ev.lng)
     ttc = None if (ev.ttc is not None and ev.ttc >= 9999) else ev.ttc
     conn = get_conn()
     try:
@@ -130,7 +171,7 @@ def add_event(ev: EventIn, x_api_key: str = Header(default="")):
                     "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,COALESCE(%s::timestamptz,now())) "
                     "ON CONFLICT (event_uid) DO NOTHING",
                     (ev.event_uid, ev.source, ev.device_id, ev.scenario_id, ev.lat, ev.lng,
-                     edge_of(ev.lat, ev.lng), ev.risk, ttc, ev.distance_m, ev.zone_id, ev.occurred_at))
+                     edge_id, ev.risk, ttc, ev.distance_m, ev.zone_id, ev.occurred_at))
         inserted = cur.rowcount; conn.commit()
         return {"ok": True, "inserted": inserted}
     finally:

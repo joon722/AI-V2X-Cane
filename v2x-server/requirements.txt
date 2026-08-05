@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
-psycopg[binary]
+psycopg[binary,pool]
 google-cloud-storage

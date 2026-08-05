@@ -10,11 +10,19 @@ roads.json만 교체하면 됨. (README 참고)
 """
 import json
 import math
+import os
 from pathlib import Path
 
 ROADS_PATH = Path(__file__).resolve().parent / "roads.json"
 
 _LAT_TO_M = 110_540.0  # 위도 1도 ≈ 110.54km
+
+# [변경] 스냅 상한을 300m -> 50m. 상도동 도로 밀도면 300m 안에는 거의 항상
+# 도로가 있어서 사실상 아무것도 걸러지지 않았다. 실측 GPS 오차는 σ≈2m.
+MAX_SNAP_DISTANCE_M = float(os.environ.get("MAX_SNAP_DISTANCE_M", "50"))
+# [변경] 서비스 지역 밖 좌표를 먼저 거른다. 실내 fallback 좌표(37.0/127.0)처럼
+# 수십 km 떨어진 값이 들어와도 스냅만으로는 "먼 도로"인지 구분이 안 된다.
+MAX_CENTER_DISTANCE_KM = float(os.environ.get("MAX_CENTER_DISTANCE_KM", "5"))
 
 
 class _Edge:
@@ -34,7 +42,9 @@ def _load():
 
     # 도로망 데이터 자체의 중심 위도를 기준으로 경도->미터 변환 계수 계산
     lats = [p[0] for r in roads for p in r["points"]]
+    lngs = [p[1] for r in roads for p in r["points"]]
     center_lat = (min(lats) + max(lats)) / 2
+    center_lng = (min(lngs) + max(lngs)) / 2  # [변경] 서비스 지역 판정 기준점
     lng_to_m = 111_320.0 * math.cos(math.radians(center_lat))
 
     edges = []
@@ -44,10 +54,10 @@ def _load():
             p1 = (pts[i][0], pts[i][1])
             p2 = (pts[i + 1][0], pts[i + 1][1])
             edges.append(_Edge(f"{road['id']}_{i}", p1, p2, lng_to_m))
-    return edges, lng_to_m
+    return edges, lng_to_m, (center_lat, center_lng)
 
 
-_EDGES, _LNG_TO_M = _load()
+_EDGES, _LNG_TO_M, _CENTER = _load()
 _EDGES_BY_ID = {e.id: e for e in _EDGES}
 
 
@@ -61,18 +71,31 @@ def _dist_sq(px, py, ax, ay, bx, by):
     return (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2
 
 
-def nearest_edge_id(lat: float, lng: float):
-    """가장 가까운 도로 엣지 id. 도로망에서 300m 이상 벗어난 좌표는 None
-    (엉뚱한 지역 좌표가 지도에 이상하게 찍히는 것을 방지)"""
+def nearest_edge(lat: float, lng: float):
+    """[변경] 가장 가까운 엣지 id와 그 거리(m)를 함께 반환. 상한 판정은 부르는
+    쪽에서 한다 — 거부할 때 "몇 m 떨어졌다"를 응답에 담아야 원인을 알 수 있다.
+    도로망이 비어 있으면 (None, inf)."""
     px, py = lng * _LNG_TO_M, lat * _LAT_TO_M
     best_id, best_d = None, math.inf
     for e in _EDGES:
         d = _dist_sq(px, py, e.x1, e.y1, e.x2, e.y2)
         if d < best_d:
             best_d, best_id = d, e.id
-    if best_d > 300.0 ** 2:
-        return None
-    return best_id
+    return best_id, math.sqrt(best_d)
+
+
+def distance_from_center_km(lat: float, lng: float) -> float:
+    """[변경] 도로망 중심에서의 거리(km). 서비스 지역 밖 좌표를 거르는 데 쓴다."""
+    dx = (lng - _CENTER[1]) * _LNG_TO_M
+    dy = (lat - _CENTER[0]) * _LAT_TO_M
+    return math.hypot(dx, dy) / 1000.0
+
+
+def nearest_edge_id(lat: float, lng: float):
+    """가장 가까운 도로 엣지 id. 상한을 넘게 벗어난 좌표는 None
+    (엉뚱한 지역 좌표가 지도에 이상하게 찍히는 것을 방지)"""
+    edge_id, dist_m = nearest_edge(lat, lng)
+    return edge_id if dist_m <= MAX_SNAP_DISTANCE_M else None
 
 
 def get_edge_points(edge_id: str):
