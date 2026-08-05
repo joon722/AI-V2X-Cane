@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>V2X 보행 위험지도</title>
-<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
   #map { width: 100%; height: 100vh; }
@@ -99,7 +99,7 @@
   <div id="d-rows"></div>
 </div>
 
-<script src="/vendor/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const COLORS = { 0: "#22c55e", 1: "#eab308", 2: "#f97316", 3: "#ef4444" };
 const GRADE_LABELS = { 0: "안전", 1: "주의", 2: "위험", 3: "매우 위험" };
