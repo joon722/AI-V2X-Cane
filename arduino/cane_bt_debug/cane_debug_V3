@@ -138,6 +138,9 @@
 #define CANE_HEADING_VALID_TIMEOUT_MS 1500UL
 
 // ===== 차량 상태만 받을 때 사용하는 예비 CPA 위험판정 =====
+// 차량이 RSSI+상대GPS로 직접 판정하므로 지팡이의 GPS 단독 fallback은 끈다.
+// 이 값을 1로 바꾸면 예전 GPS 단독 예비판정을 다시 사용할 수 있다.
+#define ENABLE_CANE_LOCAL_GPS_RISK_FALLBACK 0
 #define MIN_PREDICT_VEHICLE_SPEED_MPS 0.50f
 #define MIN_PREDICT_CANE_SPEED_MPS 0.25f
 #define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
@@ -246,6 +249,10 @@ portMUX_TYPE rssiMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t currentRisk = 255;
 uint32_t lastRiskMs = 0;
 uint16_t lastRiskSeq = 0;
+
+// USB 시리얼 1/2/3 입력 시 5초 동안 진동/부저 패턴을 강제시험한다.
+uint8_t manualOutputTestRisk = RISK_SAFE;
+uint32_t manualOutputTestUntilMs = 0;
 
 // 출처별 위험 값. 마지막에 도착한 값이 무조건 덮어쓰지 않도록
 // 차량 직접 계산과 RSU(Jetson) 값을 따로 저장했다가 max로 병합한다.
@@ -968,6 +975,15 @@ uint8_t calculateRiskFromVehicle(
 }
 
 void applyRisk(uint8_t risk) {
+  bool manualTestActive =
+    manualOutputTestUntilMs > 0 &&
+    (int32_t)(manualOutputTestUntilMs - millis()) > 0;
+
+  // 자체시험 중에는 수신 패킷이 시험 출력을 SAFE로 덮지 못하게 한다.
+  if (manualTestActive && risk != manualOutputTestRisk) {
+    return;
+  }
+
   // 알 수 없는 위험 단계는 안전 상태로 처리.
   if (risk > RISK_DANGER) {
     risk = RISK_SAFE;
@@ -1171,6 +1187,13 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
     );
     return;
   }
+
+#if !ENABLE_CANE_LOCAL_GPS_RISK_FALLBACK
+  // 독립 GPS 두 개의 상대 바이어스로 인한 오경보를 막는다.
+  // 직접 위험 패킷이 없을 때는 SAFE로 두고 차량/RSU 판정을 기다린다.
+  applyRisk(RISK_SAFE);
+  return;
+#endif
 
   // 직접 위험 패킷이 없을 때만 지팡이 자체 계산을 예비용으로 수행.
   if (!vehicleMsg.gps_valid ||
@@ -1589,6 +1612,36 @@ void sendBtTelemetry() {
 }
 #endif
 
+void handleCaneSerialCommands() {
+  while (Serial.available() > 0) {
+    char command = (char)Serial.read();
+
+    if (command >= '1' && command <= '3') {
+      manualOutputTestRisk = (uint8_t)(command - '0');
+      manualOutputTestUntilMs = millis() + 5000UL;
+      applyRisk(manualOutputTestRisk);
+      Serial.printf(
+        "[ACT TEST] risk=%u for 5s\n",
+        manualOutputTestRisk
+      );
+    }
+    else if (command == '0') {
+      manualOutputTestUntilMs = 0;
+      manualOutputTestRisk = RISK_SAFE;
+      applyRisk(RISK_SAFE);
+      Serial.println("[ACT TEST] stopped");
+    }
+  }
+
+  if (manualOutputTestUntilMs > 0 &&
+      (int32_t)(millis() - manualOutputTestUntilMs) >= 0) {
+    manualOutputTestUntilMs = 0;
+    manualOutputTestRisk = RISK_SAFE;
+    applyRisk(RISK_SAFE);
+    Serial.println("[ACT TEST] complete -> SAFE");
+  }
+}
+
 void setup() {
   forceOutputsOff();
   Serial.begin(115200);
@@ -1616,6 +1669,8 @@ void setup() {
 }
 
 void loop() {
+  handleCaneSerialCommands();
+
   // 현재 위험 단계에 맞춰 진동과 부저 패턴을 계속 갱신.
   updateActuators();
 
