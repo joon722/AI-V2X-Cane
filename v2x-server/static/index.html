@@ -72,9 +72,9 @@
 <div id="panel">
   <h1>V2X 보행 위험지도</h1>
   <div class="tabs">
-    <button id="b-live" class="on" onclick="setSource('live')">실측</button>
-    <button id="b-sumo" onclick="setSource('sumo')">시뮬</button>
-    <button id="b-combined" onclick="setSource('combined')">종합</button>
+    <button id="b-live" class="on" onclick="setSource('live')">예측</button>
+    <button id="b-sumo" onclick="setSource('sumo')">시나리오</button>
+    <button id="b-combined" onclick="setSource('combined')">통합</button>
   </div>
   <select id="minGrade" onchange="loadSegments()">
     <option value="0">전체 등급 보기</option>
@@ -91,7 +91,6 @@
   <div><span class="legend-swatch" style="background:#eab308"></span>1 · 주의</div>
   <div><span class="legend-swatch" style="background:#f97316"></span>2 · 위험</div>
   <div><span class="legend-swatch" style="background:#ef4444"></span>3 · 매우 위험</div>
-  <div style="margin-top:4px"><span class="legend-swatch" style="background:#9b59b6;border-radius:50%"></span>위험구역</div>
 </div>
 
 <div id="detail-card">
@@ -105,7 +104,7 @@
 const COLORS = { 0: "#22c55e", 1: "#eab308", 2: "#f97316", 3: "#ef4444" };
 const GRADE_LABELS = { 0: "안전", 1: "주의", 2: "위험", 3: "매우 위험" };
 const AGR = { both: "실측·시뮬 모두 위험", live_only: "실측만 위험", sumo_only: "시뮬만 위험" };
-const SRC = { live: "실측", sumo: "시뮬레이션", combined: "종합" };
+const SRC = { live: "예측", sumo: "시나리오", combined: "통합" };
 
 let source = "live";
 const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
@@ -159,7 +158,7 @@ function loadSegments() {
   fetch("/api/segments?source=" + source).then(r => r.json()).then(all => {
     const rows = (all || []).filter(s => s.grade >= minG);
     if (rows.length === 0) {
-      st.textContent = "표시할 데이터가 없습니다.";
+      st.textContent = "해당 데이터는 준비 중입니다.";
       return;
     }
     rows.forEach(s => {
@@ -190,7 +189,7 @@ function loadZones() {
   }).catch(() => {});
 }
 
-loadZones();
+// loadZones();
 loadSegments();
 </script>
 
