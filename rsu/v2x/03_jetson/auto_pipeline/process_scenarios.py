@@ -37,7 +37,12 @@ from risk_inference_onnx import (  # noqa: E402
     normalize_features,
     softmax,
 )
-from step7_risk import calculate_risk_score, calculate_ttc  # noqa: E402
+from step7_risk import (  # noqa: E402
+    calculate_risk_score,
+    calculate_ttc,
+    classify_risk_level,
+    dcpa_gate,
+)
 
 # ---------------------------------------------------------
 # 설정
@@ -143,6 +148,24 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
     df["zone_base_risk"] = ZONE_BASE_RISK
     df["ts_ms"] = (df["timestep_time"] * 1000).astype(int)
 
+    # DCPA(최근접 예상 거리) 계산 — 스쳐 지나가는 차 오경보 억제용.
+    # 상대 위치/속도 벡터로 "이대로 가면 얼마나 가까워지는가"를 예측한다.
+    # step7의 DCPA 게이트(팀 로직)를 그대로 재사용해 억제 계수를 만든다.
+    rx = df["veh_x"] - df["ped_x"]
+    ry = df["veh_y"] - df["ped_y"]
+    vid = df["vehicle_id"]
+    dvx = rx.groupby(vid, sort=False).diff() / dt
+    dvy = ry.groupby(vid, sort=False).diff() / dt
+    v2 = dvx ** 2 + dvy ** 2
+    t_cpa = -(rx * dvx + ry * dvy) / v2.where(v2 > 1e-6)
+    cpa_x = rx + dvx * t_cpa
+    cpa_y = ry + dvy * t_cpa
+    dcpa = np.sqrt(cpa_x ** 2 + cpa_y ** 2)
+    # 멀어지는 중(t_cpa<0)이거나 속도 정보가 없으면 현재 거리를 그대로 사용
+    df["dcpa_m"] = dcpa.where((t_cpa > 0) & v2.notna(),
+                              df["distance_m"]).fillna(df["distance_m"])
+    df["gate_factor"] = [dcpa_gate(d) for d in df["dcpa_m"]]
+
     # 실제 보행자 좌표는 기록용으로 남기고, 모델 입력용 좌표는 학습 상수로 고정
     df["ped_x_real"] = df["ped_x"]
     df["ped_y_real"] = df["ped_y"]
@@ -177,8 +200,15 @@ def run_inference(session, df, feature_columns, mean, scale, seq_len):
         probs = softmax(logits)
 
         result = group.iloc[seq_len - 1:].copy()
-        result["onnx_risk_level"] = np.argmax(probs, axis=1).astype(np.int64)
+        raw_level = np.argmax(probs, axis=1).astype(np.int64)
+        result["onnx_risk_level_raw"] = raw_level
         result["onnx_confidence"] = np.max(probs, axis=1)
+        # DCPA 게이트 적용: 스쳐 갈 차(빗나감 예측)는 레벨을 낮춘다.
+        # 레벨을 팀 채점표의 구간 대표 점수로 되돌려 게이트 계수를 곱한 뒤
+        # 팀 기준(70/45/20)으로 다시 분류 — 게이트는 절대 레벨을 올리지 않음.
+        rep_score = np.array([10.0, 32.0, 57.0, 85.0])[raw_level]
+        gated = rep_score * result["gate_factor"].to_numpy()
+        result["onnx_risk_level"] = [classify_risk_level(s) for s in gated]
         results.append(result)
 
     if skipped:
@@ -220,8 +250,8 @@ def process_scenario(scenario_dir, session, feature_columns, mean, scale,
     RESULT_DIR.mkdir(exist_ok=True)
     result_csv = RESULT_DIR / f"{scenario_dir.name}_result.csv"
     out_cols = ["ts_ms", "timestep_time", "vehicle_id"] + feature_columns + \
-               ["ped_x_real", "ped_y_real", "onnx_risk_level",
-                "onnx_confidence"]
+               ["ped_x_real", "ped_y_real", "dcpa_m", "gate_factor",
+                "onnx_risk_level_raw", "onnx_risk_level", "onnx_confidence"]
     result[out_cols].to_csv(result_csv, index=False)
 
     counts = result["onnx_risk_level"].value_counts().sort_index()
