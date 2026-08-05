@@ -1,0 +1,17 @@
+<configuration>
+
+    <input>
+        <net-file value="net_clean.net.xml"/>
+        <route-files value="route.rou.xml,pedestrian.rou.xml"/>
+    </input>
+
+    <time>
+        <begin value="0"/>
+        <end value="200"/>
+    </time>
+
+    <output>
+        <fcd-output value="fcd.xml"/>
+    </output>
+
+</configuration>
