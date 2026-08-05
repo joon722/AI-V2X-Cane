@@ -103,7 +103,9 @@
 #define GPS_OUTLIER_BASE_M 5.0f
 #define GPS_FILTER_ALPHA 0.40f
 #define GPS_FILTER_BETA 0.08f
-#define GPS_RELOCALIZE_AFTER_REJECTS 3
+// NEO-6M 5Hz 기준: 0.2초 x 15회 = 약 3초 동안 같은 새 위치가
+// 반복될 때만 필터 기준 위치를 재설정한다.
+#define GPS_RELOCALIZE_AFTER_REJECTS 15
 #define GPS_FILTER_RESET_GAP_MS 5000UL
 #define GPS_PREDICTION_MAX_MS 1200UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
@@ -603,10 +605,70 @@ void updateActuators() {
 #endif
 }
 
+void sendGpsUbxCommand(uint8_t msgClass,
+                       uint8_t msgId,
+                       const uint8_t *payload,
+                       uint16_t payloadLength) {
+  // 현재 사용하는 UBX 페이로드는 최대 6바이트이다.
+  uint8_t packet[32];
+  if (payloadLength > sizeof(packet) - 8) return;
+
+  packet[0] = 0xB5;
+  packet[1] = 0x62;
+  packet[2] = msgClass;
+  packet[3] = msgId;
+  packet[4] = payloadLength & 0xFF;
+  packet[5] = payloadLength >> 8;
+  memcpy(&packet[6], payload, payloadLength);
+
+  uint8_t ckA = 0;
+  uint8_t ckB = 0;
+  for (uint16_t i = 2; i < 6 + payloadLength; i++) {
+    ckA += packet[i];
+    ckB += ckA;
+  }
+
+  packet[6 + payloadLength] = ckA;
+  packet[7 + payloadLength] = ckB;
+  gpsSerial.write(packet, payloadLength + 8);
+  gpsSerial.flush();
+}
+
+void configureNeo6m5Hz() {
+  // 9600bps에서 5Hz NMEA 전체를 보내면 대역폭이 부족할 수 있다.
+  // TinyGPSPlus에 필요한 GGA(위성 수/HDOP)와 RMC(위치/속도/방향)만 남긴다.
+  static const uint8_t nmeaMessageRates[][3] = {
+    {0xF0, 0x00, 1},  // GGA ON
+    {0xF0, 0x01, 0},  // GLL OFF
+    {0xF0, 0x02, 0},  // GSA OFF
+    {0xF0, 0x03, 0},  // GSV OFF
+    {0xF0, 0x04, 1},  // RMC ON
+    {0xF0, 0x05, 0}   // VTG OFF
+  };
+
+  for (size_t i = 0;
+       i < sizeof(nmeaMessageRates) / sizeof(nmeaMessageRates[0]);
+       i++) {
+    sendGpsUbxCommand(0x06, 0x01, nmeaMessageRates[i], 3);
+    delay(50);
+  }
+
+  // UBX-CFG-RATE: measRate=200ms, navRate=1, timeRef=GPS time.
+  static const uint8_t rate5Hz[] = {
+    0xC8, 0x00,
+    0x01, 0x00,
+    0x01, 0x00
+  };
+  sendGpsUbxCommand(0x06, 0x08, rate5Hz, sizeof(rate5Hz));
+  delay(200);
+}
+
 void setupGps() {
 #if USE_GPS
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
-  Serial.println("[GPS] ready");
+  delay(500);
+  configureNeo6m5Hz();
+  Serial.println("[GPS] NEO-6M configured: 5Hz, GGA+RMC, 9600bps");
   Serial.println("[GPS] GPS TX -> ESP32 GPIO16 RX2");
   Serial.println("[GPS] GPS RX -> ESP32 GPIO17 TX2");
 #endif
@@ -635,8 +697,9 @@ void readGps() {
 
   uint32_t now = millis();
 
-  // 같은 fix를 loop 속도로 반복 처리하지 않고 새 NMEA 위치일 때만 보정.
-  if (gps.location.isUpdated()) {
+  // GGA와 RMC에 둘 다 위치가 있으므로 RMC에서 속도와 함께
+  // 갱신된 위치만 처리해 1회의 GPS fix를 두 번 카운트하지 않는다.
+  if (gps.location.isUpdated() && gps.speed.isUpdated()) {
     rawGpsLat = gps.location.lat();
     rawGpsLng = gps.location.lng();
     rawGpsSatellites =
