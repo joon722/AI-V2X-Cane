@@ -104,6 +104,35 @@ const char *V2X_AP_PASSWORD = "12345678";
 // ESP-NOW RSSI 평활 계수. 작을수록 순간 흔들림을 더 강하게 줄인다.
 #define CANE_RSSI_FILTER_ALPHA 0.20f
 
+// ===== 2026-08-05 RSSI 실측 보정 =====
+// 1/3/5/8/10m LOS 중앙값(차량측): -51.0/-65.2/-63.5/-72.7/-76.7dBm.
+// 3m와 5m가 역전되므로 RSSI를 정확한 거리계로 쓰지 않고,
+// 구간 + 히스테리시스 + 유지시간으로만 사용한다.
+#define RSSI_FRESH_TIMEOUT_MS 1000UL
+#define RSSI_CLOSER_CONFIRM_MS 800UL
+#define RSSI_FARTHER_CONFIRM_MS 2500UL
+#define RSSI_VERY_CLOSE_ENTER_DBM (-58.0f)
+#define RSSI_VERY_CLOSE_EXIT_DBM  (-62.0f)
+#define RSSI_CLOSE_ENTER_DBM      (-69.0f)
+#define RSSI_CLOSE_EXIT_DBM       (-73.0f)
+#define RSSI_APPROACH_ENTER_DBM   (-75.0f)
+#define RSSI_APPROACH_EXIT_DBM    (-79.0f)
+
+// RSSI 연속 거리 추정은 CPA 벡터의 크기에만 사용한다.
+// 실측 회귀: RSSI = -51.7 - 10 * 2.42 * log10(distance).
+#define RSSI_AT_1M_DBM (-51.7f)
+#define RSSI_PATH_LOSS_EXPONENT 2.42f
+#define RSSI_DISTANCE_MIN_M 0.8f
+#define RSSI_DISTANCE_MAX_M 12.0f
+
+// 두 GPS 안테나를 나란히 놓고 BOOT 버튼을 누르면 상대좌표 영점을 잡는다.
+// 보정 전/보정 중에는 GPS 단독 위험판정을 금지한다.
+#define REL_CAL_BUTTON_PIN 0
+#define REL_CAL_STILL_TIME_MS 8000UL
+#define REL_CAL_TIMEOUT_MS 30000UL
+#define REL_CAL_MIN_SAMPLES 40
+#define REL_CAL_MAX_OFFSET_SPREAD_M 5.0f
+
 // GPS 품질/이상치 필터 설정: RC카 기준.
 #define GPS_MIN_SATELLITES 4
 #define GPS_MAX_HDOP 3.0f
@@ -121,7 +150,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define GPS_STATIONARY_BETA 0.01f
 
 // GPS 진행 방향을 신뢰하기 위한 최소 차량 속도.
-#define MIN_VALID_HEADING_SPEED_MPS 0.5f
+#define MIN_VALID_HEADING_SPEED_MPS 0.40f
 
 // ===== 2026-08-03~05 차량 실측 방향 보정 =====
 // GPS course는 실제 이동 경로(전진/후진 포함), IMU는 차체 방향과
@@ -186,8 +215,8 @@ const char *V2X_AP_PASSWORD = "12345678";
 
 // 중력 성분을 제거한 선형가속도 크기가 이 값을 넘으면 충격으로 판단.
 // 너무 민감하면 올리고, 둔하면 낮추면 됨.
-// ±8g 실측 일반 노면 최대 32.31m/s². 약 24% 여유를 둔다.
-#define IMPACT_THRESHOLD_MPS2 40.0f
+// 일반 노면 실측 중 순간 최대 73.56m/s²까지 관측되어 85로 올린다.
+#define IMPACT_THRESHOLD_MPS2 85.0f
 #define IMPACT_COOLDOWN_MS 5000UL
 
 #define TRACK_CAUTION_FILE "/0001.mp3"
@@ -233,7 +262,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 #endif
 
 // ===== 경로교차(CPA) 위험판정 =====
-#define MIN_PREDICT_VEHICLE_SPEED_MPS 0.50f
+#define MIN_PREDICT_VEHICLE_SPEED_MPS 0.40f
 #define MIN_PREDICT_CANE_SPEED_MPS 0.25f
 #define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
 #define CPA_DANGER_DISTANCE_M 1.5f
@@ -326,6 +355,34 @@ float filteredCaneRssiDbm = -127.0f;
 bool hasCaneRssi = false;
 uint32_t caneRssiSampleCount = 0;
 uint32_t lastCaneRssiMs = 0;
+
+enum RssiProximityZone : uint8_t {
+  RSSI_ZONE_UNKNOWN = 0,
+  RSSI_ZONE_FAR = 1,
+  RSSI_ZONE_APPROACH = 2,
+  RSSI_ZONE_CLOSE = 3,
+  RSSI_ZONE_VERY_CLOSE = 4
+};
+
+uint8_t rssiProximityZone = RSSI_ZONE_UNKNOWN;
+uint8_t rssiCandidateZone = RSSI_ZONE_UNKNOWN;
+uint32_t rssiCandidateSinceMs = 0;
+float rssiEstimatedDistanceM = -1.0f;
+
+typedef struct {
+  bool active;
+  bool valid;
+  double sumEastM;
+  double sumNorthM;
+  float biasEastM;
+  float biasNorthM;
+  uint32_t requestedMs;
+  uint32_t firstSampleMs;
+  uint32_t lastProgressLogMs;
+  uint16_t sampleCount;
+} RelativeGpsCalibration;
+
+RelativeGpsCalibration relativeGpsCalibration = {};
 
 double vehicleLat = 0.0;
 double vehicleLng = 0.0;
@@ -704,6 +761,301 @@ void addPeerIfNeeded(const uint8_t *mac, const char *name) {
                 result == ESP_OK ? "OK" : "FAIL");
 }
 
+const char *rssiZoneName(uint8_t zone) {
+  switch (zone) {
+    case RSSI_ZONE_FAR: return "FAR";
+    case RSSI_ZONE_APPROACH: return "APPROACH";
+    case RSSI_ZONE_CLOSE: return "CLOSE";
+    case RSSI_ZONE_VERY_CLOSE: return "VERY_CLOSE";
+    default: return "UNKNOWN";
+  }
+}
+
+uint8_t baseRssiZone(float rssiDbm) {
+  if (rssiDbm >= RSSI_VERY_CLOSE_ENTER_DBM) {
+    return RSSI_ZONE_VERY_CLOSE;
+  }
+  if (rssiDbm >= RSSI_CLOSE_ENTER_DBM) {
+    return RSSI_ZONE_CLOSE;
+  }
+  if (rssiDbm >= RSSI_APPROACH_ENTER_DBM) {
+    return RSSI_ZONE_APPROACH;
+  }
+  return RSSI_ZONE_FAR;
+}
+
+float estimateDistanceFromRssi(float rssiDbm) {
+  float exponent =
+    (RSSI_AT_1M_DBM - rssiDbm) /
+    (10.0f * RSSI_PATH_LOSS_EXPONENT);
+  float distanceM = powf(10.0f, exponent);
+  return constrain(
+    distanceM,
+    RSSI_DISTANCE_MIN_M,
+    RSSI_DISTANCE_MAX_M
+  );
+}
+
+bool caneRssiIsFresh() {
+  return hasCaneRssi &&
+         lastCaneRssiMs > 0 &&
+         millis() - lastCaneRssiMs <= RSSI_FRESH_TIMEOUT_MS;
+}
+
+void updateRssiProximity() {
+  float rssiDbm;
+  bool valid;
+  uint32_t lastMs;
+
+  portENTER_CRITICAL(&caneMux);
+  rssiDbm = filteredCaneRssiDbm;
+  valid = hasCaneRssi;
+  lastMs = lastCaneRssiMs;
+  portEXIT_CRITICAL(&caneMux);
+
+  uint32_t now = millis();
+  if (!valid || lastMs == 0 ||
+      now - lastMs > RSSI_FRESH_TIMEOUT_MS) {
+    rssiEstimatedDistanceM = -1.0f;
+    rssiProximityZone = RSSI_ZONE_UNKNOWN;
+    rssiCandidateZone = RSSI_ZONE_UNKNOWN;
+    rssiCandidateSinceMs = 0;
+    return;
+  }
+
+  rssiEstimatedDistanceM = estimateDistanceFromRssi(rssiDbm);
+
+  uint8_t desiredZone = rssiProximityZone;
+  if (rssiProximityZone == RSSI_ZONE_UNKNOWN) {
+    desiredZone = baseRssiZone(rssiDbm);
+  }
+  else if (rssiProximityZone == RSSI_ZONE_FAR) {
+    if (rssiDbm >= RSSI_APPROACH_ENTER_DBM) {
+      desiredZone = baseRssiZone(rssiDbm);
+    }
+  }
+  else if (rssiProximityZone == RSSI_ZONE_APPROACH) {
+    if (rssiDbm >= RSSI_CLOSE_ENTER_DBM) {
+      desiredZone = baseRssiZone(rssiDbm);
+    } else if (rssiDbm <= RSSI_APPROACH_EXIT_DBM) {
+      desiredZone = RSSI_ZONE_FAR;
+    }
+  }
+  else if (rssiProximityZone == RSSI_ZONE_CLOSE) {
+    if (rssiDbm >= RSSI_VERY_CLOSE_ENTER_DBM) {
+      desiredZone = RSSI_ZONE_VERY_CLOSE;
+    } else if (rssiDbm <= RSSI_CLOSE_EXIT_DBM) {
+      desiredZone = baseRssiZone(rssiDbm);
+    }
+  }
+  else if (rssiProximityZone == RSSI_ZONE_VERY_CLOSE &&
+           rssiDbm <= RSSI_VERY_CLOSE_EXIT_DBM) {
+    desiredZone = baseRssiZone(rssiDbm);
+  }
+
+  if (desiredZone == rssiProximityZone) {
+    rssiCandidateZone = desiredZone;
+    rssiCandidateSinceMs = 0;
+    return;
+  }
+
+  if (desiredZone != rssiCandidateZone) {
+    rssiCandidateZone = desiredZone;
+    rssiCandidateSinceMs = now;
+    return;
+  }
+
+  uint32_t requiredMs =
+    desiredZone > rssiProximityZone
+      ? RSSI_CLOSER_CONFIRM_MS
+      : RSSI_FARTHER_CONFIRM_MS;
+
+  if (rssiCandidateSinceMs > 0 &&
+      now - rssiCandidateSinceMs >= requiredMs) {
+    Serial.printf(
+      "[RSSI ZONE] %s -> %s rssi=%.1f distance=%.1fm\n",
+      rssiZoneName(rssiProximityZone),
+      rssiZoneName(desiredZone),
+      rssiDbm,
+      rssiEstimatedDistanceM
+    );
+    rssiProximityZone = desiredZone;
+    rssiCandidateSinceMs = 0;
+  }
+}
+
+void calculateRawRelativeVector(
+  const v2x_status_message_t &cane,
+  float *outEastM,
+  float *outNorthM
+) {
+  float meanLatRad =
+    0.5f * ((float)vehicleLat + cane.latitude) * DEG_TO_RAD;
+
+  *outEastM =
+    (cane.longitude - (float)vehicleLng) *
+    111320.0f * cosf(meanLatRad);
+  *outNorthM =
+    (cane.latitude - (float)vehicleLat) * 111132.0f;
+}
+
+void resetRelativeCalibrationSamples() {
+  relativeGpsCalibration.sumEastM = 0.0;
+  relativeGpsCalibration.sumNorthM = 0.0;
+  relativeGpsCalibration.firstSampleMs = 0;
+  relativeGpsCalibration.sampleCount = 0;
+}
+
+void startRelativeGpsCalibration() {
+  relativeGpsCalibration.active = true;
+  relativeGpsCalibration.valid = false;
+  relativeGpsCalibration.requestedMs = millis();
+  relativeGpsCalibration.lastProgressLogMs = 0;
+  resetRelativeCalibrationSamples();
+  resetAllCaneRiskStates();
+
+  rawRiskLevel = RISK_SAFE;
+  stableRiskLevel = RISK_SAFE;
+  candidateRiskLevel = RISK_SAFE;
+  candidateRiskCount = 0;
+  lastRiskLevel = RISK_SAFE;
+  announceRisk(RISK_SAFE);
+
+  Serial.println(
+    "[REL CAL] started: keep both GPS antennas together and still for 8s"
+  );
+}
+
+void updateRelativeGpsCalibration(
+  const v2x_status_message_t &cane
+) {
+  if (!relativeGpsCalibration.active) return;
+
+  uint32_t now = millis();
+  if (now - relativeGpsCalibration.requestedMs >
+      REL_CAL_TIMEOUT_MS) {
+    relativeGpsCalibration.active = false;
+    resetRelativeCalibrationSamples();
+    Serial.println("[REL CAL] timeout -> calibration invalid");
+    return;
+  }
+
+  if (!vehicleGpsValid || !cane.gps_valid) {
+    resetRelativeCalibrationSamples();
+    return;
+  }
+
+  float rawEastM;
+  float rawNorthM;
+  calculateRawRelativeVector(cane, &rawEastM, &rawNorthM);
+  if (!isfinite(rawEastM) || !isfinite(rawNorthM)) return;
+
+  if (relativeGpsCalibration.sampleCount > 0) {
+    float meanEastM =
+      (float)(relativeGpsCalibration.sumEastM /
+              relativeGpsCalibration.sampleCount);
+    float meanNorthM =
+      (float)(relativeGpsCalibration.sumNorthM /
+              relativeGpsCalibration.sampleCount);
+    float spreadM = hypotf(
+      rawEastM - meanEastM,
+      rawNorthM - meanNorthM
+    );
+
+    if (spreadM > REL_CAL_MAX_OFFSET_SPREAD_M) {
+      Serial.printf(
+        "[REL CAL] offset moved %.1fm -> sample window restarted\n",
+        spreadM
+      );
+      resetRelativeCalibrationSamples();
+      return;
+    }
+  }
+
+  if (relativeGpsCalibration.firstSampleMs == 0) {
+    relativeGpsCalibration.firstSampleMs = now;
+  }
+
+  relativeGpsCalibration.sumEastM += rawEastM;
+  relativeGpsCalibration.sumNorthM += rawNorthM;
+  relativeGpsCalibration.sampleCount++;
+
+  if (relativeGpsCalibration.lastProgressLogMs == 0 ||
+      now - relativeGpsCalibration.lastProgressLogMs >= 1000UL) {
+    relativeGpsCalibration.lastProgressLogMs = now;
+    Serial.printf(
+      "[REL CAL] collecting %lus samples=%u offset=(%.1f,%.1f)m\n",
+      (unsigned long)((now - relativeGpsCalibration.firstSampleMs) / 1000UL),
+      relativeGpsCalibration.sampleCount,
+      rawEastM,
+      rawNorthM
+    );
+  }
+
+  bool enoughTime =
+    now - relativeGpsCalibration.firstSampleMs >=
+    REL_CAL_STILL_TIME_MS;
+  bool enoughSamples =
+    relativeGpsCalibration.sampleCount >= REL_CAL_MIN_SAMPLES;
+  if (!enoughTime || !enoughSamples) return;
+
+  relativeGpsCalibration.biasEastM =
+    (float)(relativeGpsCalibration.sumEastM /
+            relativeGpsCalibration.sampleCount);
+  relativeGpsCalibration.biasNorthM =
+    (float)(relativeGpsCalibration.sumNorthM /
+            relativeGpsCalibration.sampleCount);
+  relativeGpsCalibration.valid = true;
+  relativeGpsCalibration.active = false;
+
+  Serial.printf(
+    "[REL CAL] complete samples=%u bias=(%.2f,%.2f)m\n",
+    relativeGpsCalibration.sampleCount,
+    relativeGpsCalibration.biasEastM,
+    relativeGpsCalibration.biasNorthM
+  );
+}
+
+void handleVehicleSerialCommands() {
+  static bool previousButtonPressed = false;
+  static uint32_t lastButtonEventMs = 0;
+  uint32_t now = millis();
+
+  bool buttonPressed = digitalRead(REL_CAL_BUTTON_PIN) == LOW;
+  if (buttonPressed && !previousButtonPressed &&
+      now - lastButtonEventMs >= 500UL) {
+    lastButtonEventMs = now;
+    startRelativeGpsCalibration();
+  }
+  previousButtonPressed = buttonPressed;
+
+  while (Serial.available() > 0) {
+    char command = (char)Serial.read();
+    if (command == 'C' || command == 'c') {
+      startRelativeGpsCalibration();
+    }
+    else if (command == '1') {
+      playAudioFile(TRACK_CAUTION_FILE);
+      riskAudioPlayCount++;
+      lastPlayedRiskAudio = RISK_CAUTION;
+    }
+    else if (command == '2') {
+      playAudioFile(TRACK_WARNING_FILE);
+      riskAudioPlayCount++;
+      lastPlayedRiskAudio = RISK_WARNING;
+    }
+    else if (command == '3') {
+      playAudioFile(TRACK_DANGER_FILE);
+      riskAudioPlayCount++;
+      lastPlayedRiskAudio = RISK_DANGER;
+    }
+    else if (command == '4') {
+      playAudioFile(TRACK_IMPACT_FILE);
+      impactAudioPlayCount++;
+    }
+  }
+}
+
 // =====================
 // DFPlayer Mini
 // =====================
@@ -990,6 +1342,10 @@ void updateVehicleBodyHeading(uint32_t now, float dt) {
         now - lastVehicleMagAcceptedMs >
           VEHICLE_BODY_HEADING_TIMEOUT_MS) {
       vehicleBodyHeadingHasFix = false;
+      vehicleDriveModeKnown = false;
+      vehicleIsReversing = false;
+      candidateReversing = false;
+      driveModeCandidateCount = 0;
     }
   }
 }
@@ -1440,31 +1796,53 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
                               float *outBearing,
                               float *outHeadingError,
                               bool *outInVehiclePath) {
-  float avgLatRad =
-    0.5f * ((float)vehicleLat + cane.latitude) * DEG_TO_RAD;
+  *outDistance = rssiEstimatedDistanceM;
+  *outClosingSpeed = 0.0f;
+  *outTtc = 999.0f;
+  *outBearing = 0.0f;
+  *outHeadingError = 0.0f;
+  *outInVehiclePath = false;
 
-  // 차량 기준 지팡이의 동쪽/북쪽 상대위치(m).
-  float rx = (cane.longitude - (float)vehicleLng) *
-             111320.0f * cosf(avgLatRad);
-  float ry = (cane.latitude - (float)vehicleLat) * 111132.0f;
-  float distanceM = sqrtf(rx * rx + ry * ry);
+  // 보정 전 GPS 좌표만으로는 20~50m 상대 바이어스가 생겼으므로
+  // BOOT 영점보정과 최신 RSSI가 모두 있어야 CPA를 계산한다.
+  if (!relativeGpsCalibration.valid ||
+      relativeGpsCalibration.active ||
+      !caneRssiIsFresh() ||
+      rssiProximityZone == RSSI_ZONE_UNKNOWN ||
+      rssiProximityZone == RSSI_ZONE_FAR ||
+      rssiEstimatedDistanceM <= 0.0f) {
+    return RISK_SAFE;
+  }
 
-  float bearing = bearingDegrees(vehicleLat,
-                                 vehicleLng,
-                                 cane.latitude,
-                                 cane.longitude);
+  float rx;
+  float ry;
+  calculateRawRelativeVector(cane, &rx, &ry);
+  rx -= relativeGpsCalibration.biasEastM;
+  ry -= relativeGpsCalibration.biasNorthM;
 
+  // GPS 영점보정 벡터에서는 방향만 취하고, 벡터 크기는 RSSI 거리로 바꾼다.
+  float correctedGpsDistanceM = hypotf(rx, ry);
+  if (!isfinite(correctedGpsDistanceM) ||
+      correctedGpsDistanceM < 0.75f) {
+    return RISK_SAFE;
+  }
+
+  float vectorScale =
+    rssiEstimatedDistanceM / correctedGpsDistanceM;
+  rx *= vectorScale;
+  ry *= vectorScale;
+
+  float distanceM = rssiEstimatedDistanceM;
+  float bearing = normalizeHeading(
+    atan2f(rx, ry) * RAD_TO_DEG
+  );
   float headingError =
     angleDifferenceDegrees(vehicleHeading, bearing);
 
   *outDistance = distanceM;
-  *outClosingSpeed = 0.0f;
-  *outTtc = 999.0f;
   *outBearing = bearing;
   *outHeadingError = headingError;
-  *outInVehiclePath = false;
 
-  // RSSI/UWB 결합 전의 GPS 단독 즉시경고는 사실상 비활성화한다.
   if (distanceM < EMERGENCY_DISTANCE_M) {
     *outInVehiclePath = true;
     return RISK_DANGER;
@@ -1732,6 +2110,9 @@ void processLatestCanePacket() {
   newCanePacket = false;
   portEXIT_CRITICAL(&caneMux);
 
+  updateRssiProximity();
+  updateRelativeGpsCalibration(cane);
+
   if (!vehicleGpsValid || !cane.gps_valid) {
     rawRiskLevel = RISK_SAFE;
     stableRiskLevel = RISK_SAFE;
@@ -1965,6 +2346,12 @@ void sendUdpTelemetry() {
     "RSSI평활:%.1f\n"
     "RSSI샘플:%lu\n"
     "RSSI경과ms:%ld\n"
+    "RSSI구간:%u\n"
+    "RSSI거리:%.2f\n"
+    "상대보정:%u\n"
+    "상대보정중:%u\n"
+    "보정동쪽:%.2f\n"
+    "보정북쪽:%.2f\n"
     "위험송신:%lu\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
@@ -2026,6 +2413,12 @@ void sendUdpTelemetry() {
     rssiFilteredSnapshot,
     (unsigned long)rssiSampleCountSnapshot,
     rssiAgeMs,
+    rssiProximityZone,
+    rssiEstimatedDistanceM,
+    relativeGpsCalibration.valid ? 1u : 0u,
+    relativeGpsCalibration.active ? 1u : 0u,
+    relativeGpsCalibration.biasEastM,
+    relativeGpsCalibration.biasNorthM,
     (unsigned long)riskSendCount
   );
 
@@ -2065,6 +2458,7 @@ void setup() {
 
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
+  pinMode(REL_CAL_BUTTON_PIN, INPUT_PULLUP);
 
   Serial.println("\n=== V2X Vehicle + GPS + ICM-20948 + DFPlayer Pro ===");
   Serial.printf("[CONFIG] risk distance: %.1f / %.1f / %.1f m\n",
@@ -2087,6 +2481,7 @@ void setup() {
 }
 
 void loop() {
+  handleVehicleSerialCommands();
   readGps();
   readImu();
   updateVehiclePathHeading();
@@ -2125,8 +2520,12 @@ if (now - lastBtCheckMs >= 1000UL) {
 }
 #endif
 
+  // 상대 GPS 영점보정 중에는 빠르게 점멸한다.
+  if (relativeGpsCalibration.active) {
+    digitalWrite(LED_PIN, (now / 150UL) % 2);
+  }
   // 최근 지팡이 패킷이 있으면 점등, 없으면 천천히 점멸.
-  if (lastCaneRxMs > 0 && now - lastCaneRxMs < 1000UL) {
+  else if (lastCaneRxMs > 0 && now - lastCaneRxMs < 1000UL) {
     digitalWrite(LED_PIN, HIGH);
   } else {
     digitalWrite(LED_PIN, (now / 500UL) % 2);
