@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""인수인계 겸 현황 평가 문서를 PDF로 만든다.
+
+다음 작업 세션이 이 문서 하나로 맥락을 복원할 수 있어야 하고, 팀이 읽고
+역할을 나눌 수 있어야 한다. 그래서 세 가지를 함께 담는다.
+
+  현황과 평가   무엇이 되어 있고 어디까지 믿을 수 있는가
+  조율 사항     팀원 작업과 겹치는 지점, 결정이 필요한 것
+  역할과 일정   누가 무엇을, 언제까지
+"""
+
+from pathlib import Path
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import (PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+                                Table, TableStyle)
+
+HERE = Path(__file__).parent
+OUT = HERE / "인수인계_2026-08-06_TTC연구와_AI젯슨연동.pdf"
+
+pdfmetrics.registerFont(TTFont("Malgun", "C:/Windows/Fonts/malgun.ttf"))
+pdfmetrics.registerFont(TTFont("MalgunBd", "C:/Windows/Fonts/malgunbd.ttf"))
+
+B = getSampleStyleSheet()
+S = {
+    "title": ParagraphStyle("t", parent=B["Title"], fontName="MalgunBd",
+                            fontSize=18, leading=24, spaceAfter=3),
+    "sub": ParagraphStyle("s", parent=B["Normal"], fontName="Malgun", fontSize=10,
+                          leading=14, alignment=TA_CENTER,
+                          textColor=colors.HexColor("#555"), spaceAfter=13),
+    "h1": ParagraphStyle("h1", parent=B["Heading1"], fontName="MalgunBd",
+                         fontSize=13, leading=18, spaceBefore=14, spaceAfter=6,
+                         textColor=colors.HexColor("#1f4e79")),
+    "h2": ParagraphStyle("h2", parent=B["Heading2"], fontName="MalgunBd",
+                         fontSize=11, leading=15, spaceBefore=9, spaceAfter=4,
+                         textColor=colors.HexColor("#2f6ea5")),
+    "body": ParagraphStyle("b", parent=B["Normal"], fontName="Malgun", fontSize=9.6,
+                           leading=15, alignment=TA_JUSTIFY, spaceAfter=6),
+    "box": ParagraphStyle("bx", parent=B["Normal"], fontName="Malgun", fontSize=9.4,
+                          leading=14.5, alignment=TA_JUSTIFY, leftIndent=9,
+                          rightIndent=9, spaceAfter=6, borderPadding=8,
+                          backColor=colors.HexColor("#f4f7fa")),
+    "warn": ParagraphStyle("w", parent=B["Normal"], fontName="Malgun", fontSize=9.4,
+                           leading=14.5, alignment=TA_JUSTIFY, leftIndent=9,
+                           rightIndent=9, spaceAfter=6, borderPadding=8,
+                           backColor=colors.HexColor("#fdeaea")),
+    # Courier에는 한글 글리프가 없어 명령어 옆 설명이 빈칸으로 나온다. 여기서는
+    # 코드와 한글 주석이 섞이므로 본문 폰트를 쓰고 배경과 들여쓰기로만 구분한다.
+    "code": ParagraphStyle("c", parent=B["Normal"], fontName="Malgun", fontSize=8.2,
+                           leading=12.5, leftIndent=10, spaceBefore=3, spaceAfter=7,
+                           backColor=colors.HexColor("#f2f4f6"), borderPadding=6),
+    "cap": ParagraphStyle("cp", parent=B["Normal"], fontName="Malgun", fontSize=8.4,
+                          leading=12, textColor=colors.HexColor("#666"), spaceAfter=8),
+}
+
+
+def P(t, s="body"):
+    return Paragraph(t, S[s])
+
+
+def T(rows, widths, hi=None):
+    data = [[Paragraph(f"<b>{c}</b>", ParagraphStyle(
+        "th", fontName="MalgunBd", fontSize=8.6, leading=11.5,
+        textColor=colors.white, alignment=TA_CENTER)) for c in rows[0]]]
+    for r in rows[1:]:
+        data.append([Paragraph(str(c), ParagraphStyle(
+            "td", fontName="Malgun", fontSize=8.6, leading=12)) for c in r])
+    st = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2f6ea5")),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c8d4e0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fb")]),
+    ]
+    for i in (hi or []):
+        st.append(("BACKGROUND", (0, i + 1), (-1, i + 1), colors.HexColor("#fdeaea")))
+    t = Table(data, colWidths=widths)
+    t.setStyle(TableStyle(st))
+    return t
+
+
+def build():
+    s = []
+    s += [
+        P("V2X 시각장애인 보행 지원 — 인수인계 및 현황 평가", "title"),
+        P("2026-08-06 작업분 · TTC 연구, AI 젯슨 연동, 팀 조율 사항", "sub"),
+    ]
+
+    # ── 0. 한 장 요약 ───────────────────────────────────────────────
+    s += [
+        P("0. 한 장 요약", "h1"),
+        P("<b>오늘 답한 질문</b>: \"최적의 TTC 임계값은 몇 초인가\"<br/>"
+          "<b>답</b>: 그런 값은 존재하지 않는다. 모델이 탐지한 위험의 34%가 TTC "
+          "무한대 상태였고(측면 53%, 후방 75%), 임계값을 어떤 값으로 두든 잡히지 "
+          "않는다. 최적화 대상은 임계값이 아니라 판단 구조다.", "box"),
+        T([
+            ["항목", "상태"],
+            ["규칙 독립 정답(오라클) 설계", "완료 · PET와 96.7% 일치로 교차검증"],
+            ["3-way 비교 (규칙 / 고정TTC / 모델)", "완료 · 모델이 +18.9%p (동일 오경보)"],
+            ["안전 하한 2.0초", "젯슨 배포·가동 확인"],
+            ["AI 모델 젯슨 연동", "가동 확인 (18:07) · 실제 경보 경로"],
+            ["논문 PDF (8쪽)", "완료 · docs 및 ttc_study/"],
+            ["실험 계획·검증 도구", "완료 · 실험은 8/8(토) 예정"],
+        ], [58 * mm, 98 * mm]),
+        Spacer(1, 3),
+        P("테스트 344개 통과(03_jetson 255, ttc_study 89). GitHub 양쪽 저장소 반영.", "cap"),
+    ]
+
+    # ── 1. 시스템 현재 구조 ────────────────────────────────────────
+    s += [
+        P("1. 현재 시스템 구조", "h1"),
+        P("최종 위험도 = max( 안전 하한, 규칙 점수표, AI 판정 )", "code"),
+        T([
+            ["층", "담당", "근거", "실패 시"],
+            ["② 상한 게이트", "규칙", "멀고 접근하지 않음", "—"],
+            ["① AI 조건부 판단", "모델", "학습 (오라클 라벨)", "규칙이 대신 판단"],
+            ["⓪ 안전 하한 2.0초", "규칙", "물리 계산 + 국제 규격", "해당 없음"],
+        ], [34 * mm, 20 * mm, 56 * mm, 46 * mm]),
+        Spacer(1, 3),
+        P("세 층이 서로를 덮어쓰지 않는 것이 설계의 핵심이다. <b>안전 하한은 AI보다 "
+          "세다</b> — AI가 안전하다고 판단해도 TTC 2초면 레벨 3이 나간다. 모델은 "
+          "학습 분포 밖에서 예고 없이 틀릴 수 있지만 하한은 물리로 계산한 값이라 "
+          "그럴 일이 없다. <b>모델은 더하기만 한다</b> — 규칙이 올린 레벨을 내리지 "
+          "못한다. <b>모델이 죽어도 규칙은 돈다</b> — 예외를 잡아 규칙 판정으로 "
+          "넘어간다. --no-model 로 끄면 이전과 완전히 같다.", "body"),
+
+        P("1.1 T_floor = 2.0초의 근거", "h2"),
+        T([
+            ["구성", "값", "출처"],
+            ["GPS 갱신 주기", "0.2 s", "5Hz 전환 후 (미검증 — 3.2절 참조)"],
+            ["전송 지연", "0.1 s", "8/5 실측, 위험도 변경 29건 전수"],
+            ["인지·판단", "0.3 s", "촉각 반응 0.12~0.18s의 1.5~2배"],
+            ["정지 동작", "1.2 s", "보행 급정지 0.84~1.21s의 보수적 끝"],
+            ["안전 여유", "0.2 s", "—"],
+            ["합계", "2.0 s", "GB/T 33577 최소 2초, NHTSA NCAP 2.0~2.4초와 일치"],
+        ], [30 * mm, 18 * mm, 108 * mm], hi=[5]),
+    ]
+
+    s.append(PageBreak())
+
+    # ── 2. AI 평가 ─────────────────────────────────────────────────
+    s += [
+        P("2. AI에 대한 평가", "h1"),
+        P("2.1 무엇을 신뢰할 수 있는가", "h2"),
+        T([
+            ["항목", "수준", "근거"],
+            ["시뮬레이션 성능", "<b>높음</b>",
+             "시나리오 1,200개 × 5시드, 적시경보 66.6%→85.5% (+18.9%p), 4/5 시드 승"],
+            ["안전성 구조", "<b>높음</b>",
+             "3층 구조. 실측 재생에서 모델 0.0(안전) 판정을 하한이 뒤집어 레벨 3 발동 확인"],
+            ["배포 안정성", "<b>높음</b>",
+             "순수 파이썬 추론, sklearn 대비 오차 2.22e-16. 젯슨에 설치물 없음"],
+            ["설명 가능성", "중간",
+             "치환 중요도로 판단 근거 제시 가능. 개별 판정의 이유는 아직 미구현"],
+            ["실측 검증", "<b>낮음</b>",
+             "실외 로그에서 모델이 반응한 구간 9스텝. 고속 상황 데이터 없음"],
+            ["학습 분포 밖 거동", "<b>미지</b>",
+             "다중 차량, 실제 도로 기하, 5Hz GPS 조건에서의 행동 미확인"],
+        ], [30 * mm, 20 * mm, 106 * mm], hi=[4, 5]),
+        Spacer(1, 3),
+        P("<b>요약하면 '시뮬레이션 안에서는 검증됐고, 현장에서는 아직'이다.</b> "
+          "그래서 AI를 실제 경보 경로에 넣되 안전 하한을 그 아래에 깔았다. AI가 "
+          "학습한 적 없는 상황에서 침묵해도 하한이 대신 울린다.", "body"),
+
+        P("2.2 이 AI가 규칙보다 나은 이유", "h2"),
+        P("치환 중요도에서 TTC는 4위(0.053)이고 접근속도가 1위(0.213)로 4배 높다. "
+          "결정적으로 <b>모델이 잡은 위험의 34%는 TTC가 무한대인 상태</b>였다. 옆으로 "
+          "지나가는 차는 시선방향 접근속도가 0에 가까워 TTC가 무한대로 계산되지만 곧 "
+          "보행자의 진행 경로를 가로지른다. 임계값 방식으로는 원리적으로 잡히지 않는 "
+          "위험이고, 모델은 상대 위치 벡터·가속·선회율을 함께 보기 때문에 잡는다.", "body"),
+
+        P("2.3 신뢰할 수 없는 것 — 정직하게", "h2"),
+        P("① <b>오경보율의 절대값</b>은 시뮬레이터 생성 분포 기준이라 \"하루 몇 번\"으로 "
+          "환산할 수 없다. 세 방법의 상대 비교로만 읽어야 한다.<br/>"
+          "② <b>고속 상황</b>은 검증되지 않았다. 실외 로그의 차량 속도 중앙값이 1.46 m/s로 "
+          "시뮬레이터(7.35)의 1/5이다. 안전상 제약이지만 공백은 공백이다.<br/>"
+          "③ <b>시각장애인 반응시간</b> 문헌을 찾지 못해 일반 보행자 급정지 데이터로 "
+          "대용했다. T_floor의 1.2초 항이 여기에 걸려 있다.<br/>"
+          "④ <b>다중 차량</b>은 다루지 않았다. 현재 state_store가 차량 1대만 추적한다.", "warn"),
+    ]
+
+    s.append(PageBreak())
+
+    # ── 3. 코드 평가 ───────────────────────────────────────────────
+    s += [
+        P("3. 코드에 대한 평가", "h1"),
+        P("3.1 구조", "h2"),
+        T([
+            ["계층", "파일", "역할"],
+            ["연구 (PC)", "ttc_study/ 14개 모듈",
+             "시나리오 생성, 오라클 라벨, 학습, 3-way 비교, 실험 검증"],
+            ["배포 (젯슨)", "model_runtime.py",
+             "표준 라이브러리만으로 트리 앙상블 추론"],
+            ["", "model_features.py", "스트리밍 피처 (배치 계산과 값 일치 검증됨)"],
+            ["", "model_gate.py", "max 결합, 실패 격리, on/off"],
+            ["기존 파이프라인", "step6/7/8", "최소 수정 (last_states 노출, 하한, 게이트 호출)"],
+        ], [26 * mm, 42 * mm, 88 * mm]),
+        Spacer(1, 3),
+        P("<b>연구 코드와 배포 코드를 분리한 것이 이 구조의 요점이다.</b> 젯슨에는 "
+          "scikit-learn도 numpy도 필요 없고, 연구 쪽이 아무리 바뀌어도 배포 쪽은 "
+          "JSON 파일 하나만 갈아끼우면 된다.", "body"),
+
+        P("3.2 검증 수준", "h2"),
+        T([
+            ["대상", "검증 방식"],
+            ["오라클 라벨", "PET(교통공학 표준 지표)와 96.7% 일치. 규칙 모듈 import를 AST로 차단"],
+            ["시뮬레이터 기하학", "등속 직선의 해석해와 대조 (miss_offset = 실제 최소거리)"],
+            ["모델 내보내기", "sklearn 예측과 최대 오차 2.22e-16"],
+            ["스트리밍 피처", "배치 계산과 소수점 6자리까지 일치"],
+            ["미래 참조 없음", "뒤를 늘려 재계산해도 기존 값이 불변인지 확인"],
+            ["파이프라인 회귀", "기존 테스트 233개 → 255개 전부 통과"],
+        ], [34 * mm, 122 * mm]),
+
+        P("3.3 알려진 위험 지점", "h2"),
+        P("① <b>모델 파일 버전 관리가 없다.</b> risk_model.json에 학습 메타(시나리오 수, "
+          "시드, 임계값)는 담았지만 버전 태그가 없어, 젯슨의 파일이 어느 커밋에서 나온 "
+          "것인지 추적이 어렵다. 실험 전 <font face='Courier'>md5sum</font> 기록을 권한다.<br/>"
+          "② <b>롤백 절차가 문서화되지 않았다.</b> 실기에서 문제가 생기면 "
+          "<font face='Courier'>--no-model</font> 을 서비스 파일에 추가하고 재시작해야 "
+          "하는데, 이 절차가 어디에도 적혀 있지 않다.<br/>"
+          "③ <b>rsu 저장소가 비공개</b>라 젯슨에서 curl로 받을 수 없다. 반드시 "
+          "AI-V2X-Cane(공개)의 rsu/v2x/03_jetson/ 경로를 써야 한다. "
+          "<font face='Courier'>curl -sO</font> 는 404여도 조용히 14바이트 파일을 저장하므로 "
+          "<font face='Courier'>-fsSL -o</font> 와 크기 확인이 필수다. 8/6에 이 함정으로 "
+          "안전 하한이 올라가지 않은 채 배포에 성공한 것으로 오인했다.", "warn"),
+    ]
+
+    s.append(PageBreak())
+
+    # ── 4. 팀원 작업과의 조율 ──────────────────────────────────────
+    s += [
+        P("4. 팀원 작업과의 조율 — 가장 시급", "h1"),
+        P("같은 날(8/6) 다른 팀원이 v3 트랜스포머 예측을 완성해 젯슨 자동 가동에 "
+          "올렸다. 두 작업이 <b>독립적으로 진행되어 같은 자리를 겨냥</b>하고 있다.", "body"),
+
+        P("4.1 합치되는 부분 — 설계가 같다", "h2"),
+        P("팀원이 제안한 통합 식이 <b>최종 = max(규칙, AI 3초 예측)</b> 이고, 이번 "
+          "작업의 구조와 동일하다. \"AI는 경고를 앞당기기만 하고 끌 수는 없다\"는 "
+          "원칙도 같다. 두 사람이 독립적으로 같은 결론에 도달한 셈이라, 이 설계는 "
+          "신뢰할 만하다.", "box"),
+        Spacer(1, 2),
+        P("팀원이 남긴 확인 요청 3가지에 대한 답은 이미 코드로 나와 있다.", "body"),
+        T([
+            ["팀원 질문", "답"],
+            ["step6 NodeTracker.state_ahead() 재사용 가능?",
+             "가능. KinematicsPipeline.last_states 로 노출해 사용 중"],
+            ["실시간 루프에 초당 1회 ONNX 추론 여유?",
+             "ONNX 불필요. 순수 파이썬 추론이 1ms 미만. 기존 계산이 1.0ms"],
+            ["step8 히스테리시스를 AI에도 적용?",
+             "적용됨. max 결합 이후 stabilize 를 태운다"],
+        ], [72 * mm, 84 * mm]),
+
+        P("4.2 두 모델은 지금 충돌하지 않는다", "h2"),
+        P("먼저 확인해 둘 것: 두 모델은 <b>서로 다른 자리에서 돌고 있다</b>. 팀원이 "
+          "step9로 들어오려던 실시간 경보 자리를 이번 작업이 채운 것이지, 현재 둘이 "
+          "같은 출력을 두고 경쟁하는 상태가 아니다. 그래서 급하지 않다.", "box"),
+        T([
+            ["", "v3 트랜스포머 (팀원)", "GBM (이번 작업)"],
+            ["도는 자리", "서버 시나리오 → 지도용 예측 (1분/개, 배치)",
+             "step8 → 지팡이 실시간 경보 (관측마다)"],
+            ["출력이 가는 곳", "onnx_risk_level → 위험지도 API", "risk → 지팡이 진동"],
+            ["학습 라벨", "규칙 점수표의 미래값(risk_level_future3)", "오라클 (규칙 독립)"],
+            ["입력", "시퀀스 10스텝", "단일 시점 + 변화율"],
+            ["데이터", "SUMO v2 (다중 보행자·횡단보도·실제 지도)", "파이썬 2체 운동학"],
+            ["배포 형식", "ONNX (onnxruntime 필요)", "JSON (표준 라이브러리만)"],
+            ["검증 기준", "규칙 라벨 대비 정확도", "오라클 대비 +18.9%p"],
+        ], [24 * mm, 66 * mm, 66 * mm]),
+
+        P("4.3 그래도 결정해야 할 것", "h2"),
+        P("<b>권고: 두 모델을 같은 오라클 라벨로 채점해 비교한다.</b> "
+          "ttc_study/evaluate.py 의 평가 틀은 모델 구현과 무관하므로, v3 ONNX를 "
+          "predict 함수로 감싸면 그대로 채점할 수 있다. 규칙 라벨로 학습한 모델이 "
+          "규칙 독립 정답에서 어떤 성적을 내는지가 이 비교의 핵심 정보다.", "box"),
+        Spacer(1, 2),
+        P("<b>v3가 낮게 나와도 모델 탓이 아닐 수 있다.</b> v3의 라벨은 팀 점수표에서 "
+          "유도된 값이므로, 오라클 기준 성적이 낮다면 그것은 라벨의 문제다. 같은 "
+          "데이터를 오라클로 다시 라벨링해 재학습하면 개선될 가능성이 높다.", "body"),
+        P("<b>가장 좋은 조합은 아마 '팀원의 데이터 + 이번 작업의 라벨'이다.</b> "
+          "SUMO v2 데이터는 다중 보행자·횡단보도·실제 지도 기하를 담고 있어 이번 "
+          "작업의 2체 시뮬레이터보다 현실적이다. 반면 라벨은 오라클 쪽이 규칙과 "
+          "독립적이다. 두 강점을 합치면 지금의 어느 쪽보다 낫다.", "box"),
+        Spacer(1, 2),
+        P("모델 형식에 대해: 트리 앙상블은 JSON으로 옮겨지지만 신경망은 옮겨지지 "
+          "않으므로, v3 계열을 실시간에 쓰기로 하면 ONNX가 필요하다. 젯슨에 "
+          "onnxruntime은 이미 있다(v3가 그것으로 돌고 있다). 형식은 선택의 제약이 "
+          "아니라는 뜻이다.", "cap"),
+    ]
+
+    s.append(PageBreak())
+
+    # ── 5. 역할 분담 검토 ──────────────────────────────────────────
+    s += [
+        P("5. 역할 분담 검토", "h1"),
+        P("제안된 분담은 방향이 맞다. 다만 각 주제를 <b>측정 가능한 목표</b>로 좁히면 "
+          "진척을 판정할 수 있다. 아래는 보완안이다.", "body"),
+
+        P("5.1 중선 · 현준 — GPS 오차 잡기", "h2"),
+        P("<b>왜 1순위인가</b>: 통신 지연은 이미 0.1초로 측정됐다. 남은 병목은 GPS다. "
+          "8/5 기준 갱신 주기가 936ms(1.1Hz)였고, T_floor 2.0초는 5Hz(0.2초)를 전제로 "
+          "계산한 값이다. 1Hz면 필요한 하한이 2.8초가 되어 전제가 무너진다.", "body"),
+        T([
+            ["측정 가능한 목표", "확인 방법"],
+            ["GPS 갱신 200ms 부근 (5Hz 실측 확인)", "watch_link.py 2행 또는 verify_experiment.py 1번"],
+            ["gps_valid=1 비율 개선 (차량 51.3% 무효 → ?)", "raw 로그 집계"],
+            ["위치 산포 sigma 측정 (현재 가정 2.5m)", "정지 상태 5분 로깅 후 표준편차"],
+            ["불가능한 이동 비율 (차량 3.21% → ?)", "연속 좌표 간 속도 상한 검사"],
+        ], [76 * mm, 80 * mm]),
+        Spacer(1, 2),
+        P("sigma가 2.5m보다 작아지면 시뮬레이터의 노이즈 파라미터도 낮춰 재학습해야 "
+          "한다 — 학습과 현장의 조건을 맞추기 위해서다.", "cap"),
+
+        P("5.2 현준 · 민서 — AI 모듈 활용 방안 (안전성·정확성)", "h2"),
+        P("<b>안전성은 이미 답이 나와 있다</b>: 3층 구조로 AI 실패가 격리된다. "
+          "<b>정확성도 시뮬레이션에서는 답이 나왔다</b>: +18.9%p. 그러므로 이 주제의 "
+          "남은 실질은 <b>두 모델 통합 결정과 실측 검증</b>이다.", "body"),
+        T([
+            ["측정 가능한 목표", "판정 기준"],
+            ["두 모델을 같은 오라클로 비교", "evaluate.py 결과표 1장"],
+            ["채택 모델 결정 및 단일화", "젯슨에 하나만 남는다"],
+            ["실측 고속 위험 30건 확보", "verify_experiment.py 3번 항목"],
+            ["섀도우 비교: 실측에서 AI가 규칙을 이기는가", "level_source 열 집계"],
+            ["개별 판정 근거 출력 (설명가능성)", "\"왜 울렸나\"를 한 줄로 답할 수 있는가"],
+        ], [76 * mm, 80 * mm]),
+
+        P("5.3 민서 · 채린 · 현준 — 홈페이지 시각화", "h2"),
+        P("위험지도 API는 이미 가동 중이다. <b>차별점은 \"AI가 왜 그렇게 판단했는지\"를 "
+          "보여주는 것</b>이다. 위험 지점만 찍는 지도는 흔하지만, 판단 근거를 나란히 "
+          "보여주는 것은 드물고 이번 연구의 결과가 그것을 가능하게 한다.", "body"),
+        T([
+            ["보여줄 것", "왜 효과적인가"],
+            ["규칙 vs AI 판정 비교 (같은 궤적)", "AI를 쓴 이유가 화면에서 드러난다"],
+            ["TTC가 무한대인데 AI가 잡은 사례", "연구의 핵심 주장을 한 장면으로 설명"],
+            ["안전 하한 발동 구간 표시", "\"AI를 못 믿을 때\"에 대한 답을 시각화"],
+            ["3초 선행 예측 (팀원 v3 뷰어)", "이미 만들어져 있음 — 지도와 나란히"],
+            ["상황별 경보 시점 분포", "alarm_ttc_by_situation.png 를 그대로 활용"],
+        ], [66 * mm, 90 * mm]),
+        Spacer(1, 2),
+        P("<b>주의</b>: 팀원 문서에 따르면 onnx_risk_level의 의미가 '현재 위험'에서 "
+          "'3초 내 예상 위험'으로 바뀌었다. 지도 범례와 설명 문구를 반드시 수정해야 한다.", "cap"),
+    ]
+
+    s.append(PageBreak())
+
+    # ── 6. 빠진 역할 / 일정 ────────────────────────────────────────
+    s += [
+        P("6. 제안에서 빠진 것", "h1"),
+        T([
+            ["빠진 항목", "왜 필요한가", "제안"],
+            ["<b>실험 실시 담당</b>",
+             "8/8 실험이 모든 실측 검증의 전제. 계획서는 있으나 실행 주체가 정해지지 않음",
+             "하드웨어 담당 + 현준"],
+            ["<b>모델 단일화 결정</b>",
+             "두 AI가 같은 자리를 겨냥. 방치하면 젯슨에 둘이 공존하거나 충돌",
+             "현준 + 민서, 8/9까지"],
+            ["<b>발표·제출 자료</b>",
+             "팀원 문서에 8/31 제출 명시. 지금까지 결과를 엮을 사람 필요",
+             "전원, 8월 하순"],
+            ["<b>롤백 절차</b>",
+             "실기에서 AI가 문제를 일으켰을 때 되돌리는 방법이 문서화되지 않음",
+             "현준, 실험 전"],
+        ], [30 * mm, 78 * mm, 48 * mm], hi=[0, 1]),
+
+        P("6.1 일정", "h1"),
+        T([
+            ["시점", "일", "담당"],
+            ["8/8 (토)", "실측 실험 — GPS 5Hz 확인, 고속 위험 30건, 섀도우 데이터", "실험팀"],
+            ["8/9", "두 모델 오라클 비교 → 단일화 결정", "현준·민서"],
+            ["8/10~12", "채택 모델 재학습(필요 시) · GPS 개선 반영", "현준·민서·중선"],
+            ["8/13~16", "홈페이지 시각화 · 발표 자료 초안", "민서·채린·현준"],
+            ["8/17", "통합 테스트", "전원"],
+            ["8월 하순", "제출 자료 (8/31 제출)", "전원"],
+        ], [22 * mm, 104 * mm, 30 * mm]),
+
+        P("7. 다음 작업 세션을 위한 시작점", "h1"),
+        P("새 대화에서 맥락을 복원하려면 이 순서로 읽으면 된다.", "body"),
+        P("1. ttc_study/SPEC.md — 설계와 결과 전체 (12개 절)<br/>"
+          "2. ttc_study/TTC_연구_논문.pdf — 근거와 실험 (8쪽)<br/>"
+          "3. ttc_study/EXPERIMENT_PLAN.md — 실험 절차<br/>"
+          "4. 이 문서 4절 — 팀원 작업과의 조율 사항", "code"),
+        P("<b>바로 실행 가능한 명령</b>", "h2"),
+        P("cd 03_jetson/ttc_study<br/>"
+          "python evaluate.py --n-scenarios 1200 --repeats 5 --lead-s 2.0   # 3-way 비교<br/>"
+          "python verify_experiment.py --log ../logs/&lt;실험로그&gt;          # 실험 검증<br/>"
+          "python model_runtime.py --n-scenarios 1200 --out ../risk_model.json  # 재학습<br/>"
+          "python -m pytest                                              # 테스트 89개", "code"),
+        P("<b>젯슨 배포 (반드시 공개 저장소 경로)</b>", "h2"),
+        P("B=\"https://raw.githubusercontent.com/joon722/AI-V2X-Cane/main/rsu/v2x/03_jetson\"<br/>"
+          "curl -fsSL -o &lt;파일&gt; \"$B/&lt;파일&gt;\"   # -sO 금지: 404를 조용히 저장한다", "code"),
+    ]
+
+    doc = SimpleDocTemplate(
+        str(OUT), pagesize=A4,
+        leftMargin=22 * mm, rightMargin=22 * mm,
+        topMargin=18 * mm, bottomMargin=18 * mm,
+        title="V2X 인수인계 및 현황 평가 2026-08-06",
+    )
+
+    def footer(canvas, d):
+        canvas.saveState()
+        canvas.setFont("Malgun", 8)
+        canvas.setFillColor(colors.HexColor("#888"))
+        canvas.drawCentredString(A4[0] / 2, 10 * mm, str(d.page))
+        canvas.restoreState()
+
+    doc.build(s, onFirstPage=footer, onLaterPages=footer)
+    return OUT
+
+
+if __name__ == "__main__":
+    print("저장:", build())
