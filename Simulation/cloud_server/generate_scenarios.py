@@ -21,6 +21,8 @@ Jetson은 DONE이 있는 폴더만 가져가면 된다.
 import argparse
 import logging
 import os
+import random
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,64 @@ PROJECT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_DIR / "generated_data"
 SUMO_CONFIG = PROJECT_DIR / "config.sumocfg"
 XML2CSV = Path("/usr/share/sumo/tools/xml/xml2csv.py")
+RANDOM_TRIPS = Path("/usr/share/sumo/tools/randomTrips.py")
+
+# ── 시나리오 다양화(v2) 설정 ─────────────────────────────
+# net_v2: 인도 자동 생성(448개) + 횡단보도 추가 — 보행자가 인도를 걷고
+# 횡단보도에서 차량이 실제로 양보/감속한다.
+NET_FILE = PROJECT_DIR / "net_v2.net.xml"
+ROUTE_SRC = PROJECT_DIR / "route.rou.xml"
+VTYPES_FILE = PROJECT_DIR / "vtypes_mix.add.xml"
+DRIVER_TYPES = ["cautious_car", "normal_car", "aggressive_car"]
+
+# 조심/보통 운전 성향 정의 (aggressive_car는 route.rou.xml에 기존 정의됨)
+VTYPES_XML = """<additional>
+    <vType id="cautious_car" accel="1.5" decel="6.0" sigma="0.3"
+           length="5" minGap="3.0" tau="1.6" maxSpeed="25"
+           speedFactor="normc(0.85,0.05,0.6,1.0)"/>
+    <vType id="normal_car" accel="2.6" decel="4.5" sigma="0.5"
+           length="5" minGap="2.5" tau="1.0" maxSpeed="25"
+           speedFactor="normc(1.0,0.1,0.7,1.3)"/>
+</additional>
+"""
+
+_route_cache = None
+
+
+def load_route_template() -> str:
+    global _route_cache
+    if _route_cache is None:
+        _route_cache = ROUTE_SRC.read_text(encoding="utf-8")
+    return _route_cache
+
+
+def make_mixed_route(num: int, out_file: Path) -> list:
+    """시나리오별로 차량 운전 성향을 랜덤 비율로 배합한 경로 파일 생성."""
+    rng = random.Random(num)
+    w = [rng.uniform(0.2, 0.5), rng.uniform(0.3, 0.6), rng.uniform(0.1, 0.4)]
+    total = sum(w)
+    weights = [x / total for x in w]
+
+    def assign(match):
+        vtype = rng.choices(DRIVER_TYPES, weights=weights)[0]
+        tag = match.group(0)
+        tag = re.sub(r'\s+type="[^"]*"', "", tag)  # 기존 type 제거
+        return tag.replace("<vehicle ", f'<vehicle type="{vtype}" ', 1)
+
+    text = re.sub(r"<vehicle [^>]*>", assign, load_route_template())
+    out_file.write_text(text, encoding="utf-8")
+    return [round(x, 2) for x in weights]
+
+
+def make_random_pedestrians(num: int, out_file: Path) -> None:
+    """시나리오별 랜덤 보행자 생성 (수·경로·출발 시각 모두 다름)."""
+    rng = random.Random(num * 7919)
+    period = rng.choice([15, 20, 30, 40])  # 작을수록 보행자 많음 (약 3~10명)
+    run_cmd([sys.executable, str(RANDOM_TRIPS),
+             "-n", str(NET_FILE), "--pedestrians",
+             "-o", str(out_file), "--seed", str(num),
+             "-p", str(period), "-b", "0", "-e", "150"],
+            timeout=120)
 
 log = logging.getLogger("generator")
 
@@ -68,18 +128,33 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
     scenario_dir = OUTPUT_DIR / f"scenario_{num:04d}"
     scenario_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. SUMO 실행 (시드를 바꿔 시나리오마다 다른 교통 흐름 생성)
+    if not VTYPES_FILE.exists():
+        VTYPES_FILE.write_text(VTYPES_XML, encoding="utf-8")
+
+    # 1. 시나리오별 다양화 입력 생성 (운전 성향 배합 + 랜덤 보행자)
+    route_file = scenario_dir / "route_mixed.rou.xml"
+    ped_file = scenario_dir / "ped_random.rou.xml"
+    weights = make_mixed_route(num, route_file)
+    make_random_pedestrians(num, ped_file)
+
+    # 2. SUMO 실행 (횡단보도 있는 net_v2 + 혼합 성향 + 랜덤 보행자)
     fcd_xml = scenario_dir / "fcd.xml"
     run_cmd(
         [
             "sumo",
             "-c", str(SUMO_CONFIG),
+            "-n", str(NET_FILE),
+            "-r", f"{route_file},{ped_file}",
+            "--additional-files", str(VTYPES_FILE),
             "--seed", str(num),
             "--fcd-output", str(fcd_xml),
             "--no-step-log", "true",
         ],
         timeout=600,
     )
+    (scenario_dir / "META").write_text(
+        f"generator=v2 crossings sidewalk random_peds "
+        f"driver_mix(cautious/normal/aggressive)={weights}\n")
     if not fcd_xml.exists() or fcd_xml.stat().st_size == 0:
         raise RuntimeError("fcd.xml이 생성되지 않았습니다")
 
@@ -116,6 +191,8 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
     if not keep_intermediate:
         fcd_xml.unlink(missing_ok=True)
         trajectory_csv.unlink(missing_ok=True)
+        route_file.unlink(missing_ok=True)
+        ped_file.unlink(missing_ok=True)
 
     # 5. 완료 표시 (Jetson은 이 파일이 있는 폴더만 가져간다)
     (scenario_dir / "DONE").write_text(time.strftime("%Y-%m-%dT%H:%M:%S\n"))

@@ -55,14 +55,16 @@ def build_scenario(scenario_dir: Path) -> pd.DataFrame | None:
 
     veh = pd.read_csv(veh_csv, sep=";")
     ped = pd.read_csv(ped_csv, sep=";")
-    ped = (ped.sort_values("timestep_time")
-              .groupby("timestep_time", as_index=False).first())
+    # 각 (차량, 시점)마다 가장 가까운 보행자 기준 (v2 시나리오는 보행자 다수)
     ped = ped[["timestep_time", "person_x", "person_y", "person_speed"]]
     ped.columns = ["timestep_time", "ped_x", "ped_y", "ped_speed_mps"]
 
     df = veh.merge(ped, on="timestep_time", how="inner")
     if df.empty:
         return None
+    d2 = ((df["vehicle_x"] - df["ped_x"]) ** 2 +
+          (df["vehicle_y"] - df["ped_y"]) ** 2)
+    df = df.loc[d2.groupby([df["vehicle_id"], df["timestep_time"]]).idxmin()]
     df = df.sort_values(["vehicle_id", "timestep_time"]).reset_index(drop=True)
     df = df.rename(columns={"vehicle_x": "veh_x", "vehicle_y": "veh_y",
                             "vehicle_speed": "veh_speed_mps"})

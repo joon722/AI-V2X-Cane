@@ -98,15 +98,18 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
         raise RuntimeError("pedestrian.csv가 없습니다")
     ped = pd.read_csv(ped_csv, sep=";")
 
-    # 보행자: 타임스텝별 첫 번째 보행자 위치/속도 사용
-    ped = (ped.sort_values("timestep_time")
-              .groupby("timestep_time", as_index=False).first())
+    # 보행자: 각 (차량, 시점)마다 "가장 가까운" 보행자 기준.
+    # v2 시나리오부터 보행자가 여러 명이므로, 차량별로 가장 위협이 되는
+    # (가장 가까운) 보행자와의 관계를 계산한다.
     ped = ped[["timestep_time", "person_x", "person_y", "person_speed"]]
     ped.columns = ["timestep_time", "ped_x", "ped_y", "ped_speed_mps"]
 
     df = veh.merge(ped, on="timestep_time", how="inner")
     if df.empty:
         raise RuntimeError("차량-보행자 시간대가 겹치지 않습니다")
+    d2 = ((df["vehicle_x"] - df["ped_x"]) ** 2 +
+          (df["vehicle_y"] - df["ped_y"]) ** 2)
+    df = df.loc[d2.groupby([df["vehicle_id"], df["timestep_time"]]).idxmin()]
 
     df = df.sort_values(["vehicle_id", "timestep_time"]).reset_index(drop=True)
     df = df.rename(columns={
