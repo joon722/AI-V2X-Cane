@@ -2,8 +2,17 @@
 """Tests for step 8 risk downlink policy: trust gating + on-change/heartbeat."""
 
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
-from step8_send_risk import RiskTransmitter
+from step8_send_risk import (
+    CSV_FIELDS,
+    RawLog,
+    RiskTransmitter,
+    TxDecision,
+    csv_row,
+    format_tx,
+)
 
 
 class OnChangeAndHeartbeatTest(unittest.TestCase):
@@ -72,6 +81,89 @@ class CommandFormatTest(unittest.TestCase):
     def test_target_id_is_carried_into_the_command(self):
         tx = RiskTransmitter(target_id=4125577512)
         self.assertEqual(tx.command(1), '{"target_id":4125577512,"risk":1}')
+
+
+def _store(cane_node_risk, veh_node_risk):
+    cane = {
+        "seq": 7,
+        "node_risk": cane_node_risk,
+        "gps_valid": 1,
+        "lat": 37.496655,
+        "lng": 126.957886,
+        "speed_mps": 0.5,
+        "heading_deg": 180.0,
+    }
+    vehicle = {
+        "node_risk": veh_node_risk,
+        "gps_valid": 1,
+        "speed_mps": 5.0,
+        "heading_deg": 90.0,
+    }
+    return SimpleNamespace(latest={"cane": cane, "vehicle": vehicle})
+
+
+class NodeRiskLoggingTest(unittest.TestCase):
+    """The downlink is only verifiable if what the nodes report is logged next to it."""
+
+    def setUp(self):
+        self.decision = TxDecision(True, 2, 2, True, "change")
+        self.assessment = SimpleNamespace(
+            distance_m=5.0, closing_los=1.2, ttc=4.1, final_score=0.6
+        )
+
+    def test_both_node_risks_land_in_the_row(self):
+        row = csv_row(
+            1.0, _store(2, 1), RiskTransmitter(), self.decision, self.assessment
+        )
+        self.assertEqual(row["cane_node_risk"], 2)
+        self.assertEqual(row["veh_node_risk"], 1)
+
+    def test_row_keys_match_the_header(self):
+        """DictWriter raises on any mismatch, so the CSV would break at runtime."""
+        row = csv_row(
+            1.0, _store(0, 0), RiskTransmitter(), self.decision, self.assessment
+        )
+        self.assertEqual(set(row), set(CSV_FIELDS))
+
+    def test_tx_line_shows_what_the_nodes_reported(self):
+        line = format_tx(self.decision, 2, 0)
+        self.assertIn("cane_node_risk=2", line)
+        self.assertIn("veh_node_risk=0", line)
+
+
+class RawLogTest(unittest.TestCase):
+    """통신이 의심스러울 때 볼 수 있는 유일한 기록이라, 방향과 순서가 남아야 한다."""
+
+    def test_rx_and_tx_are_interleaved_in_arrival_order(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "raw.log"
+            log = RawLog(path)
+            log.write("RX", '{"type":"cane","node_risk":0}')
+            log.write("TX", '{"target_id":0,"risk":2}')
+            log.write("RX", '{"type":"cane","node_risk":2}')
+            log.close()
+
+            lines = path.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual([line.split(" ", 2)[1] for line in lines], ["RX", "TX", "RX"])
+        self.assertIn('"risk":2', lines[1])
+        # 앞의 시각이 float로 읽혀야 나중에 지연을 계산할 수 있다.
+        self.assertLessEqual(
+            float(lines[0].split(" ", 1)[0]), float(lines[2].split(" ", 1)[0])
+        )
+
+    def test_unparseable_lines_are_kept(self):
+        """깨진 줄이야말로 남겨야 원인을 찾을 수 있다."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "raw.log"
+            log = RawLog(path)
+            log.write("RX", "{broken json")
+            log.close()
+            self.assertIn("{broken json", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

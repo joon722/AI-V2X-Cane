@@ -34,11 +34,15 @@ fi
 fuser -k "$PORT" 2>/dev/null || true
 sleep 1
 
-# 세션별 타임스탬프 CSV -> 재시작해도 이전 기록을 덮어쓰지 않음
-CSV="$LOG_DIR/risk_tx_$(date +%Y%m%d_%H%M%S).csv"
+# 세션별 타임스탬프 -> 재시작해도 이전 기록을 덮어쓰지 않음.
+# CSV(판단 결과)와 RAW(오간 줄 원문)가 같은 시각을 달고 있어 짝을 찾기 쉽다.
+STAMP="$(date +%Y%m%d_%H%M%S)"
+CSV="$LOG_DIR/risk_tx_$STAMP.csv"
+RAW="$LOG_DIR/raw_$STAMP.log"
 
-echo "[START] port=$PORT csv=$CSV source_mode=$SOURCE_MODE"
+echo "[START] port=$PORT csv=$CSV raw=$RAW source_mode=$SOURCE_MODE"
 exec python3 "$DIR/step8_send_risk.py" \
   --port "$PORT" \
   --csv "$CSV" \
+  --raw-log "$RAW" \
   --source-mode "$SOURCE_MODE"

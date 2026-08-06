@@ -96,11 +96,18 @@ class RiskTransmitter:
         )
 
 
+# cane_node_risk / veh_node_risk: 노드가 스스로 브로드캐스트한 risk_level.
+# 지팡이는 max(자체판단, 내려받은 RSU risk)를 실어 보내므로, effective_level과
+# 나란히 놓으면 다운링크가 실제로 수신·반영됐는지 한 파일에서 읽을 수 있다.
+# 단 같은 행의 두 값은 같은 시점이 아니다 - node_risk는 직전에 받은 값이라
+# 방금 보낸 risk의 반영은 다음 행부터 나타난다.
 CSV_FIELDS = (
     "pc_time",
     "cane_seq",
     "computed_level",
     "effective_level",
+    "cane_node_risk",
+    "veh_node_risk",
     "trusted",
     "reason",
     "target_id",
@@ -127,6 +134,8 @@ def csv_row(now, store, transmitter, decision, assessment):
         "cane_seq": store.latest["cane"]["seq"],
         "computed_level": decision.computed_level,
         "effective_level": decision.effective_level,
+        "cane_node_risk": cane["node_risk"],
+        "veh_node_risk": vehicle["node_risk"],
         "trusted": int(decision.trusted),
         "reason": decision.reason,
         "target_id": transmitter.target_id,
@@ -156,33 +165,58 @@ def append_row(csv_path, row):
         writer.writerow(row)
 
 
-def format_tx(decision):
+def format_tx(decision, cane_node_risk, veh_node_risk):
     suppressed = (
         f" computed={decision.computed_level}->{decision.effective_level}"
         if decision.computed_level != decision.effective_level
         else ""
     )
+    # node_risk는 직전에 받은 값이다. 방금 보낸 risk의 에코는 다음 [TX] 줄에 나온다.
     return (
         f"[TX] risk={decision.effective_level} reason={decision.reason}{suppressed}"
+        f" cane_node_risk={cane_node_risk} veh_node_risk={veh_node_risk}"
     )
+
+
+class RawLog:
+    """시리얼로 오간 줄을 방향 표시와 함께 시간순 그대로 남긴다.
+
+    CSV는 판단 결과만 담고, 노드가 실제로 무엇을 보냈는지는 어디에도 안 남는다.
+    통신 자체가 의심스러울 때 볼 곳이 이 파일이다. 파싱에 실패한 줄도 그대로
+    남겨야 원인을 알 수 있으므로 기록은 파싱보다 먼저 한다.
+    """
+
+    def __init__(self, path):
+        self.handle = Path(path).open("a", encoding="utf-8")
+
+    def write(self, direction, line):
+        # 줄마다 flush: 실험 중 전원이 끊겨도 직전까지는 남는다.
+        self.handle.write(f"{time.time():.3f} {direction} {line}\n")
+        self.handle.flush()
+
+    def close(self):
+        self.handle.close()
 
 
 class RiskSender:
     """Scores each record and pushes the resulting level through the transmitter."""
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
-                 stabilizer=None):
+                 stabilizer=None, raw_log=None):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
         self.csv_path = csv_path
         self.gate_params = gate_params
         self.stabilizer = stabilizer
+        self.raw_log = raw_log
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
         if not line:
             return
+        if self.raw_log is not None:
+            self.raw_log.write("RX", line)
         try:
             payload = json.loads(line)
             if not isinstance(payload, dict):
@@ -220,8 +254,18 @@ class RiskSender:
         if not decision.should_send:
             return
 
-        self.transport(self.transmitter.command(decision.effective_level))
-        print(format_tx(decision), flush=True)
+        command = self.transmitter.command(decision.effective_level)
+        if self.raw_log is not None:
+            self.raw_log.write("TX", command)
+        self.transport(command)
+        print(
+            format_tx(
+                decision,
+                store.latest["cane"]["node_risk"],
+                store.latest["vehicle"]["node_risk"],
+            ),
+            flush=True,
+        )
         append_row(
             self.csv_path,
             csv_row(now, store, self.transmitter, decision, assessment),
@@ -264,6 +308,11 @@ def parse_args():
         help="origin of this input stream (default: test)",
     )
     parser.add_argument("--csv", default="step8_risk_tx_log.csv", help="output CSV path")
+    parser.add_argument(
+        "--raw-log",
+        default=None,
+        help="시리얼로 오간 모든 줄(RX/TX)을 이 파일에 그대로 기록",
+    )
     parser.add_argument(
         "--fresh-window-ms",
         type=int,
@@ -322,10 +371,11 @@ def main():
         "floor": args.dcpa_floor,
     }
     stabilizer = LevelStabilizer(hold_s=args.level_hold_s) if args.level_hold_s > 0 else None
+    raw_log = RawLog(args.raw_log) if args.raw_log else None
     print(
         f"[INFO] source_mode={args.source_mode} csv={args.csv} target_id={args.target_id} "
         f"heartbeat_s={args.tx_heartbeat_s} tx_untrusted={args.tx_untrusted} "
-        f"level_hold_s={args.level_hold_s}",
+        f"level_hold_s={args.level_hold_s} raw_log={args.raw_log}",
         file=sys.stderr,
     )
 
@@ -342,9 +392,11 @@ def main():
     if args.stdin:
         sender = RiskSender(
             pipeline, transmitter, stdout_transport, args.csv, gate_params,
-            stabilizer=stabilizer,
+            stabilizer=stabilizer, raw_log=raw_log,
         )
         _run(sender, sys.stdin, args.source_mode, vehicle)
+        if raw_log is not None:
+            raw_log.close()
         return
 
     try:
@@ -357,9 +409,12 @@ def main():
         print(f"[INFO] port={args.port} baud={args.baud}", file=sys.stderr)
         sender = RiskSender(
             pipeline, transmitter, serial_transport(connection), args.csv, gate_params,
-            stabilizer=stabilizer,
+            stabilizer=stabilizer, raw_log=raw_log,
         )
         _run(sender, _serial_lines(connection), args.source_mode, vehicle)
+
+    if raw_log is not None:
+        raw_log.close()
 
 
 def _serial_lines(connection):
