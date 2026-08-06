@@ -15,9 +15,10 @@
 //       (AP 접속은 하지 않는다 - 차량이 꺼져 있어도 브리지는 계속 동작)
 //
 // 젯슨이 기대하는 업링크 JSON (기존 브리지와 동일 형식):
-//   {"type":"cane","node_id":...,"seq":...,"gps_valid":...,"lat":...,"lng":...,
-//    "speed_mps":...,"heading_deg":...,"node_risk":...,"tx_ms":...,"rx_ms":...,
-//    "recv_count":...,"lost_count":...,"rssi":...,"src_mac":"AA:BB:CC:DD:EE:FF"}
+//   {"type":"cane","node_id":...,"seq":...,"gps_valid":...,"heading_valid":...,
+//    "lat":...,"lng":...,"speed_mps":...,"heading_deg":...,"node_risk":...,
+//    "tx_ms":...,"rx_ms":...,"recv_count":...,"lost_count":...,"rssi":...,
+//    "src_mac":"AA:BB:CC:DD:EE:FF"}
 
 #include <WiFi.h>
 #include <esp_now.h>
@@ -46,7 +47,9 @@
 // V2X 프로토콜 (지팡이/차량 노드와 반드시 동일)
 // =====================
 #define V2X_MAGIC 0x56325831UL
-#define V2X_VERSION 2
+// 지팡이/차량 펌웨어의 V2X_VERSION 과 반드시 같아야 한다.
+// 버전이나 구조체 크기가 하나라도 어긋나면 수신 콜백이 패킷을 전부 버린다.
+#define V2X_VERSION 3
 
 #define MSG_VEHICLE_STATUS 1
 #define MSG_RSU_REPLY 2
@@ -67,6 +70,7 @@ typedef struct __attribute__((packed)) v2x_status_message {
   uint8_t node_type;
   uint8_t risk_level;
   uint8_t gps_valid;
+  uint8_t heading_valid;  // v3 추가: heading_deg 를 믿어도 되는지
   uint32_t node_id;
   float latitude;
   float longitude;
@@ -75,6 +79,10 @@ typedef struct __attribute__((packed)) v2x_status_message {
   uint32_t timestamp_ms;
   uint16_t seq_num;
 } v2x_status_message_t;
+
+// 노드 펌웨어와 같은 크기여야 한다. 어긋나면 컴파일 단계에서 잡는다.
+static_assert(sizeof(v2x_status_message_t) == 36,
+              "vehicle/cane status packet must be 36 bytes");
 
 // =====================
 // 수신 큐: 콜백(WiFi 태스크)에서는 넣기만, loop에서 꺼내 처리
@@ -207,7 +215,7 @@ static void forwardQueuedPackets() {
     int written = snprintf(
       json, sizeof(json),
       "{\"type\":\"%s\",\"node_id\":%lu,\"seq\":%u,"
-      "\"gps_valid\":%u,\"lat\":%.6f,\"lng\":%.6f,"
+      "\"gps_valid\":%u,\"heading_valid\":%u,\"lat\":%.6f,\"lng\":%.6f,"
       "\"speed_mps\":%.3f,\"heading_deg\":%.2f,\"node_risk\":%u,"
       "\"tx_ms\":%lu,\"rx_ms\":%lu,"
       "\"recv_count\":%lu,\"lost_count\":%lu,\"rssi\":%d,"
@@ -216,6 +224,7 @@ static void forwardQueuedPackets() {
       (unsigned long)m->node_id,
       m->seq_num,
       m->gps_valid,
+      m->heading_valid,
       m->latitude,
       m->longitude,
       m->speed_mps,
