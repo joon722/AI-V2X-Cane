@@ -121,6 +121,23 @@ def _kalman_track(x, y, t, sigma_pos):
     return px, py, vx, vy
 
 
+def _causal_diff(values, dt):
+    """후방차분. 미래 값을 쓰지 않는다.
+
+    np.gradient는 중앙차분이라 다음 시점을 함께 본다. 시뮬레이션에서는 전체
+    궤적이 있으니 계산되지만 젯슨은 미래를 볼 수 없다. 학습 때 미래를 쓴 피처로
+    배우고 추론 때 못 쓰면 두 계산이 달라져, 시뮬레이션에서 측정한 성능이
+    현장에서 재현되지 않는다.
+
+    첫 시점은 이전 값이 없으므로 0이다. "아직 변화를 모른다"가 맞는 값이고,
+    실제 스트리밍에서도 첫 샘플은 같은 상태다.
+    """
+    out = np.zeros_like(np.asarray(values, dtype=float))
+    if len(out) > 1:
+        out[1:] = (values[1:] - values[:-1]) / dt
+    return out
+
+
 def _phys_extrapolation(rx, ry, vx, vy, horizon_s):
     """등속 가정으로 horizon 안의 최소 거리와 그 시각을 구한다.
 
@@ -199,13 +216,13 @@ def build_features(scenario, gps_sigma_m=0.0, seed=0, velocity_mode="kalman"):
     # 이는 기하학이 만든 특이점이지 실제 가속이 아니다. 물리적으로 가능한 범위로
     # 자르지 않으면 이 이상치가 학습을 지배한다.
     out["d_closing_dt"] = np.clip(
-        np.gradient(out["closing_los"], dt), -MAX_REL_ACCEL_MPS2, MAX_REL_ACCEL_MPS2
+        _causal_diff(out["closing_los"], dt), -MAX_REL_ACCEL_MPS2, MAX_REL_ACCEL_MPS2
     )
     # 상대 방위각은 ±180도에서 감기므로, 감김을 푼 뒤 미분한다. 같은 통과 순간에
     # 방위각도 180도 뒤집히므로 여기에도 상한을 둔다.
     bearing = np.degrees(np.arctan2(dx, dy))
     out["d_heading_dt"] = np.clip(
-        np.gradient(np.unwrap(bearing, period=360.0), dt),
+        _causal_diff(np.unwrap(bearing, period=360.0), dt),
         -MAX_BEARING_RATE_DPS, MAX_BEARING_RATE_DPS,
     )
     return out

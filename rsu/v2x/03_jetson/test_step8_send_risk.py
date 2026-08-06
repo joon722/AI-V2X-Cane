@@ -107,8 +107,11 @@ class NodeRiskLoggingTest(unittest.TestCase):
 
     def setUp(self):
         self.decision = TxDecision(True, 2, 2, True, "change")
+        # Mirrors RiskAssessment's shape, including the fields the model gate
+        # logs next to the rule's own verdict.
         self.assessment = SimpleNamespace(
-            distance_m=5.0, closing_los=1.2, ttc=4.1, final_score=0.6
+            distance_m=5.0, closing_los=1.2, ttc=4.1, final_score=0.6,
+            risk_level=2, reason="table",
         )
 
     def test_both_node_risks_land_in_the_row(self):

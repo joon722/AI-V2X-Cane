@@ -30,6 +30,7 @@ from step3_parse_v2x import SOURCE_MODES, normalize_record
 from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
 from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
 from step6_kinematics import KinematicsPipeline, to_float
+from model_gate import ModelGate
 from step7_risk import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
 from step8_stability import HOLD_S, LevelStabilizer
 
@@ -115,6 +116,10 @@ CSV_FIELDS = (
     "closing_mps",
     "ttc_s",
     "risk_score",
+    "rule_level",
+    "rule_reason",
+    "model_proba",
+    "level_source",
     "cane_gps_valid",
     "cane_lat",
     "cane_lng",
@@ -126,7 +131,7 @@ CSV_FIELDS = (
 )
 
 
-def csv_row(now, store, transmitter, decision, assessment):
+def csv_row(now, store, transmitter, decision, assessment, gate=None):
     cane = store.latest["cane"]
     vehicle = store.latest["vehicle"]
     return {
@@ -144,6 +149,12 @@ def csv_row(now, store, transmitter, decision, assessment):
         "closing_mps": round(assessment.closing_los, 2),
         "ttc_s": round(assessment.ttc, 2),
         "risk_score": assessment.final_score,
+        # 규칙 자체의 판정과 모델이 얹은 결과를 나란히 남긴다. 실험 후 "모델이
+        # 없었다면 어땠을까"를 이 두 열만으로 재구성할 수 있다.
+        "rule_level": assessment.risk_level,
+        "rule_reason": assessment.reason,
+        "model_proba": None if gate is None or gate.proba is None else round(gate.proba, 4),
+        "level_source": "table" if gate is None else gate.source,
         "cane_gps_valid": cane["gps_valid"],
         "cane_lat": cane["lat"],
         "cane_lng": cane["lng"],
@@ -202,7 +213,7 @@ class RiskSender:
     """Scores each record and pushes the resulting level through the transmitter."""
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
-                 stabilizer=None, raw_log=None):
+                 stabilizer=None, raw_log=None, model_gate=None):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
@@ -210,6 +221,9 @@ class RiskSender:
         self.gate_params = gate_params
         self.stabilizer = stabilizer
         self.raw_log = raw_log
+        # 모델 판정은 규칙 위에 얹힌다(max). 게이트가 없거나 모델 파일이 없으면
+        # 규칙만으로 이전과 똑같이 돈다.
+        self.model_gate = model_gate or ModelGate()
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -244,10 +258,16 @@ class RiskSender:
         assessment = assess_risk(filtered, vehicle_speed, **self.gate_params)
 
         cane_gps_valid = store.latest["cane"]["gps_valid"]
+        # 모델은 규칙 위에 얹힌다. 안전 하한(step7)이 낸 레벨 3은 모델이 낮추지
+        # 못하고, 모델이 안전하다고 해도 규칙 레벨은 그대로 간다 - 검증되지 않은
+        # 쪽이 검증된 쪽을 무르게 만들지 않기 위해서다.
+        gate = self.model_gate.apply(
+            assessment.risk_level, now, self.pipeline.last_states
+        )
         # Hysteresis (step8_stability): rises pass through instantly, drops must
         # persist hold_s. Applied before trust gating so an untrusted fix still
         # clears to 0 immediately inside the transmitter.
-        level = assessment.risk_level
+        level = gate.level
         if self.stabilizer is not None:
             level = self.stabilizer.stabilize(level, now)
         decision = self.transmitter.consider(level, cane_gps_valid, now)
@@ -268,7 +288,7 @@ class RiskSender:
         )
         append_row(
             self.csv_path,
-            csv_row(now, store, self.transmitter, decision, assessment),
+            csv_row(now, store, self.transmitter, decision, assessment, gate),
         )
 
 
@@ -333,6 +353,16 @@ def parse_args():
     parser.add_argument("--vehicle-start-m", type=float, default=START_DISTANCE_M)
     parser.add_argument("--target-id", type=int, default=0, help="downlink target (0=broadcast)")
     parser.add_argument(
+        "--model",
+        default=None,
+        help="모델 파일 경로 (기본: 이 파일 옆의 risk_model.json)",
+    )
+    parser.add_argument(
+        "--no-model",
+        action="store_true",
+        help="모델을 쓰지 않고 규칙만으로 동작한다",
+    )
+    parser.add_argument(
         "--tx-heartbeat-s",
         type=float,
         default=HEARTBEAT_S,
@@ -379,6 +409,9 @@ def main():
         file=sys.stderr,
     )
 
+    model_gate = (ModelGate() if args.no_model
+                  else ModelGate.load(args.model))
+
     vehicle = None
     if args.test_vehicle:
         vehicle = TestVehicle(
@@ -392,7 +425,7 @@ def main():
     if args.stdin:
         sender = RiskSender(
             pipeline, transmitter, stdout_transport, args.csv, gate_params,
-            stabilizer=stabilizer, raw_log=raw_log,
+            stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
         )
         _run(sender, sys.stdin, args.source_mode, vehicle)
         if raw_log is not None:
@@ -409,7 +442,7 @@ def main():
         print(f"[INFO] port={args.port} baud={args.baud}", file=sys.stderr)
         sender = RiskSender(
             pipeline, transmitter, serial_transport(connection), args.csv, gate_params,
-            stabilizer=stabilizer, raw_log=raw_log,
+            stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
         )
         _run(sender, _serial_lines(connection), args.source_mode, vehicle)
 

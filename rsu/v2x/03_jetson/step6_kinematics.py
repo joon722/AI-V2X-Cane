@@ -334,6 +334,9 @@ class KinematicsPipeline:
             "vehicle": NodeTracker(sigma_pos, sigma_accel),
         }
         self.anchor = None
+        # Filtered (east, north, v_east, v_north) for each node as of the last
+        # successful compute(). None until then.
+        self.last_states = None
 
     def observe(self, row):
         if not has_position(row):
@@ -422,6 +425,13 @@ class KinematicsPipeline:
         # clock still projects the right amount.
         cane_e, cane_n, cane_ve, cane_vn = self.trackers["cane"].state_ahead(now - cane_t)
         veh_e, veh_n, veh_ve, veh_vn = self.trackers["vehicle"].state_ahead(now - veh_t)
+        # The model needs the same filtered states this comparison is built on.
+        # Recomputing them downstream would duplicate the clock reconciliation
+        # above and drift from it the moment either side changes.
+        self.last_states = (
+            (cane_e, cane_n, cane_ve, cane_vn),
+            (veh_e, veh_n, veh_ve, veh_vn),
+        )
         filtered = relative_kinematics(
             (cane_e, cane_n),
             (cane_ve, cane_vn),

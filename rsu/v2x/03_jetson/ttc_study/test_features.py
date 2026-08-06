@@ -175,6 +175,43 @@ def test_constant_velocity_leaves_both_rates_near_zero():
     assert np.median(np.abs(f["d_closing_dt"][approach])) < 0.1
 
 
+def test_rates_never_look_into_the_future():
+    """변화율이 과거 값만으로 계산된다.
+
+    np.gradient는 중앙차분이라 다음 시점을 함께 본다. 시뮬레이션에서는 전체
+    궤적이 있으니 계산되지만, 젯슨은 미래를 볼 수 없다. 학습 때 미래를 쓴
+    피처로 배우고 추론 때 못 쓰면 두 계산이 달라져, 시뮬레이션에서 측정한
+    성능이 현장에서 재현되지 않는다.
+
+    검사 방법은 뒤를 늘려 보는 것이다. 실시간에서는 언제나 "지금이 마지막
+    시점"이므로, 나중에 데이터가 더 들어왔다고 해서 이미 계산한 값이 바뀌면
+    안 된다. 중앙차분은 마지막 점에서만 후방차분을 쓰므로, 뒤가 늘어나면 그
+    점의 값이 달라진다.
+    """
+    from scenario_sim import Scenario, Track
+
+    sc = simulate(params(turn_rate_dps=10.0, veh_accel_mps2=-1.0), dt=0.1, duration_s=10.0)
+
+    def prefix(n):
+        return Scenario(
+            t=sc.t[:n],
+            ped=Track(x=sc.ped.x[:n], y=sc.ped.y[:n],
+                      vx=sc.ped.vx[:n], vy=sc.ped.vy[:n]),
+            veh=Track(x=sc.veh.x[:n], y=sc.veh.y[:n],
+                      vx=sc.veh.vx[:n], vy=sc.veh.vy[:n]),
+            params=sc.params,
+        )
+
+    n = 60
+    short = build_features(prefix(n))
+    longer = build_features(prefix(n + 5))
+
+    for name in ("d_closing_dt", "d_heading_dt"):
+        assert np.allclose(short[name], longer[name][:n], atol=1e-9), (
+            f"{name}: 뒤에 데이터가 들어오자 이미 계산한 값이 바뀐다 = 미래를 본다"
+        )
+
+
 def test_geometric_singularity_is_clamped():
     """통과 순간의 특이점이 물리적 상한으로 잘린다.
 
