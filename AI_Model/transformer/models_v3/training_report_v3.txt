@@ -1,0 +1,20 @@
+target: risk_level_future3 (3s lookahead)
+features(19)
+train 285,602 / test 66,238 (scenario split 60)
+
+              precision    recall  f1-score   support
+
+         안전0     0.9992    0.9695    0.9842     60000
+         주의1     0.7188    0.8348    0.7725      4280
+         경고2     0.5905    0.9374    0.7246      1103
+         위험3     0.6026    0.9170    0.7273       855
+
+    accuracy                         0.9596     66238
+   macro avg     0.7278    0.9147    0.8021     66238
+weighted avg     0.9692    0.9596    0.9628     66238
+
+[[58171  1373   273   183]
+ [   44  3573   391   272]
+ [    0     7  1034    62]
+ [    0    18    53   784]]
+ONNX diff 4.77e-06

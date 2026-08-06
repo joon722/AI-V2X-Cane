@@ -19,7 +19,7 @@ BASE = Path.home() / "SUMO_project"
 GEN = BASE / "generated_data"
 RES = BASE / "results"
 KEEP_RECENT = 30          # 최신 시나리오는 항상 보존
-GZIP_AFTER_HOURS = 1      # 이 시간 지난 결과 CSV는 압축 (pandas는 .gz도 바로 읽음)
+GZIP_AFTER_HOURS = 0.1      # 이 시간 지난 결과 CSV는 압축 (pandas는 .gz도 바로 읽음)
 DELETE_GZ_AFTER_DAYS = 14  # 이 기간 지난 압축 결과는 삭제 (원본은 Jetson에 보관됨)
 
 deleted = 0

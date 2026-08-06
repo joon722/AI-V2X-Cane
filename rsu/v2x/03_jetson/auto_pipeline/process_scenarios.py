@@ -31,18 +31,11 @@ import pandas as pd
 JETSON_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(JETSON_DIR))
 from risk_inference_onnx import (  # noqa: E402
-    create_onnx_session,
     create_sequences,
-    load_scaler,
     normalize_features,
     softmax,
 )
-from step7_risk import (  # noqa: E402
-    calculate_risk_score,
-    calculate_ttc,
-    classify_risk_level,
-    dcpa_gate,
-)
+from step7_risk import calculate_risk_score, calculate_ttc  # noqa: E402
 
 # ---------------------------------------------------------
 # 설정
@@ -58,14 +51,12 @@ RESULT_DIR = Path.home() / "inference_results"
 ZONE_BASE_RISK = 0.0  # SUMO 시나리오에는 구역 정보가 없음
 BATCH_SIZE = 256
 
-# 모델은 보행자 좌표가 (3600, 1400) 고정인 데이터로 학습되었다
-# (scaler.json에서 ped_x/ped_y의 scale이 1.0 = 학습 중 변화 없음).
-# 실제 보행자 좌표를 그대로 넣으면 정규화 값이 극단적으로 커져서
-# 모델이 오작동하므로, 거리/TTC/risk_score는 실제 좌표로 계산하고
-# 모델 입력의 ped_x/ped_y만 학습 시 상수로 고정한다.
-# 새 데이터로 모델을 재학습하면 이 고정을 제거할 것.
-MODEL_PED_X = 3600.0
-MODEL_PED_Y = 1400.0
+# v3 모델: 3초 선행 예측 — 출력(onnx_risk_level)은 "현재 위험"이 아니라
+# "향후 3초 내 도달할 최대 위험 레벨"이다 (실제 위험보다 중앙값 4초 먼저 경고).
+# 입력 19개 = v2의 16개 + 물리 외삽 3개(등속 가정 3초 내 최소 거리/시점/점수).
+MODEL_PATH = Path(__file__).resolve().parent / "risk_transformer_v3.onnx"
+SCALER_PATH = Path(__file__).resolve().parent / "scaler_v3.json"
+PREDICT_HORIZON_S = 3.0
 
 log = logging.getLogger("pipeline")
 
@@ -148,14 +139,15 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
     df["zone_base_risk"] = ZONE_BASE_RISK
     df["ts_ms"] = (df["timestep_time"] * 1000).astype(int)
 
-    # DCPA(최근접 예상 거리) 계산 — 스쳐 지나가는 차 오경보 억제용.
-    # 상대 위치/속도 벡터로 "이대로 가면 얼마나 가까워지는가"를 예측한다.
-    # step7의 DCPA 게이트(팀 로직)를 그대로 재사용해 억제 계수를 만든다.
+    # 벡터 특징 (v2 모델 입력): 상대 위치/속도 + 최근접 예상 거리(DCPA)
     rx = df["veh_x"] - df["ped_x"]
     ry = df["veh_y"] - df["ped_y"]
     vid = df["vehicle_id"]
     dvx = rx.groupby(vid, sort=False).diff() / dt
     dvy = ry.groupby(vid, sort=False).diff() / dt
+    df["dx"], df["dy"] = rx, ry
+    df["dvx"] = dvx.fillna(0.0)
+    df["dvy"] = dvy.fillna(0.0)
     v2 = dvx ** 2 + dvy ** 2
     t_cpa = -(rx * dvx + ry * dvy) / v2.where(v2 > 1e-6)
     cpa_x = rx + dvx * t_cpa
@@ -164,13 +156,24 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
     # 멀어지는 중(t_cpa<0)이거나 속도 정보가 없으면 현재 거리를 그대로 사용
     df["dcpa_m"] = dcpa.where((t_cpa > 0) & v2.notna(),
                               df["distance_m"]).fillna(df["distance_m"])
-    df["gate_factor"] = [dcpa_gate(d) for d in df["dcpa_m"]]
 
-    # 실제 보행자 좌표는 기록용으로 남기고, 모델 입력용 좌표는 학습 상수로 고정
-    df["ped_x_real"] = df["ped_x"]
-    df["ped_y_real"] = df["ped_y"]
-    df["ped_x"] = MODEL_PED_X
-    df["ped_y"] = MODEL_PED_Y
+    # 물리 외삽 특징 (v3 학습 데이터 생성 코드와 동일한 계산):
+    # 등속 가정으로 3초 안에 도달할 최소 거리·시점과 그때의 채점표 점수
+    vx = df["dvx"].to_numpy()
+    vy = df["dvy"].to_numpy()
+    rxa, rya = rx.to_numpy(), ry.to_numpy()
+    v2f = vx ** 2 + vy ** 2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_cpa_p = np.where(v2f > 1e-6, -(rxa * vx + rya * vy) / v2f, -1.0)
+    t_hit = np.clip(t_cpa_p, 0.0, PREDICT_HORIZON_S)
+    px, py = rxa + vx * t_hit, rya + vy * t_hit
+    df["phys_min_dist_3s"] = np.sqrt(px ** 2 + py ** 2)
+    df["phys_t_cpa"] = t_hit
+    ttc_arg = np.where(t_hit > 0.05, t_hit, 0.05)
+    df["phys_score_3s"] = [
+        calculate_risk_score(d, r, v, t if r > 0.1 else 9999.0)
+        for d, r, v, t in zip(df["phys_min_dist_3s"], df["rel_speed_mps"],
+                              df["veh_speed_mps"], ttc_arg)]
     return df
 
 
@@ -200,15 +203,8 @@ def run_inference(session, df, feature_columns, mean, scale, seq_len):
         probs = softmax(logits)
 
         result = group.iloc[seq_len - 1:].copy()
-        raw_level = np.argmax(probs, axis=1).astype(np.int64)
-        result["onnx_risk_level_raw"] = raw_level
+        result["onnx_risk_level"] = np.argmax(probs, axis=1).astype(np.int64)
         result["onnx_confidence"] = np.max(probs, axis=1)
-        # DCPA 게이트 적용: 스쳐 갈 차(빗나감 예측)는 레벨을 낮춘다.
-        # 레벨을 팀 채점표의 구간 대표 점수로 되돌려 게이트 계수를 곱한 뒤
-        # 팀 기준(70/45/20)으로 다시 분류 — 게이트는 절대 레벨을 올리지 않음.
-        rep_score = np.array([10.0, 32.0, 57.0, 85.0])[raw_level]
-        gated = rep_score * result["gate_factor"].to_numpy()
-        result["onnx_risk_level"] = [classify_risk_level(s) for s in gated]
         results.append(result)
 
     if skipped:
@@ -250,8 +246,7 @@ def process_scenario(scenario_dir, session, feature_columns, mean, scale,
     RESULT_DIR.mkdir(exist_ok=True)
     result_csv = RESULT_DIR / f"{scenario_dir.name}_result.csv"
     out_cols = ["ts_ms", "timestep_time", "vehicle_id"] + feature_columns + \
-               ["ped_x_real", "ped_y_real", "dcpa_m", "gate_factor",
-                "onnx_risk_level_raw", "onnx_risk_level", "onnx_confidence"]
+               ["onnx_risk_level", "onnx_confidence"]
     result[out_cols].to_csv(result_csv, index=False)
 
     counts = result["onnx_risk_level"].value_counts().sort_index()
@@ -302,9 +297,18 @@ def main():
         ],
     )
 
-    feature_columns, mean, scale, seq_len = load_scaler()
-    session = create_onnx_session()
-    log.info("파이프라인 시작 (feature %d개, 시퀀스 길이 %d)",
+    # v2 scaler/모델 로드 (auto_pipeline 폴더의 v2 파일 사용)
+    import json as _json
+    import onnxruntime as ort
+    scaler = _json.loads(SCALER_PATH.read_text(encoding="utf-8"))
+    feature_columns = scaler["feature_columns"]
+    mean = np.array(scaler["mean"], dtype=np.float32)
+    scale = np.array(scaler["scale"], dtype=np.float32)
+    scale = np.where(scale == 0, 1.0, scale).astype(np.float32)
+    seq_len = int(scaler["sequence_length"])
+    session = ort.InferenceSession(str(MODEL_PATH),
+                                   providers=["CPUExecutionProvider"])
+    log.info("파이프라인 시작 — v2 모델 (feature %d개, 시퀀스 길이 %d)",
              len(feature_columns), seq_len)
 
     while True:
