@@ -123,6 +123,22 @@ DCPA_NEAR_M = GPS_SIGMA_M          # 2.5 m, ~1 sigma: no suppression inside this
 DCPA_FAR_M = 3.0 * GPS_SIGMA_M     # 7.5 m, ~3 sigma: full suppression beyond
 DCPA_FLOOR = 0.2                   # a clear miss still keeps a fifth of the score
 
+# 안전 하한. TTC가 이 값 아래면 점수표도 DCPA 게이트도 무시하고 최고 레벨을 낸다.
+# 근거는 ttc_study/SPEC.md에 있고, 항의 합으로 나온 값이다.
+#
+#   GPS 주기 0.2 + 전송 0.1 + 인지·판단 0.3 + 정지 동작 1.2 + 마진 0.2 = 2.0 s
+#
+# 전송 0.1초는 2026-08-05 실측(위험도 변경 29건 전수, 계산 1.0 ms + 무선 왕복
+# 102 ms)이고, 정지 1.2초는 보행 급정지 실험의 보수적인 끝(0.84~1.21 s)이다.
+# 합이 GB/T 33577(ISO 15623 준용) 최소 2초 및 NHTSA NCAP FCW 2.0~2.4초와 같은
+# 자리에 떨어진다.
+#
+# 게이트까지 무시하는 이유: 게이트는 '스쳐 갈 차'를 걸러내는 장치인데 그 판단
+# 자체가 추정이고, 접촉까지 2초도 남지 않았을 때 추정이 틀리면 대가가 너무 크다.
+# 시뮬레이션 검증(시나리오 800개)에서 이 하한은 위험 시나리오 검출을 18/19 ->
+# 19/19로 올리고 오경보율을 2.03% -> 3.24%로 만든다. 놓치지 않는 쪽에 비용을 쓴다.
+T_FLOOR_TTC_S = 2.0
+
 
 def dcpa_gate(dcpa, near_m=DCPA_NEAR_M, far_m=DCPA_FAR_M, floor=DCPA_FLOOR):
     """Multiplier in [floor, 1] that fades risk out as the miss distance grows.
@@ -149,6 +165,7 @@ class RiskAssessment:
     gate: float
     final_score: float
     risk_level: int
+    reason: str = "table"  # "table" | "safety_floor"
 
 
 def assess_risk(
@@ -158,12 +175,16 @@ def assess_risk(
     near_m=DCPA_NEAR_M,
     far_m=DCPA_FAR_M,
     floor=DCPA_FLOOR,
+    floor_ttc_s=T_FLOOR_TTC_S,
 ):
     """Score one filtered-track Kinematics sample.
 
     `closing_los` is the line-of-sight closing speed, which is what the team
     table means by relative speed. TTC is recomputed through the team's own
     function so the score stays exactly consistent with that table.
+
+    TTC가 floor_ttc_s 아래면 점수와 게이트를 모두 건너뛰고 레벨 3을 낸다
+    (reason="safety_floor"). 분석용으로 하한을 끄려면 floor_ttc_s=0을 준다.
     """
     closing = kinematics.closing_los
     ttc = calculate_ttc(kinematics.distance_m, closing)
@@ -172,6 +193,9 @@ def assess_risk(
     )
     gate = dcpa_gate(kinematics.dcpa, near_m, far_m, floor)
     final = round(base * gate, 2)
+
+    # 접근하지 않는 쌍은 calculate_ttc가 9999를 주므로 하한에 걸리지 않는다.
+    breached = floor_ttc_s > 0 and ttc <= floor_ttc_s
     return RiskAssessment(
         distance_m=kinematics.distance_m,
         closing_los=closing,
@@ -181,7 +205,8 @@ def assess_risk(
         base_score=base,
         gate=round(gate, 3),
         final_score=final,
-        risk_level=classify_risk_level(final),
+        risk_level=3 if breached else classify_risk_level(final),
+        reason="safety_floor" if breached else "table",
     )
 
 

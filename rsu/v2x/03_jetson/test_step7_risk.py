@@ -8,6 +8,7 @@ from step7_risk import (
     DCPA_FAR_M,
     DCPA_FLOOR,
     DCPA_NEAR_M,
+    T_FLOOR_TTC_S,
     assess_risk,
     calculate_risk_score,
     calculate_ttc,
@@ -125,6 +126,94 @@ class AssessRiskTest(unittest.TestCase):
         self.assertEqual(result.gate, 1.0)
         # Distance term still fires (8 m), but no TTC and no closing speed.
         self.assertEqual(result.risk_level, 1)
+
+
+class SafetyFloorTest(unittest.TestCase):
+    """TTC가 반응 가능 시간 아래로 내려가면 점수와 무관하게 최고 레벨이 나간다.
+
+    근거는 ttc_study/SPEC.md에 정리되어 있다. T_FLOOR_TTC_S = 2.0초는
+    GPS 주기 0.2 + 전송 0.1(8/5 실측) + 인지·판단 0.3 + 정지 동작 1.2 + 마진 0.2의
+    합이고, GB/T 33577(최소 2초)·NHTSA NCAP FCW(2.0~2.4초)와도 같은 자리다.
+
+    시뮬레이션 검증(시나리오 800개): 이 하한을 넣으면 위험 시나리오 검출이
+    18/19 -> 19/19로 올라가고 오경보율은 2.03% -> 3.24%가 된다. 놓치지 않는 쪽에
+    비용을 쓰는 것이 이 규칙의 목적이다.
+    """
+
+    def test_imminent_collision_forces_top_level(self):
+        # 10 m 앞에서 10 m/s로 정면 접근 -> TTC 1.0초
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 10.0),
+            veh_vel=(0.0, -10.0),
+        )
+        self.assertLessEqual(kin.ttc_simple, T_FLOOR_TTC_S)
+
+        result = assess_risk(kin, vehicle_speed_mps=10.0)
+
+        self.assertEqual(result.risk_level, 3)
+
+    def test_floor_overrides_the_dcpa_gate(self):
+        """게이트가 점수를 깎아도 하한은 무시하고 발동한다.
+
+        게이트는 '스쳐 갈 차'를 걸러내는 장치인데, 그 판단 자체가 추정이다.
+        접촉까지 2초도 남지 않은 상황에서는 추정이 틀렸을 때의 대가가 너무 크다.
+        """
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(8.0, 6.0),
+            veh_vel=(-4.0, -3.0),
+        )
+        self.assertLessEqual(kin.ttc_simple, T_FLOOR_TTC_S)
+
+        result = assess_risk(kin, vehicle_speed_mps=5.0)
+
+        self.assertEqual(result.risk_level, 3)
+        self.assertEqual(result.reason, "safety_floor")
+
+    def test_above_the_floor_nothing_changes(self):
+        """하한 위에서는 기존 채점이 그대로다."""
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 50.0),
+            veh_vel=(0.0, -10.0),
+        )
+        self.assertGreater(kin.ttc_simple, T_FLOOR_TTC_S)
+
+        result = assess_risk(kin, vehicle_speed_mps=10.0)
+
+        self.assertEqual(result.risk_level, classify_risk_level(result.final_score))
+        self.assertEqual(result.reason, "table")
+
+    def test_receding_vehicle_never_triggers_the_floor(self):
+        """멀어지는 차는 TTC가 없으므로 하한이 걸리지 않는다."""
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 3.0),
+            veh_vel=(0.0, 5.0),
+        )
+        self.assertIsNone(kin.ttc_simple)
+
+        result = assess_risk(kin, vehicle_speed_mps=5.0)
+
+        self.assertNotEqual(result.reason, "safety_floor")
+
+    def test_floor_can_be_disabled_for_analysis(self):
+        """하한을 끈 채로도 채점할 수 있어야 전후 비교가 가능하다."""
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 10.0),
+            veh_vel=(0.0, -10.0),
+        )
+
+        result = assess_risk(kin, vehicle_speed_mps=10.0, floor_ttc_s=0.0)
+
+        self.assertEqual(result.reason, "table")
 
 
 if __name__ == "__main__":
