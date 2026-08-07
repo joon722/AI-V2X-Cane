@@ -61,8 +61,11 @@ def classify_risk_level(risk_score):
 
 
 def main():
-    print("1. v2 데이터셋 로드...")
-    df = pd.read_csv(HERE / "training_dataset_v2.csv")
+    # 사용법: python build_v3_and_baseline.py [입력csv] [출력csv]
+    src = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "training_dataset_v2.csv"
+    dst = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE / "training_dataset_v3.csv"
+    print(f"1. 데이터셋 로드... ({src.name})")
+    df = pd.read_csv(src)
     print(f"   {len(df):,}행")
 
     g = df.groupby(["scenario_id", "vehicle_id"], sort=False)
@@ -97,8 +100,8 @@ def main():
     print("   미래(3초) 라벨 분포:",
           df["risk_level_future3"].value_counts().sort_index().tolist())
 
-    df.to_csv(HERE / "training_dataset_v3.csv", index=False)
-    print("   저장: training_dataset_v3.csv")
+    df.to_csv(dst, index=False)
+    print(f"   저장: {dst.name}")
 
     # ── 물리 기준선 평가 (v2와 같은 평가 시나리오로) ──
     random.seed(SEED)
