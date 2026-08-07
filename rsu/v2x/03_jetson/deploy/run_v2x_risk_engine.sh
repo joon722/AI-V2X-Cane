@@ -13,6 +13,14 @@ SOURCE_MODE="${V2X_SOURCE_MODE:-real}"
 LOG_DIR="$DIR/logs"
 mkdir -p "$LOG_DIR"
 
+# V2X_NO_MODEL=1 이면 규칙만으로 돈다. 실험에서 기준선을 뽑을 때 쓴다 -
+# 모델을 켠 채로만 찍으면 경보가 규칙 때문인지 모델 때문인지 구분할 수 없다.
+# 변수를 주지 않으면 기존과 동일하게 모델을 싣는다.
+NO_MODEL=""
+if [ "${V2X_NO_MODEL:-0}" = "1" ]; then
+  NO_MODEL="--no-model"
+fi
+
 # 부팅 직후 USB 인식이 늦을 수 있으므로 최대 2분 대기
 for i in $(seq 1 60); do
   [ -e "$PORT" ] && break
@@ -40,9 +48,10 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 CSV="$LOG_DIR/risk_tx_$STAMP.csv"
 RAW="$LOG_DIR/raw_$STAMP.log"
 
-echo "[START] port=$PORT csv=$CSV raw=$RAW source_mode=$SOURCE_MODE"
+echo "[START] port=$PORT csv=$CSV raw=$RAW source_mode=$SOURCE_MODE${NO_MODEL:+ MODEL=off}"
 exec python3 "$DIR/step8_send_risk.py" \
   --port "$PORT" \
   --csv "$CSV" \
   --raw-log "$RAW" \
-  --source-mode "$SOURCE_MODE"
+  --source-mode "$SOURCE_MODE" \
+  $NO_MODEL
