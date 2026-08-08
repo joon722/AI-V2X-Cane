@@ -218,7 +218,10 @@ const char *V2X_AP_PASSWORD = "12345678";
 // 중력 성분을 제거한 선형가속도 크기가 이 값을 넘으면 충격으로 판단.
 // 너무 민감하면 올리고, 둔하면 낮추면 됨.
 // 일반 노면 실측 중 순간 최대 73.56m/s²까지 관측되어 85로 올린다.
-#define IMPACT_THRESHOLD_MPS2 85.0f
+// 2026-08-08 울퉁불퉁한 노면/배치 중 비충돌 트리거 97.08m/s² 확인.
+// 실제 접근 주행 최대 피크는 42.95m/s²이었으며,
+// 비충돌 트리거에 약 13% 여유를 둔다.
+#define IMPACT_THRESHOLD_MPS2 110.0f
 #define IMPACT_COOLDOWN_MS 5000UL
 
 #define TRACK_CAUTION_FILE "/0001.mp3"
@@ -1441,7 +1444,32 @@ void sendGpsUbxCommand(uint8_t msgClass,
   gpsSerial.flush();
 }
 
-void configureNeo6m5Hz() {
+bool waitForGpsUbxAck(uint8_t targetClass,
+                      uint8_t targetId,
+                      uint32_t timeoutMs) {
+  const uint8_t expected[] = {
+    0xB5, 0x62, 0x05, 0x01, 0x02, 0x00,
+    targetClass, targetId
+  };
+  size_t matched = 0;
+  uint32_t startedMs = millis();
+
+  while (millis() - startedMs < timeoutMs) {
+    while (gpsSerial.available() > 0) {
+      uint8_t value = (uint8_t)gpsSerial.read();
+      if (value == expected[matched]) {
+        matched++;
+        if (matched == sizeof(expected)) return true;
+      } else {
+        matched = value == expected[0] ? 1 : 0;
+      }
+    }
+    delay(1);
+  }
+  return false;
+}
+
+bool configureNeo6m5Hz() {
   // 9600bps에서 5Hz NMEA 전체를 보내면 대역폭이 부족할 수 있다.
   // TinyGPSPlus에 필요한 GGA(위성 수/HDOP)와 RMC(위치/속도/방향)만 남긴다.
   static const uint8_t nmeaMessageRates[][3] = {
@@ -1453,29 +1481,43 @@ void configureNeo6m5Hz() {
     {0xF0, 0x05, 0}   // VTG OFF
   };
 
-  for (size_t i = 0;
-       i < sizeof(nmeaMessageRates) / sizeof(nmeaMessageRates[0]);
-       i++) {
-    sendGpsUbxCommand(0x06, 0x01, nmeaMessageRates[i], 3);
-    delay(50);
-  }
-
   // UBX-CFG-RATE: measRate=200ms, navRate=1, timeRef=GPS time.
   static const uint8_t rate5Hz[] = {
     0xC8, 0x00,
     0x01, 0x00,
     0x01, 0x00
   };
-  sendGpsUbxCommand(0x06, 0x08, rate5Hz, sizeof(rate5Hz));
-  delay(200);
+  // GPS 전원 안정화가 느리거나 첫 명령을 놓치는 보드를 위해
+  // 최대 3회 재시도하고 UBX-ACK를 확인한다.
+  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+    for (size_t i = 0;
+         i < sizeof(nmeaMessageRates) / sizeof(nmeaMessageRates[0]);
+         i++) {
+      sendGpsUbxCommand(0x06, 0x01, nmeaMessageRates[i], 3);
+      delay(50);
+    }
+
+    sendGpsUbxCommand(0x06, 0x08, rate5Hz, sizeof(rate5Hz));
+    if (waitForGpsUbxAck(0x06, 0x08, 700UL)) {
+      return true;
+    }
+
+    Serial.printf("[GPS] NEO-6M 5Hz ACK timeout attempt=%u/3\n", attempt);
+    delay(300);
+  }
+
+  return false;
 }
 
 void setupGps() {
 #if USE_GPS
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
-  delay(500);
-  configureNeo6m5Hz();
-  Serial.println("[GPS] NEO-6M configured: 5Hz, GGA+RMC, 9600bps");
+  delay(1500);
+  bool gps5HzConfigured = configureNeo6m5Hz();
+  Serial.printf(
+    "[GPS] NEO-6M 5Hz config=%s, GGA+RMC, 9600bps\n",
+    gps5HzConfigured ? "ACK" : "FAILED"
+  );
   Serial.println("[GPS] ready: TX->GPIO16, RX<-GPIO17");
 #endif
 }
