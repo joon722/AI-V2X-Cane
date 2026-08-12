@@ -135,16 +135,19 @@ const char *V2X_AP_PASSWORD = "12345678";
 
 // GPS 품질/이상치 필터 설정: RC카 기준.
 #define GPS_MIN_SATELLITES 4
-#define GPS_MAX_HDOP 3.0f
+#define GPS_MAX_HDOP 3.5f
 #define GPS_NODE_MAX_SPEED_MPS 6.0f
 #define GPS_OUTLIER_BASE_M 4.0f
 #define GPS_FILTER_ALPHA 0.50f
 #define GPS_FILTER_BETA 0.08f
-// NEO-6M 5Hz 기준: 0.2초 x 15회 = 약 3초 동안 같은 새 위치가
-// 반복될 때만 필터 기준 위치를 재설정한다.
-#define GPS_RELOCALIZE_AFTER_REJECTS 15
+// GPS가 실제 5Hz면 15회, 1Hz로 떨어지면 3회를 사용해 어느 경우든
+// 약 3초 동안 같은 새 위치가 반복될 때 필터 기준 위치를 재설정한다.
+#define GPS_RELOCALIZE_AFTER_REJECTS_5HZ 15
+#define GPS_RELOCALIZE_AFTER_REJECTS_1HZ 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
 #define GPS_PREDICTION_MAX_MS 700UL
+#define GPS_5HZ_RECOVERY_COOLDOWN_MS 60000UL
+#define GPS_5HZ_RECOVERY_MIN_UPTIME_MS 15000UL
 
 // 정지 상태용 GPS 필터.
 #define GPS_STATIONARY_SPEED_MPS 0.45f
@@ -435,6 +438,39 @@ typedef struct {
 } GpsFilterState;
 
 GpsFilterState gpsFilter = {};
+uint32_t lastGpsMeasurementMs = 0;
+float gpsObservedUpdateIntervalMs = 200.0f;
+uint8_t gpsRelocalizeAfterRejects =
+  GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+bool gps5HzRecoveryRequested = false;
+uint32_t lastGps5HzRecoveryAttemptMs = 0;
+
+void updateObservedGpsRate(uint32_t now) {
+  if (lastGpsMeasurementMs > 0) {
+    uint32_t intervalMs = now - lastGpsMeasurementMs;
+    if (intervalMs >= 100UL && intervalMs <= 2000UL) {
+      gpsObservedUpdateIntervalMs =
+        0.70f * gpsObservedUpdateIntervalMs + 0.30f * intervalMs;
+
+      uint8_t newRejectLimit =
+        gpsObservedUpdateIntervalMs > 500.0f
+          ? GPS_RELOCALIZE_AFTER_REJECTS_1HZ
+          : GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+      gps5HzRecoveryRequested =
+        newRejectLimit == GPS_RELOCALIZE_AFTER_REJECTS_1HZ;
+
+      if (newRejectLimit != gpsRelocalizeAfterRejects) {
+        gpsRelocalizeAfterRejects = newRejectLimit;
+        Serial.printf(
+          "[GPS] observed interval=%.0fms -> relocalize rejects=%u\n",
+          gpsObservedUpdateIntervalMs,
+          gpsRelocalizeAfterRejects
+        );
+      }
+    }
+  }
+  lastGpsMeasurementMs = now;
+}
 
 float normalizeHeading(float headingDeg) {
   while (headingDeg < 0.0f) headingDeg += 360.0f;
@@ -557,7 +593,7 @@ bool updateGpsFilter(double lat,
 
     // 같은 새 위치가 연속해서 들어오면 실제 이동 또는 GPS 재수신으로 판단.
     if (gpsFilter.consecutiveOutliers <
-        GPS_RELOCALIZE_AFTER_REJECTS) {
+        gpsRelocalizeAfterRejects) {
       return false;
     }
 
@@ -1599,6 +1635,37 @@ void setupGps() {
 #endif
 }
 
+void recoverGps5HzIfNeeded() {
+#if USE_GPS
+  if (!gps5HzRecoveryRequested || relativeGpsCalibration.active) return;
+
+  uint32_t now = millis();
+  if (now < GPS_5HZ_RECOVERY_MIN_UPTIME_MS) return;
+  if (lastGps5HzRecoveryAttemptMs > 0 &&
+      now - lastGps5HzRecoveryAttemptMs <
+        GPS_5HZ_RECOVERY_COOLDOWN_MS) {
+    return;
+  }
+
+  lastGps5HzRecoveryAttemptMs = now;
+  Serial.printf(
+    "[GPS] observed %.0fms updates -> retrying 5Hz configuration\n",
+    gpsObservedUpdateIntervalMs
+  );
+
+  bool recovered = configureNeo6m5Hz();
+  Serial.printf(
+    "[GPS] runtime 5Hz recovery=%s\n",
+    recovered ? "ACK" : "FAILED"
+  );
+
+  // 재설정 뒤에는 실제 NMEA 간격을 처음부터 다시 측정한다.
+  lastGpsMeasurementMs = 0;
+  gpsObservedUpdateIntervalMs = 200.0f;
+  if (recovered) gps5HzRecoveryRequested = false;
+#endif
+}
+
 void updateDemoMovingFallback() {
 #if USE_DEMO_MOVING_FALLBACK
   const float speedMps = 1.2f;
@@ -1641,6 +1708,7 @@ void readGps() {
   // GGA와 RMC에 둘 다 위치가 있으므로 RMC에서 속도와 함께
   // 갱신된 위치만 처리해 1회의 GPS fix를 두 번 카운트하지 않는다.
   if (gps.location.isUpdated() && gps.speed.isUpdated()) {
+    updateObservedGpsRate(now);
     rawGpsLat = gps.location.lat();
     rawGpsLng = gps.location.lng();
     rawGpsSatellites =
@@ -2667,6 +2735,7 @@ void setup() {
 void loop() {
   handleVehicleSerialCommands();
   readGps();
+  recoverGps5HzIfNeeded();
   readImu();
   updateVehiclePathHeading();
   updateDfPlayer();
