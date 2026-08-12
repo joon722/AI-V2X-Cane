@@ -47,6 +47,10 @@
 
 // Jetson/RSU 없이 차량 ESP32가 직접 위험도를 계산할 때 1.
 #define VEHICLE_CALCULATES_RISK 1
+// 현재 야외 직접판정 시험에서는 차량 자체 계산만 음성/지팡이에 적용한다.
+// RSU의 예전 위험 패킷이 원시위험=0인 평행 주행에서도 차량 음성을
+// 순간 재생한 것이 07/08 로그에서 확인되어 기본 비활성화한다.
+#define ENABLE_RSU_RISK_INPUT 0
 
 // 1: 실내 책상 테스트 거리, 0: 실제 도로용 거리
 #define USE_INDOOR_RISK_DISTANCE 0
@@ -79,7 +83,7 @@ uint32_t lastUdpTelemetryMs = 0;
 #define DFPLAYER_RX 26  // ESP32 RX1 <- DFPlayer TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
 #define DFPLAYER_BAUD 115200
-#define DFPLAYER_VOLUME 30  // 0~30
+#define DFPLAYER_VOLUME 15  // 0~30
 
 // =====================
 // 동작 설정
@@ -118,7 +122,10 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define RSSI_APPROACH_ENTER_DBM   (-75.0f)
 #define RSSI_APPROACH_EXIT_DBM    (-79.0f)
 
-// RSSI 연속 거리 추정은 CPA 벡터의 크기에만 사용한다.
+// RSSI 연속 거리 추정은 진단용으로만 남긴다.
+// CPA 상대벡터의 방향과 크기는 영점보정한 GPS에서 모두 가져온다.
+// RSSI로 GPS 벡터 크기를 강제하면 평행 통과 때 횡방향 이격거리까지
+// 줄어들어 충돌 경로로 오인할 수 있다.
 // 실측 회귀: RSSI = -51.7 - 10 * 2.42 * log10(distance).
 #define RSSI_AT_1M_DBM (-51.7f)
 #define RSSI_PATH_LOSS_EXPONENT 2.42f
@@ -162,7 +169,10 @@ const char *V2X_AP_PASSWORD = "12345678";
 // GPS가 잠깐 끊긴 동안의 회전을 담당한다.
 #define GPS_MOTION_HEADING_TIMEOUT_MS 2000UL
 #define VEHICLE_BODY_HEADING_TIMEOUT_MS 5000UL
-#define VEHICLE_DRIVE_MODE_CONFIRM_COUNT 2
+#define VEHICLE_IMU_FRESH_TIMEOUT_MS 500UL
+#define VEHICLE_BODY_BOOTSTRAP_SPEED_MPS 0.70f
+#define VEHICLE_BODY_GPS_CORRECTION_ALPHA 0.12f
+#define VEHICLE_DRIVE_MODE_CONFIRM_COUNT 3
 
 #define CAR_MAG_CENTER_X_UT   9.1125f
 #define CAR_MAG_CENTER_Y_UT (-27.4875f)
@@ -271,14 +281,23 @@ const char *V2X_AP_PASSWORD = "12345678";
 
 // ===== 경로교차(CPA) 위험판정 =====
 #define MIN_PREDICT_VEHICLE_SPEED_MPS 0.40f
-#define MIN_PREDICT_CANE_SPEED_MPS 0.25f
+#define MIN_PREDICT_CANE_SPEED_MPS 0.50f
 #define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
-#define CPA_DANGER_DISTANCE_M 1.5f
-#define CPA_WARNING_DISTANCE_M 2.5f
-#define CPA_CAUTION_DISTANCE_M 4.0f
+// 사용자가 안전 평행 간격으로 정한 1.5m에서는 울리지 않도록
+// CPA 횡방향 충돌반경을 1.2m 안쪽으로 제한한다.
+#define CPA_DANGER_DISTANCE_M 0.5f
+#define CPA_WARNING_DISTANCE_M 0.8f
+#define CPA_CAUTION_DISTANCE_M 1.2f
 #define CPA_PREDICTION_HORIZON_S 5.0f
 // RSSI/UWB 결합 전에는 GPS만으로 "방향 무관 즉시 경고"하지 않는다.
 #define EMERGENCY_DISTANCE_M 0.2f
+
+// 2026-08-12 재시험에서 네 평행 로그는 -72dBm 미만이거나 후진이었고,
+// 정면 접근은 전진 중 -72dBm 이상 + GPS 방위오차 70도 안으로 분리됐다.
+// 독립 GPS 상대좌표가 20m 이상 틀어진 경우에도 주의 경보를 살리는
+// 근거리 정면접근 보조 조건이다. RSSI 특성상 이 경로는 CAUTION만 낸다.
+#define RISK_RSSI_GATE_DBM (-72.0f)
+#define DIRECT_APPROACH_CONE_HALF_ANGLE_DEG 70.0f
 
 // 지팡이 노드의 GPS fallback 좌표와 같아야 함.
 #define CANE_FIXED_LAT 37.000000
@@ -1231,9 +1250,10 @@ float signedHeadingDifference(float fromDeg, float toDeg) {
 
 bool vehicleBodyHeadingIsFresh() {
   return vehicleBodyHeadingHasFix &&
-         lastVehicleMagAcceptedMs > 0 &&
-         millis() - lastVehicleMagAcceptedMs <=
-           VEHICLE_BODY_HEADING_TIMEOUT_MS;
+         imuReady &&
+         lastImuSampleMs > 0 &&
+         millis() - lastImuSampleMs <=
+           VEHICLE_IMU_FRESH_TIMEOUT_MS;
 }
 
 bool estimateVehicleBodyHeadingFromModel(float *outHeadingDeg) {
@@ -1379,20 +1399,38 @@ void updateVehicleBodyHeading(uint32_t now, float dt) {
   } else {
     vehicleHeadingRejectedCount++;
 
-    if (lastVehicleMagAcceptedMs == 0 ||
-        now - lastVehicleMagAcceptedMs >
-          VEHICLE_BODY_HEADING_TIMEOUT_MS) {
-      vehicleBodyHeadingHasFix = false;
-      vehicleDriveModeKnown = false;
-      vehicleIsReversing = false;
-      candidateReversing = false;
-      driveModeCandidateCount = 0;
-    }
+    // 이번 실측에서는 전원/장착 환경이 달라져 기존 자력계 모델이
+    // 정지 중에도 모두 거절됐다. 이미 GPS로 초기화한 차체방향은
+    // 자력계 거절만으로 폐기하지 않고 자이로 적분을 계속 사용한다.
+    // IMU 자체가 끊기면 vehicleBodyHeadingIsFresh()가 즉시 false가 된다.
   }
 }
 
 void updateVehicleDriveModeFromGps(float gpsHeadingDeg) {
-  if (!vehicleBodyHeadingIsFresh()) return;
+  // 자력계 절대방향이 유효하지 않아도 첫 확실한 전진 구간의 GPS course로
+  // 차체방향을 시작한다. 이후 차체를 돌리면 자이로도 함께 회전하고,
+  // 차체 그대로 후진하면 GPS course만 180도 바뀌므로 두 동작을 구분한다.
+  if (!vehicleBodyHeadingIsFresh()) {
+    if (!imuReady || lastImuSampleMs == 0 ||
+        millis() - lastImuSampleMs > VEHICLE_IMU_FRESH_TIMEOUT_MS ||
+        rawGpsSpeedMps < VEHICLE_BODY_BOOTSTRAP_SPEED_MPS) {
+      return;
+    }
+
+    vehicleBodyHeadingDeg = normalizeHeading(gpsHeadingDeg);
+    vehicleBodyHeadingHasFix = true;
+    vehicleDriveModeKnown = true;
+    vehicleIsReversing = false;
+    candidateReversing = false;
+    driveModeCandidateCount = VEHICLE_DRIVE_MODE_CONFIRM_COUNT;
+
+    Serial.printf(
+      "[BODY HEADING] GPS bootstrap heading=%.1f speed=%.2f\n",
+      vehicleBodyHeadingDeg,
+      rawGpsSpeedMps
+    );
+    return;
+  }
 
   float difference = fabsf(
     signedHeadingDifference(vehicleBodyHeadingDeg, gpsHeadingDeg)
@@ -1408,9 +1446,31 @@ void updateVehicleDriveModeFromGps(float gpsHeadingDeg) {
   }
 
   if (driveModeCandidateCount >= VEHICLE_DRIVE_MODE_CONFIRM_COUNT) {
+    bool modeChanged =
+      !vehicleDriveModeKnown ||
+      vehicleIsReversing != candidateReversing;
+
     vehicleIsReversing = candidateReversing;
     vehicleDriveModeKnown = true;
-    driveModeCandidateCount = 0;
+
+    float gpsBodyHeadingDeg = normalizeHeading(
+      gpsHeadingDeg + (vehicleIsReversing ? 180.0f : 0.0f)
+    );
+    vehicleBodyHeadingDeg = blendHeading(
+      vehicleBodyHeadingDeg,
+      gpsBodyHeadingDeg,
+      VEHICLE_BODY_GPS_CORRECTION_ALPHA
+    );
+
+    if (modeChanged) {
+      Serial.printf(
+        "[DRIVE MODE] %s body=%.1f gpsCourse=%.1f diff=%.1f\n",
+        vehicleIsReversing ? "REVERSE" : "FORWARD",
+        vehicleBodyHeadingDeg,
+        gpsHeadingDeg,
+        difference
+      );
+    }
   }
 }
 
@@ -2048,7 +2108,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
                               float *outBearing,
                               float *outHeadingError,
                               bool *outInVehiclePath) {
-  *outDistance = rssiEstimatedDistanceM;
+  *outDistance = -1.0f;
   *outClosingSpeed = 0.0f;
   *outTtc = 999.0f;
   *outBearing = 0.0f;
@@ -2056,7 +2116,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   *outInVehiclePath = false;
 
   // 보정 전 GPS 좌표만으로는 20~50m 상대 바이어스가 생겼으므로
-  // BOOT 영점보정과 최신 RSSI가 모두 있어야 CPA를 계산한다.
+  // BOOT 영점보정과 최신 RSSI 근접 확인이 모두 있어야 CPA를 계산한다.
   if (!relativeGpsCalibration.valid ||
       relativeGpsCalibration.active ||
       !caneRssiIsFresh() ||
@@ -2072,19 +2132,16 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   rx -= relativeGpsCalibration.biasEastM;
   ry -= relativeGpsCalibration.biasNorthM;
 
-  // GPS 영점보정 벡터에서는 방향만 취하고, 벡터 크기는 RSSI 거리로 바꾼다.
+  // 영점보정 GPS 벡터의 방향과 크기를 그대로 사용한다.
+  // 2026-08-12 평행 실측에서 RSSI 크기로 치환하면 실제 횡방향 이격거리
+  // 약 4~7m가 2.5~4m로 축소되어 CAUTION/WARNING 오경보가 발생했다.
   float correctedGpsDistanceM = hypotf(rx, ry);
   if (!isfinite(correctedGpsDistanceM) ||
       correctedGpsDistanceM < 0.75f) {
     return RISK_SAFE;
   }
 
-  float vectorScale =
-    rssiEstimatedDistanceM / correctedGpsDistanceM;
-  rx *= vectorScale;
-  ry *= vectorScale;
-
-  float distanceM = rssiEstimatedDistanceM;
+  float distanceM = correctedGpsDistanceM;
   float bearing = normalizeHeading(
     atan2f(rx, ry) * RAD_TO_DEG
   );
@@ -2095,6 +2152,13 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   *outBearing = bearing;
   *outHeadingError = headingError;
 
+  // 먼 거리 RSSI에서는 독립 GPS 두 대의 순간 상대오차만으로 경보하지 않는다.
+  // 05-2 평행 로그의 GPS가 실제 약 4m를 0.9m로 오인했지만 RSSI는
+  // -72dBm보다 약했으므로 이 게이트에서 제거된다.
+  if (filteredCaneRssiDbm < RISK_RSSI_GATE_DBM) {
+    return RISK_SAFE;
+  }
+
   if (distanceM < EMERGENCY_DISTANCE_M) {
     *outInVehiclePath = true;
     return RISK_DANGER;
@@ -2104,6 +2168,14 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
     vehicleHeadingValid &&
     vehicleSpeed >= MIN_PREDICT_VEHICLE_SPEED_MPS;
   if (!vehicleMoving) return RISK_SAFE;
+
+  bool frontalRssiApproach =
+    vehicleDriveModeKnown &&
+    !vehicleIsReversing &&
+    fabsf(headingError) <= DIRECT_APPROACH_CONE_HALF_ANGLE_DEG;
+  if (frontalRssiApproach) {
+    *outInVehiclePath = true;
+  }
 
   float vehicleRad = vehicleHeading * DEG_TO_RAD;
   float vehicleVx = vehicleSpeed * sinf(vehicleRad); // 동쪽 +
@@ -2125,7 +2197,9 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   float rvx = caneVx - vehicleVx;
   float rvy = caneVy - vehicleVy;
   float relativeSpeedSq = rvx * rvx + rvy * rvy;
-  if (relativeSpeedSq < 0.01f) return RISK_SAFE;
+  if (relativeSpeedSq < 0.01f) {
+    return frontalRssiApproach ? RISK_CAUTION : RISK_SAFE;
+  }
 
   float dot = rx * rvx + ry * rvy;
   float closingSpeed = -dot / fmaxf(distanceM, 0.1f);
@@ -2136,7 +2210,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   if (closingSpeed < MIN_RADIAL_CLOSING_SPEED_MPS ||
       tCpa <= 0.0f ||
       tCpa > CPA_PREDICTION_HORIZON_S) {
-    return RISK_SAFE;
+    return frontalRssiApproach ? RISK_CAUTION : RISK_SAFE;
   }
 
   float closestX = rx + rvx * tCpa;
@@ -2161,7 +2235,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
     return RISK_CAUTION;
   }
 
-  return RISK_SAFE;
+  return frontalRssiApproach ? RISK_CAUTION : RISK_SAFE;
 }
 
 // =====================
@@ -2257,6 +2331,12 @@ void sendRiskAlertToCane(uint8_t risk,
 }
 
 void handleRsuReply(const v2x_status_message_t &message) {
+#if !ENABLE_RSU_RISK_INPUT
+  Serial.printf("[RSU RX] ignored risk=%u seq=%u (direct vehicle mode)\n",
+                message.risk_level,
+                message.seq_num);
+  return;
+#endif
   lastRiskLevel = message.risk_level;
   announceRisk(lastRiskLevel);
   Serial.printf("[RSU RX] risk=%u seq=%u\n",
@@ -2713,10 +2793,10 @@ void setup() {
   pinMode(REL_CAL_BUTTON_PIN, INPUT_PULLUP);
 
   Serial.println("\n=== V2X Vehicle + GPS + ICM-20948 + DFPlayer Pro ===");
-  Serial.printf("[CONFIG] risk distance: %.1f / %.1f / %.1f m\n",
-                (float)RISK_CAUTION_DISTANCE_M,
-                (float)RISK_WARNING_DISTANCE_M,
-                (float)RISK_DANGER_DISTANCE_M);
+  Serial.printf("[CONFIG] CPA distance: %.1f / %.1f / %.1f m\n",
+                (float)CPA_CAUTION_DISTANCE_M,
+                (float)CPA_WARNING_DISTANCE_M,
+                (float)CPA_DANGER_DISTANCE_M);
 
   setupGps();
   setupImu();
