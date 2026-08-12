@@ -7,7 +7,9 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).parent
-SRC = HERE / "scenario_0038_result.csv"
+SCENARIO = "scenario_7552"
+SRC = HERE / f"{SCENARIO}_result.csv"
+PED_SRC = HERE / f"{SCENARIO}_pedestrian.csv"
 
 
 def gate(d):
@@ -86,8 +88,15 @@ for vid, g in sub.groupby("vehicle_id"):
     })
 vehicles.sort(key=lambda v: -v["danger"])
 
-ped = (df.sort_values("timestep_time")
-         .groupby("timestep_time", as_index=False).first())
+# 보행자 전체 궤적 (v2: 여러 명)
+pedf = pd.read_csv(PED_SRC, sep=";")
+peds = []
+for pid, g in pedf.groupby("person_id"):
+    g = g.sort_values("timestep_time")
+    peds.append({"id": str(pid),
+                 "t": g["timestep_time"].round(0).astype(int).tolist(),
+                 "x": g["person_x"].round(1).tolist(),
+                 "y": g["person_y"].round(1).tolist()})
 stats = {
     "acc": round(tot_match / tot_rows * 100, 1),
     "detect": round(fut_danger_hit / fut_danger_rows * 100, 1) if fut_danger_rows else None,
@@ -95,10 +104,8 @@ stats = {
     "physSame": round(tot_phys_same / max(1, len(sub)) * 100, 1),
     "aiCorr": round((1 - tot_phys_same / max(1, len(sub))) * 100, 1),
 }
-data = {"scenario": "scenario_0038",
-        "ped": {"t": ped["timestep_time"].round(0).astype(int).tolist(),
-                "x": ped["ped_x"].round(1).tolist(),
-                "y": ped["ped_y"].round(1).tolist()},
+data = {"scenario": f"{SCENARIO} (현실성 v2 — 보행자 {len(peds)}명)",
+        "peds": peds,
         "vehicles": vehicles, "stats": stats}
 data_js = json.dumps(data, ensure_ascii=False)
 
@@ -134,7 +141,7 @@ h3{font-size:13.5px;margin:2px 0 8px}
 .badge.lead{background:#e8f4ec;color:#1e7d46}
 .badge.corr{background:#fdf3ec;color:#c05600}
 </style></head><body>
-<header><h1>AI-V2X 3초 선행 예측 뷰어 — __SCENARIO__ (실제 Jetson v3 추론 결과)</h1>
+<header><h1>AI-V2X 3초 선행 예측 뷰어 — __SCENARIO__ (TTC 수정 v4 모델 · 캠퍼스 차량 포함)</h1>
 <p>세 개의 선: <b>파랑=AI 최종 예측</b> · <b>주황 점선=물리 계산만</b> · <b>회색=실제 위험</b> — 파랑이 회색보다 먼저 오르면 선행 예측 성공, 파랑이 주황과 다르면 AI가 물리를 보정한 것</p></header>
 <div class="stats" id="statbar"></div>
 <div class="wrap">
@@ -158,11 +165,11 @@ h3{font-size:13.5px;margin:2px 0 8px}
 <script>
 const DATA = __DATA__;
 const COLORS = ["#1e7d46","#c9a800","#e07000","#d21f1f"];
-let xs=[], ys=[];
-DATA.vehicles.forEach(v=>{xs.push(...v.x); ys.push(...v.y)});
-xs.push(...DATA.ped.x); ys.push(...DATA.ped.y);
+let xs=[], ys=[], ts=[];
+DATA.vehicles.forEach(v=>{xs.push(...v.x); ys.push(...v.y); ts.push(...v.t)});
+DATA.peds.forEach(p=>{xs.push(...p.x); ys.push(...p.y); ts.push(...p.t)});
 const xmin=Math.min(...xs), xmax=Math.max(...xs), ymin=Math.min(...ys), ymax=Math.max(...ys);
-const tmin=Math.min(...DATA.ped.t), tmax=Math.max(...DATA.ped.t);
+const tmin=Math.min(...ts), tmax=Math.max(...ts);
 const map=document.getElementById('map'), mctx=map.getContext('2d');
 const sx=x=>(x-xmin)/(xmax-xmin)*520+20, sy=y=>420-(y-ymin)/(ymax-ymin)*400;
 let curT=tmin, playing=false, selected=null;
@@ -183,9 +190,10 @@ function drawMap(){
   DATA.vehicles.forEach(v=>{mctx.strokeStyle="#dde4f2"; mctx.beginPath();
     v.x.forEach((x,i)=>{i?mctx.lineTo(sx(x),sy(v.y[i])):mctx.moveTo(sx(x),sy(v.y[i]))});
     mctx.stroke();});
-  const pi=DATA.ped.t.indexOf(curT);
-  if(pi>=0){mctx.fillStyle="#2b5bd7"; mctx.beginPath();
-    mctx.arc(sx(DATA.ped.x[pi]),sy(DATA.ped.y[pi]),8,0,7); mctx.fill();}
+  DATA.peds.forEach(p=>{
+    const pi=p.t.indexOf(curT);
+    if(pi>=0){mctx.fillStyle="#2b5bd7"; mctx.beginPath();
+      mctx.arc(sx(p.x[pi]),sy(p.y[pi]),6,0,7); mctx.fill();}});
   DATA.vehicles.forEach(v=>{
     const i=at(v,curT); if(i===null)return;
     mctx.fillStyle=COLORS[v.pred[i]];
