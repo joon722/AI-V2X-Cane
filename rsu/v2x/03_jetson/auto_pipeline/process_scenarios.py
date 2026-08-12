@@ -98,42 +98,44 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
         raise RuntimeError("pedestrian.csv가 없습니다")
     ped = pd.read_csv(ped_csv, sep=";")
 
-    # 보행자: 각 (차량, 시점)마다 "가장 가까운" 보행자 기준.
-    # v2 시나리오부터 보행자가 여러 명이므로, 차량별로 가장 위협이 되는
-    # (가장 가까운) 보행자와의 관계를 계산한다.
-    ped = ped[["timestep_time", "person_x", "person_y", "person_speed"]]
-    ped.columns = ["timestep_time", "ped_x", "ped_y", "ped_speed_mps"]
+    # [팀 리뷰 반영] 모든 (차량, 보행자) 쌍을 만들고, 미분(접근속도·상대속도)은
+    # 반드시 "같은 보행자" 쌍 안에서만 계산한다. 최근접 보행자가 바뀔 때
+    # 다른 사람과의 거리를 미분하면 가짜 접근속도 -> TTC 폭주가 생긴다.
+    ped = ped[["timestep_time", "person_id",
+               "person_x", "person_y", "person_speed"]]
+    ped.columns = ["timestep_time", "person_id",
+                   "ped_x", "ped_y", "ped_speed_mps"]
 
     df = veh.merge(ped, on="timestep_time", how="inner")
     if df.empty:
         raise RuntimeError("차량-보행자 시간대가 겹치지 않습니다")
-    d2 = ((df["vehicle_x"] - df["ped_x"]) ** 2 +
-          (df["vehicle_y"] - df["ped_y"]) ** 2)
-    df = df.loc[d2.groupby([df["vehicle_id"], df["timestep_time"]]).idxmin()]
-
-    df = df.sort_values(["vehicle_id", "timestep_time"]).reset_index(drop=True)
     df = df.rename(columns={
         "vehicle_x": "veh_x",
         "vehicle_y": "veh_y",
         "vehicle_speed": "veh_speed_mps",
     })
+    df = df.sort_values(["vehicle_id", "person_id",
+                         "timestep_time"]).reset_index(drop=True)
 
     # 거리
     df["distance_m"] = np.sqrt(
         (df["veh_x"] - df["ped_x"]) ** 2 + (df["veh_y"] - df["ped_y"]) ** 2
     )
 
-    # 접근 속도 (양수 = 접근, 음수 = 멀어짐; 학습 데이터와 동일한 정의)
-    grouped = df.groupby("vehicle_id", sort=False)
-    dt = grouped["timestep_time"].diff()
-    dd = -grouped["distance_m"].diff()
+    # 접근 속도 — 같은 (차량, 보행자) 쌍 안에서만 미분
+    pair = df.groupby(["vehicle_id", "person_id"], sort=False)
+    pair_keys = [df["vehicle_id"], df["person_id"]]
+    dt = pair["timestep_time"].diff()
+    dd = -pair["distance_m"].diff()
     df["rel_speed_mps"] = (dd / dt).fillna(0.0)
 
-    # TTC / risk_score: step7_risk.py의 팀 공식 사용
-    df["ttc"] = [
+    # TTC: 팀 공식 + 30초 클램프 + 유효 플래그 (팀 리뷰 반영)
+    raw_ttc = np.array([
         calculate_ttc(d, r)
         for d, r in zip(df["distance_m"], df["rel_speed_mps"])
-    ]
+    ])
+    df["ttc"] = np.minimum(raw_ttc, 30.0)
+    df["ttc_valid"] = (df["rel_speed_mps"] > 0.1).astype(float)
     df["risk_score"] = [
         calculate_risk_score(d, r, v, t, ZONE_BASE_RISK)
         for d, r, v, t in zip(df["distance_m"], df["rel_speed_mps"],
@@ -142,12 +144,11 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
     df["zone_base_risk"] = ZONE_BASE_RISK
     df["ts_ms"] = (df["timestep_time"] * 1000).astype(int)
 
-    # 벡터 특징 (v2 모델 입력): 상대 위치/속도 + 최근접 예상 거리(DCPA)
+    # 벡터 특징: 상대 위치/속도 + 최근접 예상 거리(DCPA) — 같은 쌍 안에서만 미분
     rx = df["veh_x"] - df["ped_x"]
     ry = df["veh_y"] - df["ped_y"]
-    vid = df["vehicle_id"]
-    dvx = rx.groupby(vid, sort=False).diff() / dt
-    dvy = ry.groupby(vid, sort=False).diff() / dt
+    dvx = rx.groupby(pair_keys, sort=False).diff() / dt
+    dvy = ry.groupby(pair_keys, sort=False).diff() / dt
     df["dx"], df["dy"] = rx, ry
     df["dvx"] = dvx.fillna(0.0)
     df["dvy"] = dvy.fillna(0.0)
@@ -177,6 +178,12 @@ def build_features(scenario_dir: Path) -> pd.DataFrame:
         calculate_risk_score(d, r, v, t if r > 0.1 else 9999.0)
         for d, r, v, t in zip(df["phys_min_dist_3s"], df["rel_speed_mps"],
                               df["veh_speed_mps"], ttc_arg)]
+
+    # 모든 파생값 계산이 끝난 뒤에야 (차량, 시점)별 최근접 보행자 선택
+    idx = df.groupby(["vehicle_id", "timestep_time"])["distance_m"].idxmin()
+    df = (df.loc[idx]
+            .sort_values(["vehicle_id", "timestep_time"])
+            .reset_index(drop=True))
     return df
 
 

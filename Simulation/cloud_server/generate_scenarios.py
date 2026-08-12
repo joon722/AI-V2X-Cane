@@ -94,6 +94,39 @@ def make_random_pedestrians(num: int, out_file: Path) -> None:
              "-p", str(period), "-b", "0", "-e", "150"],
             timeout=120)
 
+
+def make_random_vehicles(num: int, out_file: Path) -> None:
+    """캠퍼스 내부 도로 포함, 전 지역 랜덤 차량 추가 (기존 고정 경로에 더함).
+
+    기존 route.rou.xml은 주요 도로 위주라 학교 안쪽에는 차가 없었다.
+    randomTrips가 내부 도로까지 포함해 출발/도착을 뽑으므로
+    캠퍼스 안 골목에도 차가 다니게 된다.
+    """
+    rng = random.Random(num * 104729)
+    period = rng.choice([4, 6, 8, 12])  # 약 15~50대 추가
+    run_cmd([sys.executable, str(RANDOM_TRIPS),
+             "-n", str(NET_FILE),
+             "-o", str(out_file), "--seed", str(num + 1),
+             "-p", str(period), "-b", "0", "-e", "180",
+             "--prefix", "campus_",  # 기존 경로 파일의 차량 id(0,1,..)와 충돌 방지
+             "--fringe-factor", "1", "--validate"],
+            timeout=180)
+    # 랜덤 차량에도 운전 성향 배합 적용
+    text = out_file.read_text(encoding="utf-8")
+    w = [rng.uniform(0.2, 0.5), rng.uniform(0.3, 0.6), rng.uniform(0.1, 0.4)]
+    total = sum(w)
+    weights = [x / total for x in w]
+
+    def assign(match):
+        vtype = rng.choices(DRIVER_TYPES, weights=weights)[0]
+        tag = match.group(0)
+        tag = re.sub(r'\s+type="[^"]*"', "", tag)
+        head = tag.split(" ", 1)
+        return f'{head[0]} type="{vtype}" {head[1]}'
+
+    text = re.sub(r"<(?:vehicle|trip) [^>]*>", assign, text)
+    out_file.write_text(text, encoding="utf-8")
+
 log = logging.getLogger("generator")
 
 
@@ -134,8 +167,10 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
     # 1. 시나리오별 다양화 입력 생성 (운전 성향 배합 + 랜덤 보행자)
     route_file = scenario_dir / "route_mixed.rou.xml"
     ped_file = scenario_dir / "ped_random.rou.xml"
+    campus_file = scenario_dir / "veh_campus.rou.xml"
     weights = make_mixed_route(num, route_file)
     make_random_pedestrians(num, ped_file)
+    make_random_vehicles(num, campus_file)  # 캠퍼스 내부 포함 랜덤 차량
 
     # 2. SUMO 실행 (횡단보도 있는 net_v2 + 혼합 성향 + 랜덤 보행자)
     fcd_xml = scenario_dir / "fcd.xml"
@@ -144,7 +179,7 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
             "sumo",
             "-c", str(SUMO_CONFIG),
             "-n", str(NET_FILE),
-            "-r", f"{route_file},{ped_file}",
+            "-r", f"{route_file},{campus_file},{ped_file}",
             "--additional-files", str(VTYPES_FILE),
             "--seed", str(num),
             "--fcd-output", str(fcd_xml),
@@ -153,7 +188,7 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
         timeout=600,
     )
     (scenario_dir / "META").write_text(
-        f"generator=v2 crossings sidewalk random_peds "
+        f"generator=v2.1 crossings sidewalk random_peds campus_vehicles "
         f"driver_mix(cautious/normal/aggressive)={weights}\n")
     if not fcd_xml.exists() or fcd_xml.stat().st_size == 0:
         raise RuntimeError("fcd.xml이 생성되지 않았습니다")
@@ -193,6 +228,7 @@ def generate_one(num: int, keep_intermediate: bool) -> Path:
         trajectory_csv.unlink(missing_ok=True)
         route_file.unlink(missing_ok=True)
         ped_file.unlink(missing_ok=True)
+        campus_file.unlink(missing_ok=True)
 
     # 5. 완료 표시 (Jetson은 이 파일이 있는 폴더만 가져간다)
     (scenario_dir / "DONE").write_text(time.strftime("%Y-%m-%dT%H:%M:%S\n"))

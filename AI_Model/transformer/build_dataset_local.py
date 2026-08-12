@@ -27,10 +27,11 @@ ZONE_BASE_RISK = 0.0
 FEATURE_ORDER = [
     "ped_x", "ped_y", "veh_x", "veh_y",
     "ped_speed_mps", "veh_speed_mps",
-    "distance_m", "rel_speed_mps", "ttc",
+    "distance_m", "rel_speed_mps", "ttc", "ttc_valid",
     "risk_score", "zone_base_risk",
     "dx", "dy", "dvx", "dvy", "dcpa_m",
 ]
+TTC_CLAMP_S = 30.0  # 팀 리뷰 반영: TTC 폭주 방지 클램프
 
 
 # ── 팀 공식 동결 사본 (step7_risk.py와 동일 수치) ──
@@ -90,27 +91,35 @@ def build_scenario(scenario_dir: Path):
         return None
     veh = pd.read_csv(veh_csv, sep=";")
     ped = pd.read_csv(ped_csv, sep=";")
-    ped = ped[["timestep_time", "person_x", "person_y", "person_speed"]]
-    ped.columns = ["timestep_time", "ped_x", "ped_y", "ped_speed_mps"]
+    ped = ped[["timestep_time", "person_id",
+               "person_x", "person_y", "person_speed"]]
+    ped.columns = ["timestep_time", "person_id",
+                   "ped_x", "ped_y", "ped_speed_mps"]
 
+    # 모든 (차량, 보행자) 쌍을 만들고, 미분(접근속도·상대속도 벡터)은
+    # 반드시 "같은 보행자" 쌍 안에서만 계산한다.
+    # [팀 리뷰 반영] 최근접 보행자가 바뀔 때 서로 다른 사람과의 거리를
+    # 미분하면 가짜 미세 접근속도 -> TTC 폭주가 생기던 버그 수정.
     df = veh.merge(ped, on="timestep_time", how="inner")
     if df.empty:
         return None
-    # 최근접 보행자 선택
-    d2 = ((df["vehicle_x"] - df["ped_x"]) ** 2 +
-          (df["vehicle_y"] - df["ped_y"]) ** 2)
-    df = df.loc[d2.groupby([df["vehicle_id"], df["timestep_time"]]).idxmin()]
-
-    df = df.sort_values(["vehicle_id", "timestep_time"]).reset_index(drop=True)
     df = df.rename(columns={"vehicle_x": "veh_x", "vehicle_y": "veh_y",
                             "vehicle_speed": "veh_speed_mps"})
+    df = df.sort_values(["vehicle_id", "person_id",
+                         "timestep_time"]).reset_index(drop=True)
     df["distance_m"] = np.sqrt((df["veh_x"] - df["ped_x"]) ** 2 +
                                (df["veh_y"] - df["ped_y"]) ** 2)
-    g = df.groupby("vehicle_id", sort=False)
-    dt = g["timestep_time"].diff()
-    df["rel_speed_mps"] = (-g["distance_m"].diff() / dt).fillna(0.0)
-    df["ttc"] = [calculate_ttc(d, r)
-                 for d, r in zip(df["distance_m"], df["rel_speed_mps"])]
+    pair_keys = [df["vehicle_id"], df["person_id"]]
+    pair = df.groupby(["vehicle_id", "person_id"], sort=False)
+    dt = pair["timestep_time"].diff()
+    df["rel_speed_mps"] = (-pair["distance_m"].diff() / dt).fillna(0.0)
+
+    # TTC: 같은 보행자 기준 + 30초 클램프 + 유효 플래그
+    raw_ttc = np.array([calculate_ttc(d, r) for d, r in
+                        zip(df["distance_m"], df["rel_speed_mps"])])
+    df["ttc"] = np.minimum(raw_ttc, TTC_CLAMP_S)
+    df["ttc_valid"] = (df["rel_speed_mps"] > 0.1).astype(float)
+
     df["risk_score"] = [
         calculate_risk_score(d, r, v, t, ZONE_BASE_RISK)
         for d, r, v, t in zip(df["distance_m"], df["rel_speed_mps"],
@@ -119,9 +128,8 @@ def build_scenario(scenario_dir: Path):
 
     rx = df["veh_x"] - df["ped_x"]
     ry = df["veh_y"] - df["ped_y"]
-    vid = df["vehicle_id"]
-    dvx = rx.groupby(vid, sort=False).diff() / dt
-    dvy = ry.groupby(vid, sort=False).diff() / dt
+    dvx = rx.groupby(pair_keys, sort=False).diff() / dt
+    dvy = ry.groupby(pair_keys, sort=False).diff() / dt
     df["dx"], df["dy"] = rx, ry
     df["dvx"] = dvx.fillna(0.0)
     df["dvy"] = dvy.fillna(0.0)
@@ -130,6 +138,12 @@ def build_scenario(scenario_dir: Path):
     dcpa = np.sqrt((rx + dvx * t_cpa) ** 2 + (ry + dvy * t_cpa) ** 2)
     df["dcpa_m"] = dcpa.where((t_cpa > 0) & v2.notna(),
                               df["distance_m"]).fillna(df["distance_m"])
+
+    # 파생값 계산이 끝난 뒤에야 (차량, 시점)별 최근접 보행자를 선택
+    idx = df.groupby(["vehicle_id", "timestep_time"])["distance_m"].idxmin()
+    df = (df.loc[idx]
+            .sort_values(["vehicle_id", "timestep_time"])
+            .reset_index(drop=True))
 
     gate = np.array([dcpa_gate(d) for d in df["dcpa_m"]])
     df["risk_level"] = [classify_risk_level(s * f)

@@ -1,23 +1,15 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-재학습(v2)용 학습 데이터셋 생성기 — Jetson에서 실행
+v4 학습 데이터셋 생성 (PC 로컬판) — 현실성 v2 시나리오 전용
 
-incoming_data/의 자동 생성 시나리오에서 v2 특징 + 라벨을 만든다.
+Jetson의 build_training_dataset.py와 동일 로직:
+  - 차량별 '최근접 보행자' 기준 특징 (v2 시나리오는 보행자 다수)
+  - 라벨 = 팀 채점표 x DCPA 게이트 (위험 정의 일원화)
+채점표/게이트는 step7_risk.py의 동결 사본 (팀 수치 그대로).
 
-v1 대비 바뀌는 점:
-  1. 보행자 좌표 = 실제 이동 좌표 (고정 좌표 우회 제거)
-  2. 벡터 특징 추가: dx, dy(상대 위치), dvx, dvy(상대 속도), dcpa(최근접 예상 거리)
-     -> 모델이 "다가오는 차"와 "스쳐 갈 차"를 스스로 구분하도록
-  3. 라벨 = 팀 채점표 점수 x DCPA 게이트 -> classify_risk_level
-     (위험 정의 일원화: 스쳐 가는 차는 라벨부터 안전으로)
-
-클래스 불균형 완화: 위험(L1+) 차량은 전부, 안전-only 차량은 15%만 표본.
-시퀀스 경계 보존을 위해 scenario_id, vehicle_id 컬럼 포함.
-
-사용: python3 build_training_dataset.py --max-scenarios 400
-출력: ~/training_dataset_v2.csv
+입력: ~/incoming_data/scenario_*/  (Jetson 로컬 사본)
+출력: training_dataset_v4base.csv
 """
-import argparse
 import random
 import sys
 from pathlib import Path
@@ -25,70 +17,119 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path.home() / "v2x" / "03_jetson"))
-from step7_risk import (  # noqa: E402
-    calculate_risk_score,
-    calculate_ttc,
-    classify_risk_level,
-    dcpa_gate,
-)
-
-INCOMING = Path.home() / "incoming_data"
-OUT_FILE = Path.home() / "training_dataset_v2.csv"
+sys.stdout.reconfigure(encoding="utf-8")
+HERE = Path(__file__).parent
+DATA_DIR = Path.home() / "incoming_data"
+OUT_FILE = HERE / "training_dataset_v4base.csv"
 SAFE_KEEP_RATE = 0.15
 ZONE_BASE_RISK = 0.0
 
 FEATURE_ORDER = [
     "ped_x", "ped_y", "veh_x", "veh_y",
     "ped_speed_mps", "veh_speed_mps",
-    "distance_m", "rel_speed_mps", "ttc",
+    "distance_m", "rel_speed_mps", "ttc", "ttc_valid",
     "risk_score", "zone_base_risk",
     "dx", "dy", "dvx", "dvy", "dcpa_m",
 ]
+TTC_CLAMP_S = 30.0  # 팀 리뷰 반영: TTC 폭주 방지 클램프
 
 
-def build_scenario(scenario_dir: Path) -> pd.DataFrame | None:
+# ── 팀 공식 동결 사본 (step7_risk.py와 동일 수치) ──
+def calculate_ttc(distance_m, relative_speed_mps):
+    if relative_speed_mps <= 0:
+        return 9999.0
+    return distance_m / relative_speed_mps
+
+
+def calculate_risk_score(distance_m, relative_speed_mps, vehicle_speed_mps,
+                         ttc, zone_base_risk=0):
+    score = 0.0
+    if distance_m <= 10: score += 30
+    elif distance_m <= 20: score += 25
+    elif distance_m <= 40: score += 18
+    elif distance_m <= 60: score += 10
+    elif distance_m <= 100: score += 5
+    if ttc <= 1: score += 35
+    elif ttc <= 2: score += 30
+    elif ttc <= 3: score += 25
+    elif ttc <= 5: score += 20
+    elif ttc <= 8: score += 15
+    elif ttc <= 12: score += 8
+    if relative_speed_mps >= 20: score += 20
+    elif relative_speed_mps >= 15: score += 17
+    elif relative_speed_mps >= 10: score += 13
+    elif relative_speed_mps >= 5: score += 8
+    elif relative_speed_mps > 0: score += 3
+    if vehicle_speed_mps >= 20: score += 10
+    elif vehicle_speed_mps >= 15: score += 8
+    elif vehicle_speed_mps >= 10: score += 6
+    elif vehicle_speed_mps >= 5: score += 3
+    score += min(max(zone_base_risk, 0), 5)
+    return round(min(score, 100), 2)
+
+
+def classify_risk_level(risk_score):
+    if risk_score >= 70: return 3
+    if risk_score >= 45: return 2
+    if risk_score >= 20: return 1
+    return 0
+
+
+def dcpa_gate(dcpa, near_m=2.5, far_m=7.5, floor=0.2):
+    if dcpa is None or dcpa <= near_m:
+        return 1.0
+    if dcpa >= far_m:
+        return floor
+    frac = (dcpa - near_m) / (far_m - near_m)
+    return 1.0 + frac * (floor - 1.0)
+
+
+def build_scenario(scenario_dir: Path):
     veh_csv = scenario_dir / "feature.csv"
     ped_csv = scenario_dir / "pedestrian.csv"
     if not veh_csv.exists() or not ped_csv.exists():
         return None
-
     veh = pd.read_csv(veh_csv, sep=";")
     ped = pd.read_csv(ped_csv, sep=";")
-    # 각 (차량, 시점)마다 가장 가까운 보행자 기준 (v2 시나리오는 보행자 다수)
-    ped = ped[["timestep_time", "person_x", "person_y", "person_speed"]]
-    ped.columns = ["timestep_time", "ped_x", "ped_y", "ped_speed_mps"]
+    ped = ped[["timestep_time", "person_id",
+               "person_x", "person_y", "person_speed"]]
+    ped.columns = ["timestep_time", "person_id",
+                   "ped_x", "ped_y", "ped_speed_mps"]
 
+    # 모든 (차량, 보행자) 쌍을 만들고, 미분(접근속도·상대속도 벡터)은
+    # 반드시 "같은 보행자" 쌍 안에서만 계산한다.
+    # [팀 리뷰 반영] 최근접 보행자가 바뀔 때 서로 다른 사람과의 거리를
+    # 미분하면 가짜 미세 접근속도 -> TTC 폭주가 생기던 버그 수정.
     df = veh.merge(ped, on="timestep_time", how="inner")
     if df.empty:
         return None
-    d2 = ((df["vehicle_x"] - df["ped_x"]) ** 2 +
-          (df["vehicle_y"] - df["ped_y"]) ** 2)
-    df = df.loc[d2.groupby([df["vehicle_id"], df["timestep_time"]]).idxmin()]
-    df = df.sort_values(["vehicle_id", "timestep_time"]).reset_index(drop=True)
     df = df.rename(columns={"vehicle_x": "veh_x", "vehicle_y": "veh_y",
                             "vehicle_speed": "veh_speed_mps"})
-
-    # 스칼라 특징 (v1과 동일하되 보행자 좌표는 실제 값)
+    df = df.sort_values(["vehicle_id", "person_id",
+                         "timestep_time"]).reset_index(drop=True)
     df["distance_m"] = np.sqrt((df["veh_x"] - df["ped_x"]) ** 2 +
                                (df["veh_y"] - df["ped_y"]) ** 2)
-    g = df.groupby("vehicle_id", sort=False)
-    dt = g["timestep_time"].diff()
-    df["rel_speed_mps"] = (-g["distance_m"].diff() / dt).fillna(0.0)
-    df["ttc"] = [calculate_ttc(d, r)
-                 for d, r in zip(df["distance_m"], df["rel_speed_mps"])]
+    pair_keys = [df["vehicle_id"], df["person_id"]]
+    pair = df.groupby(["vehicle_id", "person_id"], sort=False)
+    dt = pair["timestep_time"].diff()
+    df["rel_speed_mps"] = (-pair["distance_m"].diff() / dt).fillna(0.0)
+
+    # TTC: 같은 보행자 기준 + 30초 클램프 + 유효 플래그
+    raw_ttc = np.array([calculate_ttc(d, r) for d, r in
+                        zip(df["distance_m"], df["rel_speed_mps"])])
+    df["ttc"] = np.minimum(raw_ttc, TTC_CLAMP_S)
+    df["ttc_valid"] = (df["rel_speed_mps"] > 0.1).astype(float)
+
     df["risk_score"] = [
         calculate_risk_score(d, r, v, t, ZONE_BASE_RISK)
         for d, r, v, t in zip(df["distance_m"], df["rel_speed_mps"],
                               df["veh_speed_mps"], df["ttc"])]
     df["zone_base_risk"] = ZONE_BASE_RISK
 
-    # 벡터 특징
     rx = df["veh_x"] - df["ped_x"]
     ry = df["veh_y"] - df["ped_y"]
-    vid = df["vehicle_id"]
-    dvx = rx.groupby(vid, sort=False).diff() / dt
-    dvy = ry.groupby(vid, sort=False).diff() / dt
+    dvx = rx.groupby(pair_keys, sort=False).diff() / dt
+    dvy = ry.groupby(pair_keys, sort=False).diff() / dt
     df["dx"], df["dy"] = rx, ry
     df["dvx"] = dvx.fillna(0.0)
     df["dvy"] = dvy.fillna(0.0)
@@ -98,12 +139,16 @@ def build_scenario(scenario_dir: Path) -> pd.DataFrame | None:
     df["dcpa_m"] = dcpa.where((t_cpa > 0) & v2.notna(),
                               df["distance_m"]).fillna(df["distance_m"])
 
-    # 라벨: 채점표 점수 x DCPA 게이트 -> 레벨 (위험 정의 일원화)
+    # 파생값 계산이 끝난 뒤에야 (차량, 시점)별 최근접 보행자를 선택
+    idx = df.groupby(["vehicle_id", "timestep_time"])["distance_m"].idxmin()
+    df = (df.loc[idx]
+            .sort_values(["vehicle_id", "timestep_time"])
+            .reset_index(drop=True))
+
     gate = np.array([dcpa_gate(d) for d in df["dcpa_m"]])
     df["risk_level"] = [classify_risk_level(s * f)
                         for s, f in zip(df["risk_score"], gate)]
 
-    # 표본 추출: 위험 경험 차량 전부 + 안전-only 차량 15%
     keep = []
     for v, grp in df.groupby("vehicle_id", sort=False):
         if len(grp) < 10:
@@ -120,13 +165,10 @@ def build_scenario(scenario_dir: Path) -> pd.DataFrame | None:
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--max-scenarios", type=int, default=400)
-    args = p.parse_args()
     random.seed(42)
-
-    dirs = sorted(d for d in INCOMING.glob("scenario_*")
-                  if (d / "DONE").exists())[:args.max_scenarios]
+    dirs = sorted(d for d in DATA_DIR.glob("scenario_*")
+                  if (d / "DONE").exists())
+    print(f"시나리오 {len(dirs)}개 처리 시작")
     frames = []
     for i, d in enumerate(dirs, 1):
         try:
@@ -136,15 +178,11 @@ def main():
         except Exception as e:
             print(f"{d.name} 실패: {e}")
         if i % 50 == 0:
-            print(f"{i}/{len(dirs)} 처리...", flush=True)
-
+            print(f"{i}/{len(dirs)}...", flush=True)
     full = pd.concat(frames, ignore_index=True)
     full.to_csv(OUT_FILE, index=False)
-    print(f"\n완료: {OUT_FILE}")
-    print(f"시나리오 {len(frames)}개, 총 {len(full):,}행, "
-          f"차량 {full.groupby(['scenario_id','vehicle_id']).ngroups:,}대")
-    print("라벨 분포:")
-    print(full["risk_level"].value_counts().sort_index().to_string())
+    print(f"완료: {OUT_FILE} — {len(full):,}행, 시나리오 {len(frames)}개")
+    print("라벨 분포:", full["risk_level"].value_counts().sort_index().tolist())
 
 
 if __name__ == "__main__":
