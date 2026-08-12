@@ -146,12 +146,18 @@
 // 차량이 RSSI+상대GPS로 직접 판정하므로 지팡이의 GPS 단독 fallback은 끈다.
 // 이 값을 1로 바꾸면 예전 GPS 단독 예비판정을 다시 사용할 수 있다.
 #define ENABLE_CANE_LOCAL_GPS_RISK_FALLBACK 0
+// 현재 야외 직접연결 시험에서는 차량 ESP32 판정만 출력한다.
+// RSU/Jetson의 예전 판정이 차량 SAFE와 max 병합되어 장시간 울린 것이
+// 확인됐으므로, RSU 통합 코드를 다시 맞출 때까지 기본 비활성화한다.
+#define ENABLE_RSU_RISK_INPUT 0
 #define MIN_PREDICT_VEHICLE_SPEED_MPS 0.50f
-#define MIN_PREDICT_CANE_SPEED_MPS 0.25f
+// 2026-08-12 정지 평행 실측에서 지팡이 GPS 속도 노이즈가 최대
+// 0.38m/s까지 올라갔다. 0.50m/s 미만은 정지로 처리한다.
+#define MIN_PREDICT_CANE_SPEED_MPS 0.50f
 #define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
-#define CPA_DANGER_DISTANCE_M 1.5f
-#define CPA_WARNING_DISTANCE_M 2.5f
-#define CPA_CAUTION_DISTANCE_M 4.0f
+#define CPA_DANGER_DISTANCE_M 0.5f
+#define CPA_WARNING_DISTANCE_M 0.8f
+#define CPA_CAUTION_DISTANCE_M 1.2f
 #define CPA_PREDICTION_HORIZON_S 5.0f
 #define EMERGENCY_DISTANCE_M 0.2f
 
@@ -1262,9 +1268,12 @@ bool applyMergedRisk() {
     vehicleRiskMs > 0 &&
     now - vehicleRiskMs <= DIRECT_RISK_TIMEOUT_MS;
 
-  bool rsuFresh =
+  bool rsuFresh = false;
+#if ENABLE_RSU_RISK_INPUT
+  rsuFresh =
     rsuRiskMs > 0 &&
     now - rsuRiskMs <= RSU_RISK_TIMEOUT_MS;
+#endif
 
   // 둘 다 끊겼으면 호출자가 자체 계산 또는 SAFE 처리를 선택한다.
   if (!vehicleFresh && !rsuFresh) return false;
@@ -1355,6 +1364,13 @@ void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
     return;
   }
 
+#if !ENABLE_RSU_RISK_INPUT
+  if (riskMsg.node_type == NODE_RSU) {
+    Serial.println("[CANE RX] RSU risk ignored (direct vehicle mode)");
+    return;
+  }
+#endif
+
   lastRiskSeq = riskMsg.seq_num;
   lastRiskMs = millis();
 
@@ -1398,6 +1414,10 @@ void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
 
 void handleLegacyReply(const v2x_status_message_t &replyMsg) {
   if (replyMsg.msg_type != MSG_RSU_REPLY) return;
+#if !ENABLE_RSU_RISK_INPUT
+  Serial.println("[CANE RX LEGACY] RSU reply ignored (direct vehicle mode)");
+  return;
+#endif
   lastRiskSeq = replyMsg.seq_num;
   lastRiskMs = millis();
 
@@ -1702,6 +1722,12 @@ void sendUdpTelemetry() {
   long rssiAgeMs = rssiValidSnapshot
     ? (long)(telemetryMs - rssiLastMsSnapshot)
     : -1L;
+  long vehicleRiskAgeMs = vehicleRiskMs > 0
+    ? (long)(telemetryMs - vehicleRiskMs)
+    : -1L;
+  long rsuRiskAgeMs = rsuRiskMs > 0
+    ? (long)(telemetryMs - rsuRiskMs)
+    : -1L;
 
   int written = snprintf(
     udpBuffer,
@@ -1709,6 +1735,10 @@ void sendUdpTelemetry() {
     "시각ms:%lu\n"
     "IMU시각ms:%lu\n"
     "위험:%u\n"
+    "차량위험:%u\n"
+    "차량위험경과ms:%ld\n"
+    "RSU위험:%u\n"
+    "RSU위험경과ms:%ld\n"
     "GPS유효:%u\n"
     "위도:%.6f\n"
     "경도:%.6f\n"
@@ -1746,6 +1776,10 @@ void sendUdpTelemetry() {
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     currentRisk == 255 ? 0 : currentRisk,
+    vehicleRiskLevel,
+    vehicleRiskAgeMs,
+    rsuRiskLevel,
+    rsuRiskAgeMs,
     lastGpsValid,
     lastLat,
     lastLng,
