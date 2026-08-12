@@ -120,10 +120,11 @@ def post_batch(url, events, api_key, retries=3):
 
 def process_file(path, base_dt):
     """gz 결과 파일 -> 전송용 이벤트 목록 (risk>=1만, 연속 중복 억제)"""
-    scen = path.name.replace("_result.csv.gz", "")
+    scen = path.name.replace("_result.csv.gz", "").replace("_result.csv", "")
     events = []
     last_key = None
-    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as f:
+    opener = gzip.open if path.name.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             # 위험 등급 기준: onnx_risk_level (0~3, AI 모델 예측)
             # build_map_data.py(민서)와 동일한 컬럼·필터를 사용해 두 지도가 어긋나지 않게 함.
@@ -201,7 +202,7 @@ def main():
 
     url = args.url.rstrip("/")
     done = load_state()
-    files = sorted(RESULTS_DIR.glob("*_result.csv.gz"))
+    files = sorted(list(RESULTS_DIR.glob("*_result.csv.gz")) + list(RESULTS_DIR.glob("*_result.csv")))
     todo = [p for p in files if p.name not in done][:args.max_files]
 
     if not todo:
@@ -214,7 +215,12 @@ def main():
     total_sent = 0
     for path in todo:
         # 시뮬 기준 시각: 파일 생성 시각을 시나리오 시작점으로 사용 (팀 결정: 적재일 기준)
-        base_dt = datetime.fromtimestamp(path.stat().st_mtime, KST)
+        if not path.exists():
+            done.add(path.name); save_state(done); continue
+        try:
+            base_dt = datetime.fromtimestamp(path.stat().st_mtime, KST)
+        except FileNotFoundError:
+            done.add(path.name); save_state(done); continue
         try:
             events = process_file(path, base_dt)
         except Exception as e:
