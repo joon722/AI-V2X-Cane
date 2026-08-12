@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>V2X 보행 안전 인터페이스</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#0A0C10;overflow:hidden;
+    font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo",-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  #app{position:relative;width:100vw;height:100vh;display:flex;flex-direction:column}
+  #stage{position:relative;flex:1;overflow:hidden;background:#0E1117;min-height:0}
+  #scene{position:absolute;inset:0;width:100%;height:100%}
+  #alertGlow{position:absolute;inset:0;pointer-events:none;opacity:0;
+    box-shadow:inset 0 0 160px 34px rgba(226,75,74,.7);transition:opacity .25s}
+
+  #topbar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;
+    justify-content:space-between;padding:14px 20px;z-index:5;gap:10px;
+    background:linear-gradient(180deg,rgba(10,12,16,.94),rgba(10,12,16,0))}
+  .brand{display:flex;align-items:center;gap:9px;min-width:0}
+  .mark{width:25px;height:25px;border-radius:7px;background:#16324D;flex:none;
+    display:flex;align-items:center;justify-content:center}
+  .brand h1{font-size:13.5px;font-weight:600;color:#E8EAED;letter-spacing:-.2px;
+    white-space:nowrap}
+  .brand span{display:block;font-size:11px;font-weight:400;color:#6B7280;margin-top:1px;
+    white-space:nowrap}
+  .rt{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+  .link{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#8B93A1}
+  .dot{width:6px;height:6px;border-radius:50%;background:#34D399;
+    box-shadow:0 0 8px rgba(52,211,153,.8);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  #demo{font-size:10.5px;color:#7C8494;background:rgba(20,24,31,.85);
+    border:1px solid #262C36;border-radius:7px;padding:4px 9px;white-space:nowrap}
+
+  #banner{position:absolute;top:62px;left:50%;transform:translate(-50%,-12px);
+    z-index:6;display:flex;align-items:center;gap:11px;padding:10px 18px;
+    border-radius:12px;background:rgba(226,75,74,.15);border:1px solid rgba(226,75,74,.45);
+    backdrop-filter:blur(14px);opacity:0;transition:opacity .28s,transform .28s;
+    pointer-events:none;max-width:calc(100% - 32px)}
+  #banner.on{opacity:1;transform:translate(-50%,0)}
+  #banner.warn{background:rgba(239,159,39,.15);border-color:rgba(239,159,39,.45)}
+  #banner .ico{width:24px;height:24px;flex:none}
+  #banner b{display:block;font-size:13.5px;font-weight:600;color:#FFD9D9;letter-spacing:-.2px}
+  #banner small{display:block;font-size:11.5px;color:#F09595;margin-top:1px}
+  #banner.warn b{color:#FDE9C8}#banner.warn small{color:#F5C77E}
+
+  #hud{position:absolute;left:20px;top:52%;transform:translateY(-50%);z-index:5}
+  .big{font-size:54px;font-weight:200;color:#F3F4F6;line-height:.95;letter-spacing:-2.5px;
+    font-variant-numeric:tabular-nums}
+  .big u{font-size:16px;font-weight:400;color:#6B7280;text-decoration:none;margin-left:5px;
+    letter-spacing:0}
+  .cap{font-size:10.5px;color:#6B7280;letter-spacing:1.5px;margin-bottom:3px}
+  .sub{margin-top:16px}
+  .sub .big{font-size:32px;letter-spacing:-1.3px}
+  #srcTag{margin-top:14px;display:inline-block;font-size:11px;padding:3px 9px;
+    border-radius:6px;background:rgba(30,36,45,.9);color:#8B93A1;border:1px solid #272E39}
+
+  #dock{display:flex;gap:1px;background:#171A21;border-top:1px solid #1F242D;flex:none}
+  .cell{flex:1;padding:11px 14px 13px;background:#0F1319;min-width:0}
+  .cell .k{font-size:10.5px;color:#5D6470;letter-spacing:.5px;margin-bottom:4px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cell .v{font-size:19px;font-weight:500;color:#E8EAED;font-variant-numeric:tabular-nums;
+    letter-spacing:-.4px;white-space:nowrap}
+  .cell .v i{font-size:11px;font-weight:400;color:#5D6470;font-style:normal;margin-left:3px}
+  #levelbar{display:flex;gap:3px;padding:0 14px 12px;background:#0F1319;flex:none}
+  .seg{flex:1;height:4px;border-radius:2px;background:#232830;transition:background .3s}
+
+  @media(max-width:600px){
+    .big{font-size:40px}.sub .big{font-size:24px}
+    .brand h1{font-size:12.5px}.brand span{display:none}
+    .cell{padding:9px 9px 11px}.cell .v{font-size:15px}.cell .k{font-size:10px}
+    #hud{left:14px}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <svg id="scene" viewBox="0 0 900 620" preserveAspectRatio="xMidYMid slice"></svg>
+    <div id="alertGlow"></div>
+
+    <div id="topbar">
+      <div class="brand">
+        <div class="mark">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2.5 4.5 6v6.2c0 4.6 3.2 8.7 7.5 9.8 4.3-1.1 7.5-5.2 7.5-9.8V6L12 2.5Z"
+                  stroke="#7DB8F0" stroke-width="1.9" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div>
+          <h1>V2X 보행 안전 인터페이스</h1>
+          <span>스마트 지팡이 · 차도 및 보도 통합 감지</span>
+        </div>
+      </div>
+      <div class="rt">
+        <div class="link"><span class="dot"></span><span>연결됨 · 10 Hz</span></div>
+        <div id="demo">예시 데이터 · 모델 연동 전</div>
+      </div>
+    </div>
+
+    <div id="banner">
+      <svg class="ico" viewBox="0 0 24 24" fill="none">
+        <path d="M12 3.2 1.8 20.8h20.4L12 3.2Z" stroke="currentColor" stroke-width="1.8"
+              stroke-linejoin="round"/>
+        <path d="M12 9.6v4.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="12" cy="17.4" r="1.15" fill="currentColor"/>
+      </svg>
+      <div><b id="bTitle">위험 감지</b><small id="bSub">-</small></div>
+    </div>
+
+    <div id="hud">
+      <div class="cap">최근접 대상</div>
+      <div class="big"><span id="dist">--</span><u>m</u></div>
+      <div class="sub">
+        <div class="cap">도달 예상</div>
+        <div class="big"><span id="ttc">--</span><u>초</u></div>
+      </div>
+      <div id="srcTag">대기 중</div>
+    </div>
+  </div>
+
+  <div id="dock">
+    <div class="cell"><div class="k">접근 속도</div><div class="v"><span id="clos">0.0</span><i>m/s</i></div></div>
+    <div class="cell"><div class="k">감지 대상</div><div class="v" id="cnt">0</div></div>
+    <div class="cell"><div class="k">구역</div><div class="v" id="zone">--</div></div>
+    <div class="cell"><div class="k">위험 등급</div><div class="v" id="lvl">0</div></div>
+  </div>
+  <div id="levelbar">
+    <div class="seg" data-i="0"></div><div class="seg" data-i="1"></div>
+    <div class="seg" data-i="2"></div><div class="seg" data-i="3"></div>
+  </div>
+</div>
+
+<script>
+const NS="http://www.w3.org/2000/svg";
+const W=900,H=620,HORIZON=150,EYE=600,KX=42;
+const scene=document.getElementById("scene");
+const LEVEL_COLOR=["#34D399","#FBBF24","#FB923C","#EF4444"];
+const LEVEL_NAME=["안전","주의","위험","매우 위험"];
+const ROAD_HALF=5.4, WALK_OUT=9.0;
+const ME={z:3.5,x:-6.8};
+
+function el(t,a){const n=document.createElementNS(NS,t);
+  for(const k in a)n.setAttribute(k,a[k]);return n;}
+function proj(z,x){const f=7.5/(z+4);
+  return{x:W/2+x*f*KX,y:HORIZON+(EYE-HORIZON)*f,s:f*1.6};}
+function zoneOf(x){
+  if(Math.abs(x)<=ROAD_HALF)return "차도";
+  return x<0?"좌측 보도":"우측 보도";
+}
+
+const gStatic=el("g",{}),gWorld=el("g",{}),gMe=el("g",{});
+scene.appendChild(gStatic);scene.appendChild(gWorld);scene.appendChild(gMe);
+
+function buildStatic(){
+  const defs=el("defs",{});
+  const sky=el("linearGradient",{id:"sky",x1:"0",y1:"0",x2:"0",y2:"1"});
+  [["0%","#101827"],["55%","#0C1119"],["100%","#0A0C10"]].forEach(([o,c])=>
+    sky.appendChild(el("stop",{offset:o,"stop-color":c})));
+  defs.appendChild(sky);
+  const mk=(id,c,op)=>{const g=el("radialGradient",{id:id,cx:"50%",cy:"50%",r:"50%"});
+    g.appendChild(el("stop",{offset:"0%","stop-color":c,"stop-opacity":op}));
+    g.appendChild(el("stop",{offset:"100%","stop-color":c,"stop-opacity":"0"}));
+    defs.appendChild(g);};
+  mk("vglow","#EF4444",".34");mk("aglow","#94A3B8",".20");
+  mk("cglow","#60A5FA",".30");mk("pglow","#FBBF24",".26");
+  mk("dglow","#EF4444",".40");
+  gStatic.appendChild(defs);
+
+  gStatic.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"url(#sky)"}));
+  gStatic.appendChild(el("line",{x1:0,y1:HORIZON,x2:W,y2:HORIZON,
+    stroke:"#1C2430","stroke-width":1}));
+
+  const quad=(x1,x2,fill,stroke)=>{
+    const a=proj(1.0,x1),b=proj(160,x1),c=proj(160,x2),d=proj(1.0,x2);
+    return el("path",{d:`M${a.x},${a.y} L${b.x},${b.y} L${c.x},${c.y} L${d.x},${d.y} Z`,
+      fill:fill,stroke:stroke,"stroke-width":1});
+  };
+  gStatic.appendChild(quad(-ROAD_HALF,ROAD_HALF,"#141922","#1E2531"));
+  gStatic.appendChild(quad(-WALK_OUT,-ROAD_HALF,"#111820","#1D2530"));
+  gStatic.appendChild(quad(ROAD_HALF,WALK_OUT,"#111820","#1D2530"));
+
+  for(const cx of[-.18,.18]){
+    const a=proj(1.0,cx),b=proj(160,cx);
+    gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
+      stroke:"#8A6D1F","stroke-width":2.2,opacity:".85"}));
+  }
+  for(const lx of[-2.7,2.7]){
+    for(let z=3;z<160;z+=9){
+      const a=proj(z,lx),b=proj(z+3.4,lx);
+      if(b.y<HORIZON+4)break;
+      gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
+        stroke:"#242D3A","stroke-width":Math.max(.4,a.s*1.5),"stroke-linecap":"round"}));
+    }
+  }
+  for(const ex of[-ROAD_HALF,ROAD_HALF]){
+    const a=proj(1.0,ex),b=proj(160,ex);
+    gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
+      stroke:"#3A4553","stroke-width":1.3}));
+  }
+  for(const side of[-1,1]){
+    for(let z=8;z<130;z+=16){
+      const p=proj(z,side*(WALK_OUT+.6)),s=p.s;
+      if(s<.05)continue;
+      gStatic.appendChild(el("rect",{x:p.x-s*13,y:p.y-46*s,width:s*26,height:46*s,
+        rx:1,fill:"#161C26"}));
+      gStatic.appendChild(el("circle",{cx:p.x,cy:p.y-48*s,r:Math.max(1,3*s),fill:"#2A3444"}));
+    }
+  }
+}
+
+function carShape(g,s,col,away){
+  const w=112*s,h=52*s;
+  g.appendChild(el("ellipse",{cx:0,cy:h*.52,rx:w*.86,ry:h*.30,
+    fill:away?"url(#aglow)":"url(#vglow)"}));
+  const body=el("path",{fill:col});
+  body.setAttribute("d",
+    `M${-w*.44},${h*.30} q0,${-h*.22} ${w*.08},${-h*.26}
+     l${w*.10},${-h*.34} q${w*.02},${-h*.10} ${w*.10},${-h*.10}
+     l${w*.32},0 q${w*.08},0 ${w*.10},${h*.10}
+     l${w*.10},${h*.34} q${w*.08},${h*.04} ${w*.08},${h*.26}
+     l0,${h*.14} q0,${h*.08} ${-w*.08},${h*.08}
+     l${-w*.80},0 q${-w*.08},0 ${-w*.08},${-h*.08} Z`);
+  g.appendChild(body);
+  const glass=el("path",{fill:"#2B3A4C","fill-opacity":".92"});
+  glass.setAttribute("d",
+    `M${-w*.25},${-h*.30} l${w*.07},${-h*.24} q${w*.02},${-h*.06} ${w*.07},${-h*.06}
+     l${w*.22},0 q${w*.05},0 ${w*.07},${h*.06} l${w*.07},${h*.24} Z`);
+  g.appendChild(glass);
+  const lamp=away?"#F5F5F4":"#FCA5A5";
+  [-1,1].forEach(d=>g.appendChild(el("rect",{x:d<0?-w*.40:w*.26,y:-h*.06,
+    width:w*.14,height:h*.13,rx:h*.05,fill:lamp,opacity:".95"})));
+  [-1,1].forEach(d=>g.appendChild(el("rect",{x:d<0?-w*.48:w*.40,y:h*.16,
+    width:w*.08,height:h*.20,rx:h*.06,fill:"#0E1117"})));
+}
+
+function personShape(g,s,col,glow){
+  const u=s*26;
+  if(glow)g.appendChild(el("ellipse",{cx:0,cy:u*.14,rx:u*1.25,ry:u*.44,fill:glow}));
+  g.appendChild(el("ellipse",{cx:0,cy:u*.10,rx:u*.42,ry:u*.15,fill:"#141B24"}));
+  g.appendChild(el("circle",{cx:0,cy:-u*1.66,r:u*.26,fill:col}));
+  const t=el("path",{fill:col});
+  t.setAttribute("d",`M${-u*.30},${-u*1.32} q${u*.30},${-u*.10} ${u*.60},0
+    l${u*.13},${u*.84} l${-u*.86},0 Z`);
+  g.appendChild(t);
+  [-1,1].forEach(d=>g.appendChild(el("path",{
+    d:`M${d*u*.28},${-u*.46} l${d*u*.16},${u*.50}`,stroke:col,
+    "stroke-width":u*.15,"stroke-linecap":"round",fill:"none"})));
+}
+
+function caneShape(g,s){
+  const u=s*30;
+  g.appendChild(el("ellipse",{cx:0,cy:u*.16,rx:u*1.55,ry:u*.55,fill:"url(#cglow)"}));
+  personShape(g,s*1.15,"#DBE4EE",null);
+  g.appendChild(el("path",{d:`M${u*.40},${-u*1.10} l${u*.44},${u*1.26}`,
+    stroke:"#F5D142","stroke-width":u*.11,"stroke-linecap":"round",fill:"none"}));
+}
+
+buildStatic();
+
+const me=el("g",{});caneShape(me,proj(ME.z,ME.x).s);
+const mp=proj(ME.z,ME.x);me.setAttribute("transform",`translate(${mp.x},${mp.y})`);
+gMe.appendChild(me);
+
+const cars=[
+  {z:80,x:2.7,v:30,away:false,col:"#E24B4A"},
+  {z:15,x:-2.7,v:28,away:true,col:"#5A6B80"},
+];
+let peds=[];
+let spawnT=0;
+
+const SLOTS=[[7,15],[19,34],[42,72]];
+let slotI=0;
+function spawnPed(forceSlot){
+  const sl=SLOTS[forceSlot!=null?forceSlot:(slotI++%3)];
+  const z=sl[0]+Math.random()*(sl[1]-sl[0]);
+  const r=Math.random();
+  let x,vx,vz,kind;
+  if(r<.36){x=-7.2+(Math.random()-.5)*1.6;vx=0;vz=-(0.7+Math.random()*.6);kind="좌측 보도";}
+  else if(r<.72){x=7.2+(Math.random()-.5)*1.6;vx=0;vz=-(0.7+Math.random()*.6);kind="우측 보도";}
+  else{x=(Math.random()<.5?-9:9);vx=(x<0?1:-1)*(1.1+Math.random()*.6);vz=-.15;kind="횡단 중";}
+  peds.push({z:z,x:x,vx:vx,vz:vz,kind:kind,threat:0,ttcCar:999,dCar:999});
+  if(peds.length>8)peds.shift();
+}
+spawnPed(0);spawnPed(1);spawnPed(2);
+
+function dist3(o){
+  const dz=o.z-ME.z,dx=o.x-ME.x;
+  return Math.sqrt(dz*dz+dx*dx);
+}
+
+function threatFromCars(t){
+  let best={ttc:999,d:999,lvl:0};
+  for(const c of cars){
+    if(c.away)continue;
+    const dz=c.z-t.z;
+    if(dz<-4)continue;
+    const dx=c.x-t.x;
+    const d=Math.sqrt(dz*dz+dx*dx);
+    const clos=c.v/3.6;
+    const ttc=clos>.3?dz/clos:999;
+    const lateral=Math.abs(dx);
+    let lvl=0;
+    if(ttc<=1.8&&lateral<3.2)lvl=3;
+    else if(ttc<=3.4&&lateral<4.5)lvl=2;
+    else if(ttc<=6.5&&lateral<6.5)lvl=1;
+    if(lvl>best.lvl||(lvl===best.lvl&&ttc<best.ttc))best={ttc:ttc,d:d,lvl:lvl};
+  }
+  return best;
+}
+
+function assess(){
+  const list=[];
+  for(const c of cars){
+    if(c.away||c.z<0)continue;
+    const d=dist3(c),clos=c.v/3.6;
+    list.push({d:d,clos:clos,ttc:clos>.3?d/clos:999,
+      label:"차량",zone:zoneOf(c.x),isCar:true,who:"나"});
+  }
+  for(const p of peds){
+    const t=threatFromCars(p);
+    p.threat=t.lvl;p.ttcCar=t.ttc;p.dCar=t.d;
+    const d=dist3(p);
+    const clos=Math.hypot(p.vx,p.vz)*(d<30?1:.6);
+    list.push({d:d,clos:clos,ttc:clos>.15?d/clos:999,
+      label:p.kind==="횡단 중"?"횡단 보행자":"보행자",zone:zoneOf(p.x),
+      isCar:false,who:"나",forced:0});
+    if(t.lvl>0){
+      list.push({d:t.d,clos:0,ttc:t.ttc,
+        label:(p.kind==="횡단 중"?"횡단 보행자":"보행자")+" 위험",
+        zone:zoneOf(p.x),isCar:false,who:"타인",forced:t.lvl});
+    }
+  }
+  if(!list.length)return null;
+  const atRisk=peds.filter(p=>p.threat>=2).length;
+  list.sort((a,b)=>(b.forced||0)-(a.forced||0)||a.ttc-b.ttc||a.d-b.d);
+  return {best:list[0],count:cars.filter(c=>!c.away).length+peds.length,atRisk:atRisk};
+}
+
+function levelOf(o){
+  if(!o)return 0;
+  if(o.forced)return o.forced;
+  if(o.isCar){
+    if(o.ttc<=1.6||o.d<7)return 3;
+    if(o.ttc<=3.2||o.d<15)return 2;
+    if(o.ttc<=6.5||o.d<32)return 1;
+    return 0;
+  }
+  if(o.d<2.2)return 3;
+  if(o.d<4.5||o.ttc<=2.2)return 2;
+  if(o.d<9||o.ttc<=5)return 1;
+  return 0;
+}
+
+function draw(){
+  while(gWorld.firstChild)gWorld.removeChild(gWorld.firstChild);
+  const items=[];
+  cars.forEach(c=>items.push({z:c.z,fn:g=>carShape(g,proj(c.z,c.x).s,c.col,c.away),
+    x:c.x}));
+  peds.forEach(p=>{
+    const col=p.threat>=3?"#F87171":p.threat===2?"#FBBF24":
+              (p.kind==="횡단 중"?"#D4B483":"#9AA7B8");
+    const gl=p.threat>=3?"url(#dglow)":p.threat===2?"url(#pglow)":null;
+    items.push({z:p.z,x:p.x,fn:g=>personShape(g,proj(p.z,p.x).s,col,gl)});
+  });
+  items.sort((a,b)=>b.z-a.z);
+  for(const it of items){
+    const p=proj(it.z,it.x);
+    if(p.s<.03||p.y<HORIZON||it.z<-18||it.z>170)continue;
+    const g=el("g",{transform:`translate(${p.x},${p.y})`});
+    it.fn(g);gWorld.appendChild(g);
+  }
+}
+
+function fmt(n,d){return n.toFixed(d);}
+function setLevel(l,o){
+  document.querySelectorAll(".seg").forEach(s=>{
+    const i=+s.dataset.i;
+    s.style.background=(l>0&&i<=l)?LEVEL_COLOR[l]:(i===0&&l===0?LEVEL_COLOR[0]:"#232830");
+  });
+  const lv=document.getElementById("lvl");
+  lv.textContent=l+" · "+LEVEL_NAME[l];lv.style.color=LEVEL_COLOR[l];
+  document.getElementById("ttc").style.color=l>=2?LEVEL_COLOR[l]:"#F3F4F6";
+  const b=document.getElementById("banner"),glow=document.getElementById("alertGlow");
+  const ic=b.querySelector(".ico");
+  if(l>=2&&o){
+    b.classList.add("on");b.classList.toggle("warn",l===2);
+    ic.style.color=l===3?"#F09595":"#F5C77E";
+    const other=o.who==="타인";
+    document.getElementById("bTitle").textContent= other
+      ? (l===3?"보행자 충돌 위험":"보행자 위험 감지")
+      : (l===3?(o.isCar?"충돌 위험":"근접 위험"):(o.isCar?"차량 접근":"보행자 근접"));
+    const more=(window.__atRisk||0)>1?" · 외 "+((window.__atRisk)-1)+"명":"";
+    document.getElementById("bSub").textContent= other
+      ? (o.zone+" 보행자에 차량 접근 · "+(o.ttc<99?fmt(o.ttc,1)+"초 후":fmt(o.d,1)+"m")+more)
+      : (o.zone+" · "+fmt(o.d,1)+"m"+(o.ttc<99?" · "+fmt(o.ttc,1)+"초 후":""));
+    glow.style.opacity=l===3?".92":".38";
+  }else{b.classList.remove("on");glow.style.opacity="0";}
+}
+
+let last=performance.now();
+function tick(now){
+  const dt=Math.min((now-last)/1000,.06);last=now;
+  spawnT+=dt;
+  if(spawnT>=3){spawnT=0;spawnPed();}
+
+  for(const c of cars){
+    c.z+=(c.away?1:-1)*c.v/3.6*dt;
+    if(!c.away&&c.z<-18){c.z=82+Math.random()*22;c.v=20+Math.random()*20;}
+    if(c.away&&c.z>140){c.z=-16-Math.random()*20;c.v=20+Math.random()*20;}
+  }
+  peds.forEach(p=>{p.z+=p.vz*dt;p.x+=p.vx*dt;});
+  peds=peds.filter(p=>p.z>-6&&Math.abs(p.x)<11.5);
+
+  const a=assess();
+  const o=a?a.best:null;
+  const l=levelOf(o);
+  document.getElementById("dist").textContent=o?fmt(o.d,1):"--";
+  document.getElementById("ttc").textContent=(o&&o.ttc<99)?fmt(o.ttc,1):"--";
+  document.getElementById("clos").textContent=o?fmt(o.clos,1):"0.0";
+  window.__atRisk=a?a.atRisk:0;
+  document.getElementById("cnt").textContent=a?(a.count+(a.atRisk?" ("+a.atRisk+"위험)":"")):0;
+  document.getElementById("zone").textContent=o?o.zone:"--";
+  document.getElementById("srcTag").textContent=o?o.label:"대기 중";
+  setLevel(l,o);draw();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

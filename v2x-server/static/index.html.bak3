@@ -82,9 +82,6 @@
     <option value="2">2(위험) 이상</option>
     <option value="3">3(매우 위험)만</option>
   </select>
-  <div id="demo-badge" style="display:none;background:#e8f0fe;color:#174ea6;font-size:11px;
-       padding:6px 8px;border-radius:6px;margin-bottom:8px;line-height:1.4;">
-    <b>예시 표시</b><br>차량·경로는 임시 데이터입니다<br>(실제 예측 모델 연동 전)</div>
   <div id="status">데이터 불러오는 중...</div>
 </div>
 
@@ -109,15 +106,6 @@ const GRADE_LABELS = { 0: "안전", 1: "주의", 2: "위험", 3: "매우 위험"
 const AGR = { both: "실측·시뮬 모두 위험", live_only: "실측만 위험", sumo_only: "시뮬만 위험" };
 const SRC = { live: "예측", sumo: "시나리오", combined: "통합" };
 
-function fmtKST(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  if (isNaN(d)) return String(iso).replace("T", " ").slice(0, 16);
-  return d.toLocaleString("ko-KR", { timeZone: "Asia/Seoul",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
 let source = "live";
 const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
 const map = L.map("map").setView([37.4965, 126.9571], 16);
@@ -131,9 +119,6 @@ function setSource(s) {
   ["live", "sumo", "combined"].forEach(x =>
     document.getElementById("b-" + x).className = (x === s ? "on" : ""));
   hideCard();
-  if (s === "live") { drawPredictionDemo(); predictLayer.addTo(map); }
-  else { map.removeLayer(predictLayer); }
-  document.getElementById("demo-badge").style.display = (s === "live") ? "block" : "none";
   loadSegments();
 }
 
@@ -152,7 +137,7 @@ function showSegmentCard(s) {
   if (s.ttc != null) h += row("평균 TTC", s.ttc + "s");
   h += row("출처", SRC[s.source] || s.source);
   if (s.agreement) h += row("일치도", AGR[s.agreement] || s.agreement);
-  if (s.updated_at) h += row("갱신", fmtKST(s.updated_at));
+  if (s.updated_at) h += row("갱신", s.updated_at.replace("T", " ").slice(0, 19));
   document.getElementById("d-rows").innerHTML = h;
   document.getElementById("detail-card").style.display = "block";
 }
@@ -185,72 +170,10 @@ function loadSegments() {
     });
     fetch("/api/status").then(r => r.json()).then(info => {
       let t = rows.length + "개 구간 표시 중";
-      if (info.last_updated) t += "<br>갱신 " + fmtKST(info.last_updated);
+      if (info.last_updated) t += "<br>갱신 " + info.last_updated.replace("T", " ").slice(0, 16);
       st.innerHTML = t;
     }).catch(() => { st.textContent = rows.length + "개 구간 표시 중"; });
   }).catch(() => { st.textContent = "데이터를 불러오지 못했습니다. 새로고침 해보세요."; });
-}
-
-// ===== 예측 데모: 차량 1대 + 경로 갈래별 확률 (임시 예시, 실제 모델 연동 전) =====
-const DEMO_CAR = { lat: 37.4964687, lng: 126.9578935, heading: 0 };
-const DEMO_PATHS = [
-  { label: "직진", prob: 0.60, points: [[37.4964687,126.9578935],[37.4965615,126.9579137],[37.4965756,126.9579167],[37.496627,126.9578873],[37.49666,126.9578204],[37.4966968,126.9574114]] },
-  { label: "좌회전", prob: 0.25, points: [[37.4964687,126.9578935],[37.4965084,126.9574527],[37.4965393,126.9571087]] },
-  { label: "우회전", prob: 0.15, points: [[37.4964687,126.9578935],[37.4964528,126.9578901],[37.4962938,126.9578556],[37.4962841,126.9578535],[37.49627,126.9578504],[37.4961587,126.9578262]] },
-];
-const PRED_BLUE = "#1d6fe0";
-const predictLayer = L.layerGroup();
-
-function carIcon(headingDeg) {
-  return L.divIcon({
-    className: "", iconSize: [34, 34], iconAnchor: [17, 17],
-    html: '<div style="transform:rotate(' + headingDeg + 'deg);width:34px;height:34px;">'
-        + '<svg viewBox="0 0 24 24" width="34" height="34">'
-        + '<circle cx="12" cy="12" r="11" fill="#fff" stroke="' + PRED_BLUE + '" stroke-width="1.5" opacity="0.95"/>'
-        + '<path d="M12 3.5 L15.4 9.2 L13.2 9.2 L13.2 19 L10.8 19 L10.8 9.2 L8.6 9.2 Z" fill="' + PRED_BLUE + '"/>'
-        + '</svg></div>',
-  });
-}
-
-function drawPredictionDemo() {
-  predictLayer.clearLayers();
-  DEMO_PATHS.forEach(function (p) {
-    const w = 4 + p.prob * 14;
-    L.polyline(p.points, { color: PRED_BLUE, weight: w, opacity: 0.75, lineCap: "round" })
-      .on("click", function () {
-        document.getElementById("d-title").textContent = "예측 경로 (예시)";
-        document.getElementById("d-rows").innerHTML =
-          row("경로", p.label) + row("진행 확률", Math.round(p.prob * 100) + "%")
-          + row("구분", "임시 예시 데이터");
-        document.getElementById("detail-card").style.display = "block";
-      })
-      .addTo(predictLayer);
-
-    const end = p.points[p.points.length - 1];
-    const prev = p.points[p.points.length - 2];
-    const ang = Math.atan2((end[1]-prev[1]) * 0.79, (end[0]-prev[0])) * 180 / Math.PI;
-    L.marker(end, { icon: L.divIcon({ className: "", iconSize: [18,18], iconAnchor: [9,9],
-      html: '<div style="transform:rotate(' + (90 - ang) + 'deg)"><svg viewBox="0 0 24 24" width="18" height="18">'
-          + '<path d="M12 2 L19 20 L12 15.5 L5 20 Z" fill="' + PRED_BLUE + '"/></svg></div>' }) })
-      .addTo(predictLayer);
-
-    L.marker(p.points[Math.floor(p.points.length / 2)], { icon: L.divIcon({ className: "",
-      iconSize: [72,22], iconAnchor: [36,11],
-      html: '<div style="background:' + PRED_BLUE + ';color:#fff;font-size:11px;font-weight:600;'
-          + 'padding:2px 0;border-radius:11px;text-align:center;white-space:nowrap;">'
-          + p.label + " " + Math.round(p.prob * 100) + "%</div>" }) })
-      .addTo(predictLayer);
-  });
-
-  L.marker([DEMO_CAR.lat, DEMO_CAR.lng], { icon: carIcon(DEMO_CAR.heading), zIndexOffset: 1000 })
-    .on("click", function () {
-      document.getElementById("d-title").textContent = "차량 (예시)";
-      document.getElementById("d-rows").innerHTML =
-        row("위치", DEMO_CAR.lat.toFixed(5) + ", " + DEMO_CAR.lng.toFixed(5))
-        + row("경로 후보", DEMO_PATHS.length + "개") + row("구분", "임시 예시 데이터");
-      document.getElementById("detail-card").style.display = "block";
-    })
-    .addTo(predictLayer);
 }
 
 function loadZones() {
