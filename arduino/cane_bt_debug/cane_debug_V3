@@ -103,12 +103,15 @@
 #define GPS_OUTLIER_BASE_M 5.0f
 #define GPS_FILTER_ALPHA 0.40f
 #define GPS_FILTER_BETA 0.08f
-// NEO-6M 5Hz 기준: 0.2초 x 15회 = 약 3초 동안 같은 새 위치가
-// 반복될 때만 필터 기준 위치를 재설정한다.
-#define GPS_RELOCALIZE_AFTER_REJECTS 15
+// GPS가 실제 5Hz면 15회, 1Hz로 떨어지면 3회를 사용해 어느 경우든
+// 약 3초 동안 같은 새 위치가 반복될 때 필터 기준 위치를 재설정한다.
+#define GPS_RELOCALIZE_AFTER_REJECTS_5HZ 15
+#define GPS_RELOCALIZE_AFTER_REJECTS_1HZ 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
 #define GPS_PREDICTION_MAX_MS 1200UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
+#define GPS_5HZ_RECOVERY_COOLDOWN_MS 60000UL
+#define GPS_5HZ_RECOVERY_MIN_UPTIME_MS 15000UL
 
 // ===== 2026-08-03 지팡이 실제 장착 상태 전용 방향 보정 =====
 #define CANE_MAG_CENTER_X_UT (-48.675f)
@@ -298,6 +301,39 @@ typedef struct {
 } GpsFilterState;
 
 GpsFilterState gpsFilter = {};
+uint32_t lastGpsMeasurementMs = 0;
+float gpsObservedUpdateIntervalMs = 200.0f;
+uint8_t gpsRelocalizeAfterRejects =
+  GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+bool gps5HzRecoveryRequested = false;
+uint32_t lastGps5HzRecoveryAttemptMs = 0;
+
+void updateObservedGpsRate(uint32_t now) {
+  if (lastGpsMeasurementMs > 0) {
+    uint32_t intervalMs = now - lastGpsMeasurementMs;
+    if (intervalMs >= 100UL && intervalMs <= 2000UL) {
+      gpsObservedUpdateIntervalMs =
+        0.70f * gpsObservedUpdateIntervalMs + 0.30f * intervalMs;
+
+      uint8_t newRejectLimit =
+        gpsObservedUpdateIntervalMs > 500.0f
+          ? GPS_RELOCALIZE_AFTER_REJECTS_1HZ
+          : GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+      gps5HzRecoveryRequested =
+        newRejectLimit == GPS_RELOCALIZE_AFTER_REJECTS_1HZ;
+
+      if (newRejectLimit != gpsRelocalizeAfterRejects) {
+        gpsRelocalizeAfterRejects = newRejectLimit;
+        Serial.printf(
+          "[GPS] observed interval=%.0fms -> relocalize rejects=%u\n",
+          gpsObservedUpdateIntervalMs,
+          gpsRelocalizeAfterRejects
+        );
+      }
+    }
+  }
+  lastGpsMeasurementMs = now;
+}
 
 float normalizeHeading(float headingDeg) {
   while (headingDeg < 0.0f) headingDeg += 360.0f;
@@ -420,7 +456,7 @@ bool updateGpsFilter(double lat,
 
     // 같은 새 위치가 연속해서 들어오면 실제 이동 또는 GPS 재수신으로 판단.
     if (gpsFilter.consecutiveOutliers <
-        GPS_RELOCALIZE_AFTER_REJECTS) {
+        gpsRelocalizeAfterRejects) {
       return false;
     }
 
@@ -790,6 +826,37 @@ void setupGps() {
 #endif
 }
 
+void recoverGps5HzIfNeeded() {
+#if USE_GPS
+  if (!gps5HzRecoveryRequested) return;
+
+  uint32_t now = millis();
+  if (now < GPS_5HZ_RECOVERY_MIN_UPTIME_MS) return;
+  if (lastGps5HzRecoveryAttemptMs > 0 &&
+      now - lastGps5HzRecoveryAttemptMs <
+        GPS_5HZ_RECOVERY_COOLDOWN_MS) {
+    return;
+  }
+
+  lastGps5HzRecoveryAttemptMs = now;
+  Serial.printf(
+    "[GPS] observed %.0fms updates -> retrying 5Hz configuration\n",
+    gpsObservedUpdateIntervalMs
+  );
+
+  bool recovered = configureNeo6m5Hz();
+  Serial.printf(
+    "[GPS] runtime 5Hz recovery=%s\n",
+    recovered ? "ACK" : "FAILED"
+  );
+
+  // 재설정 뒤에는 실제 NMEA 간격을 처음부터 다시 측정한다.
+  lastGpsMeasurementMs = 0;
+  gpsObservedUpdateIntervalMs = 200.0f;
+  if (recovered) gps5HzRecoveryRequested = false;
+#endif
+}
+
 void setupImu() {
 #if USE_IMU
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -816,6 +883,7 @@ void readGps() {
   // GGA와 RMC에 둘 다 위치가 있으므로 RMC에서 속도와 함께
   // 갱신된 위치만 처리해 1회의 GPS fix를 두 번 카운트하지 않는다.
   if (gps.location.isUpdated() && gps.speed.isUpdated()) {
+    updateObservedGpsRate(now);
     rawGpsLat = gps.location.lat();
     rawGpsLng = gps.location.lng();
     rawGpsSatellites =
@@ -1187,7 +1255,7 @@ void applyRisk(uint8_t risk) {
 
 // 유효시간이 지나지 않은 출처들의 최댓값을 적용한다.
 // 한쪽의 "안전(0)" 주장이 다른 쪽의 경고를 지우지 못하게 하는 병합 규칙.
-void applyMergedRisk() {
+bool applyMergedRisk() {
   uint32_t now = millis();
 
   bool vehicleFresh =
@@ -1198,14 +1266,15 @@ void applyMergedRisk() {
     rsuRiskMs > 0 &&
     now - rsuRiskMs <= RSU_RISK_TIMEOUT_MS;
 
-  // 둘 다 끊겼으면 기존 타임아웃/자체 계산 로직이 처리한다.
-  if (!vehicleFresh && !rsuFresh) return;
+  // 둘 다 끊겼으면 호출자가 자체 계산 또는 SAFE 처리를 선택한다.
+  if (!vehicleFresh && !rsuFresh) return false;
 
   uint8_t merged = RISK_SAFE;
   if (vehicleFresh && vehicleRiskLevel > merged) merged = vehicleRiskLevel;
   if (rsuFresh && rsuRiskLevel > merged) merged = rsuRiskLevel;
 
   applyRisk(merged);
+  return true;
 }
 
 void buildStatusPacket() {
@@ -1351,13 +1420,9 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
   vehicleRxCount++;
   lastVehicleRxMs = now;
 
-  // 차량이 계산한 직접 위험 패킷이 최근에 도착했다면
-  // 지팡이 자체 계산으로 그 결과를 덮어쓰지 않는다.
-  bool directRiskFresh =
-    lastRiskMs > 0 &&
-    now - lastRiskMs <= DIRECT_RISK_TIMEOUT_MS;
-
-  if (directRiskFresh) {
+  // 차량 직접판정과 RSU 판정을 출처별 유효시간으로 병합한다.
+  // 차량 상태 패킷의 SAFE가 살아 있는 RSU 경고를 지우지 못하게 한다.
+  if (applyMergedRisk()) {
     Serial.printf(
       "[CANE VEHICLE STATUS] vehicle=%lu seq=%u "
       "direct risk active -> local calculation skipped\n",
@@ -1854,6 +1919,7 @@ void loop() {
   updateActuators();
 
   readGps();
+  recoverGps5HzIfNeeded();
   readImu();
 
   uint32_t now = millis();
@@ -1903,9 +1969,16 @@ if (now - lastBtCheckMs >= 1000UL) {
   // 미래 값이 되어 부호 없는 뺄셈이 거대한 값으로 오버플로우하고,
   // 방금 온 패킷을 타임아웃으로 오판한다. 최신 시각으로 다시 읽고
   // 부호 있는 비교로 판정한다.
-  bool directRiskFresh =
-    lastRiskMs > 0 &&
-    (int32_t)(millis() - lastRiskMs) <= (int32_t)DIRECT_RISK_TIMEOUT_MS;
+  uint32_t riskNow = millis();
+  bool vehicleRiskFresh =
+    vehicleRiskMs > 0 &&
+    (int32_t)(riskNow - vehicleRiskMs) <=
+      (int32_t)DIRECT_RISK_TIMEOUT_MS;
+  bool rsuRiskFresh =
+    rsuRiskMs > 0 &&
+    (int32_t)(riskNow - rsuRiskMs) <=
+      (int32_t)RSU_RISK_TIMEOUT_MS;
+  bool directRiskFresh = vehicleRiskFresh || rsuRiskFresh;
 
   bool vehicleStatusFresh =
     lastVehicleRxMs > 0 &&
