@@ -1429,7 +1429,10 @@ void sendGpsUbxCommand(uint8_t msgClass,
   packet[3] = msgId;
   packet[4] = payloadLength & 0xFF;
   packet[5] = payloadLength >> 8;
-  memcpy(&packet[6], payload, payloadLength);
+  if (payloadLength > 0) {
+    if (payload == nullptr) return;
+    memcpy(&packet[6], payload, payloadLength);
+  }
 
   uint8_t ckA = 0;
   uint8_t ckB = 0;
@@ -1442,6 +1445,14 @@ void sendGpsUbxCommand(uint8_t msgClass,
   packet[7 + payloadLength] = ckB;
   gpsSerial.write(packet, payloadLength + 8);
   gpsSerial.flush();
+}
+
+void discardGpsSerialInput(uint32_t durationMs) {
+  uint32_t startedMs = millis();
+  while (millis() - startedMs < durationMs) {
+    while (gpsSerial.available() > 0) gpsSerial.read();
+    delay(1);
+  }
 }
 
 bool waitForGpsUbxAck(uint8_t targetClass,
@@ -1469,6 +1480,60 @@ bool waitForGpsUbxAck(uint8_t targetClass,
   return false;
 }
 
+bool pollGpsMeasurementRate(uint16_t &measurementRateMs,
+                            uint32_t timeoutMs) {
+  // CFG-RATE poll: 실제 모듈에 적용된 measRate를 다시 읽는다.
+  const uint8_t expectedHeader[] = {
+    0xB5, 0x62, 0x06, 0x08, 0x06, 0x00
+  };
+  uint8_t payloadAndChecksum[8];
+  size_t matched = 0;
+  size_t tailLength = 0;
+
+  discardGpsSerialInput(30);
+  sendGpsUbxCommand(0x06, 0x08, nullptr, 0);
+  uint32_t startedMs = millis();
+
+  while (millis() - startedMs < timeoutMs) {
+    while (gpsSerial.available() > 0) {
+      uint8_t value = (uint8_t)gpsSerial.read();
+      if (matched < sizeof(expectedHeader)) {
+        if (value == expectedHeader[matched]) {
+          matched++;
+        } else {
+          matched = value == expectedHeader[0] ? 1 : 0;
+        }
+        continue;
+      }
+
+      payloadAndChecksum[tailLength++] = value;
+      if (tailLength == sizeof(payloadAndChecksum)) {
+        uint8_t ckA = 0;
+        uint8_t ckB = 0;
+        for (size_t i = 2; i < sizeof(expectedHeader); i++) {
+          ckA += expectedHeader[i];
+          ckB += ckA;
+        }
+        for (size_t i = 0; i < 6; i++) {
+          ckA += payloadAndChecksum[i];
+          ckB += ckA;
+        }
+        if (ckA != payloadAndChecksum[6] ||
+            ckB != payloadAndChecksum[7]) {
+          return false;
+        }
+
+        measurementRateMs =
+          (uint16_t)payloadAndChecksum[0] |
+          ((uint16_t)payloadAndChecksum[1] << 8);
+        return true;
+      }
+    }
+    delay(1);
+  }
+  return false;
+}
+
 bool configureNeo6m5Hz() {
   // 9600bps에서 5Hz NMEA 전체를 보내면 대역폭이 부족할 수 있다.
   // TinyGPSPlus에 필요한 GGA(위성 수/HDOP)와 RMC(위치/속도/방향)만 남긴다.
@@ -1487,22 +1552,33 @@ bool configureNeo6m5Hz() {
     0x01, 0x00,
     0x01, 0x00
   };
-  // GPS 전원 안정화가 느리거나 첫 명령을 놓치는 보드를 위해
-  // 최대 3회 재시도하고 UBX-ACK를 확인한다.
+  // 부팅 직후 쌓인 NMEA로 RX 버퍼가 가득 차면 UBX-ACK가 유실될 수
+  // 있으므로 각 명령 전에 버퍼를 비우고 ACK를 즉시 소비한다.
   for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+    discardGpsSerialInput(100);
     for (size_t i = 0;
          i < sizeof(nmeaMessageRates) / sizeof(nmeaMessageRates[0]);
          i++) {
+      discardGpsSerialInput(20);
       sendGpsUbxCommand(0x06, 0x01, nmeaMessageRates[i], 3);
-      delay(50);
+      waitForGpsUbxAck(0x06, 0x01, 250UL);
     }
 
+    discardGpsSerialInput(30);
     sendGpsUbxCommand(0x06, 0x08, rate5Hz, sizeof(rate5Hz));
-    if (waitForGpsUbxAck(0x06, 0x08, 700UL)) {
+    bool rateAck = waitForGpsUbxAck(0x06, 0x08, 700UL);
+    uint16_t actualRateMs = 0;
+    bool rateReadback = pollGpsMeasurementRate(actualRateMs, 700UL);
+    if (rateReadback) {
+      Serial.printf("[GPS] CFG-RATE readback=%ums (%s)\n",
+                    actualRateMs,
+                    actualRateMs == 200 ? "5Hz" : "not 5Hz");
+    }
+    if (actualRateMs == 200 || (rateAck && !rateReadback)) {
       return true;
     }
 
-    Serial.printf("[GPS] NEO-6M 5Hz ACK timeout attempt=%u/3\n", attempt);
+    Serial.printf("[GPS] NEO-6M 5Hz no response attempt=%u/3\n", attempt);
     delay(300);
   }
 
@@ -1511,6 +1587,7 @@ bool configureNeo6m5Hz() {
 
 void setupGps() {
 #if USE_GPS
+  gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(1500);
   bool gps5HzConfigured = configureNeo6m5Hz();
