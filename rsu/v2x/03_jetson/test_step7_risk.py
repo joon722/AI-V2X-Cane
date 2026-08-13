@@ -8,6 +8,7 @@ from step7_risk import (
     DCPA_FAR_M,
     DCPA_FLOOR,
     DCPA_NEAR_M,
+    T_ALARM_MAX_TTC_S,
     T_FLOOR_TTC_S,
     assess_risk,
     calculate_risk_score,
@@ -114,7 +115,7 @@ class AssessRiskTest(unittest.TestCase):
         self.assertLess(result.risk_level, 2)  # gated down
         self.assertAlmostEqual(result.final_score, result.base_score * DCPA_FLOOR, places=2)
 
-    def test_receding_vehicle_has_no_gate_and_low_score(self):
+    def test_receding_vehicle_has_no_gate_and_is_not_an_alarm(self):
         kin = relative_kinematics(
             cane_pos=(0.0, 0.0),
             cane_vel=(0.0, 0.0),
@@ -124,20 +125,115 @@ class AssessRiskTest(unittest.TestCase):
         self.assertIsNone(kin.dcpa)
         result = assess_risk(kin, vehicle_speed_mps=5.0)
         self.assertEqual(result.gate, 1.0)
-        # Distance term still fires (8 m), but no TTC and no closing speed.
+        # 8/12 이전에는 거리 항(8 m -> 30점)만으로 레벨 1이 나갔다. 그 규칙이
+        # 그날 경보 1004건 중 506건(접근하지 않는 쌍)을 만들었다. 지금은 TTC
+        # 상한이 걸러낸다 - 점수는 기록용으로 남고 레벨만 0이 된다.
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+        self.assertEqual(result.final_score, 33.0)  # 거리 30 + 차량속도 3
+
+
+class TtcCapTest(unittest.TestCase):
+    """접근이 무의미하게 먼 쌍은 경보하지 않는다.
+
+    8/12 실측: 경보 1004건 중 접근 안 함(TTC 9999) 50.4% + TTC 30초 초과
+    23.6% = 74%가 위험이 아닌데 울렸다. 반대로 실제 접근 구간의 TTC는
+    3.7~9.1초로 전부 30초 안이었다 - 상한 30초는 진짜 위험을 하나도 걸지
+    않으면서 그 74%를 걸러낸다.
+
+    상한은 규칙 레벨에만 걸린다. 모델은 여전히 위로 올릴 수 있다 - TTC가
+    무한대인 측면 위험을 잡는 것이 모델의 존재 이유라서, 모델까지 막으면
+    모델을 두는 의미가 없다. 안전 하한(TTC<=T_FLOOR)은 상한보다 먼저
+    판정되므로 서로 겹칠 일이 없다.
+    """
+
+    def test_stationary_pair_nearby_is_silent(self):
+        # 8/12에 가장 흔했던 오경보: 둘 다 정지, 7 m -> 레벨 1 진동.
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 7.0),
+            veh_vel=(0.0, 0.0),
+        )
+        result = assess_risk(kin, vehicle_speed_mps=0.0)
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+
+    def test_very_slow_convergence_beyond_the_cap_is_silent(self):
+        # 50 m 를 1 m/s 로 접근 -> TTC 50초. 어제 지도에 51초짜리가 올라갔었다.
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 50.0),
+            veh_vel=(0.0, -1.0),
+        )
+        self.assertGreater(kin.ttc_simple, T_ALARM_MAX_TTC_S)
+        result = assess_risk(kin, vehicle_speed_mps=1.0)
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+
+    def test_real_approach_inside_the_cap_is_untouched(self):
+        # 50 m 를 10 m/s 로 접근 -> TTC 5초. 기존 채점 그대로.
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 50.0),
+            veh_vel=(0.0, -10.0),
+        )
+        self.assertLess(kin.ttc_simple, T_ALARM_MAX_TTC_S)
+        result = assess_risk(kin, vehicle_speed_mps=10.0)
+        self.assertEqual(result.reason, "table")
+        self.assertEqual(result.risk_level, classify_risk_level(result.final_score))
+        self.assertGreaterEqual(result.risk_level, 1)
+
+    def test_safety_floor_wins_over_the_cap(self):
+        # 하한 안쪽이면 상한 판정 자체가 일어나지 않는다.
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 10.0),
+            veh_vel=(0.0, -10.0),
+        )
+        self.assertLessEqual(kin.ttc_simple, T_FLOOR_TTC_S)
+        result = assess_risk(kin, vehicle_speed_mps=10.0)
+        self.assertEqual(result.risk_level, 3)
+        self.assertEqual(result.reason, "safety_floor")
+
+    def test_cap_can_be_disabled_for_analysis(self):
+        """상한을 끈 채로 채점할 수 있어야 8/12 이전 데이터와 비교가 된다."""
+        kin = relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, 8.0),
+            veh_vel=(0.0, 5.0),
+        )
+        result = assess_risk(kin, vehicle_speed_mps=5.0, alarm_max_ttc_s=0.0)
         self.assertEqual(result.risk_level, 1)
+        self.assertEqual(result.reason, "table")
+
+    def test_cap_value_matches_the_pipeline_bound(self):
+        """지도 업로드(upload_events.MAX_TTC_S)와 같은 30초여야 한다.
+
+        판단에 의미가 있는 TTC 구간이 30초까지라는 결정(model_features.
+        TTC_MAX_S)을 세 곳이 공유한다. 갈라지면 화면·지도·경보가 서로
+        다른 기준으로 움직인다.
+        """
+        self.assertEqual(T_ALARM_MAX_TTC_S, 30.0)
 
 
 class SafetyFloorTest(unittest.TestCase):
     """TTC가 반응 가능 시간 아래로 내려가면 점수와 무관하게 최고 레벨이 나간다.
 
-    근거는 ttc_study/SPEC.md에 정리되어 있다. T_FLOOR_TTC_S = 2.0초는
-    GPS 주기 0.2 + 전송 0.1(8/5 실측) + 인지·판단 0.3 + 정지 동작 1.2 + 마진 0.2의
-    합이고, GB/T 33577(최소 2초)·NHTSA NCAP FCW(2.0~2.4초)와도 같은 자리다.
+    근거는 ttc_study/SPEC.md에 정리되어 있다. T_FLOOR_TTC_S는 GPS 주기 + 전송
+    0.1(8/5 실측) + 인지·판단 0.3 + 정지 동작 1.2 + 마진 0.2의 합이다.
 
-    시뮬레이션 검증(시나리오 800개): 이 하한을 넣으면 위험 시나리오 검출이
-    18/19 -> 19/19로 올라가고 오경보율은 2.03% -> 3.24%가 된다. 놓치지 않는 쪽에
-    비용을 쓰는 것이 이 규칙의 목적이다.
+    2026-08-08 실측으로 GPS 주기를 1.0초(차량 1045 ms)로 잡으면서 하한이
+    2.0 -> 2.8초가 되었다. 아래 테스트가 상수를 직접 참조하는 것은 이 때문이다 -
+    값을 적어두면 GPS 주기가 바뀔 때마다 테스트가 함께 틀린다.
+
+    시뮬레이션 검증(1200 x 3회, 평가 기준 2.8초): 하한 2.0은 하한 없음과 적시경보가
+    52.2%로 같아 오경보만 늘린다. 2.8초에서 57.7%로 오르고 오경보는 3.36 ->
+    4.75%가 된다. 놓치지 않는 쪽에 비용을 쓰는 것이 이 규칙의 목적이다.
     """
 
     def test_imminent_collision_forces_top_level(self):

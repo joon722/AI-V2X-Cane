@@ -103,12 +103,15 @@
 #define GPS_OUTLIER_BASE_M 5.0f
 #define GPS_FILTER_ALPHA 0.40f
 #define GPS_FILTER_BETA 0.08f
-// NEO-6M 5Hz 기준: 0.2초 x 15회 = 약 3초 동안 같은 새 위치가
-// 반복될 때만 필터 기준 위치를 재설정한다.
-#define GPS_RELOCALIZE_AFTER_REJECTS 15
+// GPS가 실제 5Hz면 15회, 1Hz로 떨어지면 3회를 사용해 어느 경우든
+// 약 3초 동안 같은 새 위치가 반복될 때 필터 기준 위치를 재설정한다.
+#define GPS_RELOCALIZE_AFTER_REJECTS_5HZ 15
+#define GPS_RELOCALIZE_AFTER_REJECTS_1HZ 3
 #define GPS_FILTER_RESET_GAP_MS 5000UL
 #define GPS_PREDICTION_MAX_MS 1200UL
 #define GPS_MIN_COURSE_SPEED_MPS 0.5f
+#define GPS_5HZ_RECOVERY_COOLDOWN_MS 60000UL
+#define GPS_5HZ_RECOVERY_MIN_UPTIME_MS 15000UL
 
 // ===== 2026-08-03 지팡이 실제 장착 상태 전용 방향 보정 =====
 #define CANE_MAG_CENTER_X_UT (-48.675f)
@@ -143,12 +146,18 @@
 // 차량이 RSSI+상대GPS로 직접 판정하므로 지팡이의 GPS 단독 fallback은 끈다.
 // 이 값을 1로 바꾸면 예전 GPS 단독 예비판정을 다시 사용할 수 있다.
 #define ENABLE_CANE_LOCAL_GPS_RISK_FALLBACK 0
+// 현재 야외 직접연결 시험에서는 차량 ESP32 판정만 출력한다.
+// RSU/Jetson의 예전 판정이 차량 SAFE와 max 병합되어 장시간 울린 것이
+// 확인됐으므로, RSU 통합 코드를 다시 맞출 때까지 기본 비활성화한다.
+#define ENABLE_RSU_RISK_INPUT 1
 #define MIN_PREDICT_VEHICLE_SPEED_MPS 0.50f
-#define MIN_PREDICT_CANE_SPEED_MPS 0.25f
+// 2026-08-12 정지 평행 실측에서 지팡이 GPS 속도 노이즈가 최대
+// 0.38m/s까지 올라갔다. 0.50m/s 미만은 정지로 처리한다.
+#define MIN_PREDICT_CANE_SPEED_MPS 0.50f
 #define MIN_RADIAL_CLOSING_SPEED_MPS 0.15f
-#define CPA_DANGER_DISTANCE_M 1.5f
-#define CPA_WARNING_DISTANCE_M 2.5f
-#define CPA_CAUTION_DISTANCE_M 4.0f
+#define CPA_DANGER_DISTANCE_M 0.5f
+#define CPA_WARNING_DISTANCE_M 0.8f
+#define CPA_CAUTION_DISTANCE_M 1.2f
 #define CPA_PREDICTION_HORIZON_S 5.0f
 #define EMERGENCY_DISTANCE_M 0.2f
 
@@ -298,6 +307,39 @@ typedef struct {
 } GpsFilterState;
 
 GpsFilterState gpsFilter = {};
+uint32_t lastGpsMeasurementMs = 0;
+float gpsObservedUpdateIntervalMs = 200.0f;
+uint8_t gpsRelocalizeAfterRejects =
+  GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+bool gps5HzRecoveryRequested = false;
+uint32_t lastGps5HzRecoveryAttemptMs = 0;
+
+void updateObservedGpsRate(uint32_t now) {
+  if (lastGpsMeasurementMs > 0) {
+    uint32_t intervalMs = now - lastGpsMeasurementMs;
+    if (intervalMs >= 100UL && intervalMs <= 2000UL) {
+      gpsObservedUpdateIntervalMs =
+        0.70f * gpsObservedUpdateIntervalMs + 0.30f * intervalMs;
+
+      uint8_t newRejectLimit =
+        gpsObservedUpdateIntervalMs > 500.0f
+          ? GPS_RELOCALIZE_AFTER_REJECTS_1HZ
+          : GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
+      gps5HzRecoveryRequested =
+        newRejectLimit == GPS_RELOCALIZE_AFTER_REJECTS_1HZ;
+
+      if (newRejectLimit != gpsRelocalizeAfterRejects) {
+        gpsRelocalizeAfterRejects = newRejectLimit;
+        Serial.printf(
+          "[GPS] observed interval=%.0fms -> relocalize rejects=%u\n",
+          gpsObservedUpdateIntervalMs,
+          gpsRelocalizeAfterRejects
+        );
+      }
+    }
+  }
+  lastGpsMeasurementMs = now;
+}
 
 float normalizeHeading(float headingDeg) {
   while (headingDeg < 0.0f) headingDeg += 360.0f;
@@ -420,7 +462,7 @@ bool updateGpsFilter(double lat,
 
     // 같은 새 위치가 연속해서 들어오면 실제 이동 또는 GPS 재수신으로 판단.
     if (gpsFilter.consecutiveOutliers <
-        GPS_RELOCALIZE_AFTER_REJECTS) {
+        gpsRelocalizeAfterRejects) {
       return false;
     }
 
@@ -619,7 +661,10 @@ void sendGpsUbxCommand(uint8_t msgClass,
   packet[3] = msgId;
   packet[4] = payloadLength & 0xFF;
   packet[5] = payloadLength >> 8;
-  memcpy(&packet[6], payload, payloadLength);
+  if (payloadLength > 0) {
+    if (payload == nullptr) return;
+    memcpy(&packet[6], payload, payloadLength);
+  }
 
   uint8_t ckA = 0;
   uint8_t ckB = 0;
@@ -632,6 +677,14 @@ void sendGpsUbxCommand(uint8_t msgClass,
   packet[7 + payloadLength] = ckB;
   gpsSerial.write(packet, payloadLength + 8);
   gpsSerial.flush();
+}
+
+void discardGpsSerialInput(uint32_t durationMs) {
+  uint32_t startedMs = millis();
+  while (millis() - startedMs < durationMs) {
+    while (gpsSerial.available() > 0) gpsSerial.read();
+    delay(1);
+  }
 }
 
 bool waitForGpsUbxAck(uint8_t targetClass,
@@ -659,6 +712,60 @@ bool waitForGpsUbxAck(uint8_t targetClass,
   return false;
 }
 
+bool pollGpsMeasurementRate(uint16_t &measurementRateMs,
+                            uint32_t timeoutMs) {
+  // CFG-RATE poll: 실제 모듈에 적용된 measRate를 다시 읽는다.
+  const uint8_t expectedHeader[] = {
+    0xB5, 0x62, 0x06, 0x08, 0x06, 0x00
+  };
+  uint8_t payloadAndChecksum[8];
+  size_t matched = 0;
+  size_t tailLength = 0;
+
+  discardGpsSerialInput(30);
+  sendGpsUbxCommand(0x06, 0x08, nullptr, 0);
+  uint32_t startedMs = millis();
+
+  while (millis() - startedMs < timeoutMs) {
+    while (gpsSerial.available() > 0) {
+      uint8_t value = (uint8_t)gpsSerial.read();
+      if (matched < sizeof(expectedHeader)) {
+        if (value == expectedHeader[matched]) {
+          matched++;
+        } else {
+          matched = value == expectedHeader[0] ? 1 : 0;
+        }
+        continue;
+      }
+
+      payloadAndChecksum[tailLength++] = value;
+      if (tailLength == sizeof(payloadAndChecksum)) {
+        uint8_t ckA = 0;
+        uint8_t ckB = 0;
+        for (size_t i = 2; i < sizeof(expectedHeader); i++) {
+          ckA += expectedHeader[i];
+          ckB += ckA;
+        }
+        for (size_t i = 0; i < 6; i++) {
+          ckA += payloadAndChecksum[i];
+          ckB += ckA;
+        }
+        if (ckA != payloadAndChecksum[6] ||
+            ckB != payloadAndChecksum[7]) {
+          return false;
+        }
+
+        measurementRateMs =
+          (uint16_t)payloadAndChecksum[0] |
+          ((uint16_t)payloadAndChecksum[1] << 8);
+        return true;
+      }
+    }
+    delay(1);
+  }
+  return false;
+}
+
 bool configureNeo6m5Hz() {
   // 9600bps에서 5Hz NMEA 전체를 보내면 대역폭이 부족할 수 있다.
   // TinyGPSPlus에 필요한 GGA(위성 수/HDOP)와 RMC(위치/속도/방향)만 남긴다.
@@ -677,22 +784,33 @@ bool configureNeo6m5Hz() {
     0x01, 0x00,
     0x01, 0x00
   };
-  // GPS 전원 안정화가 느리거나 첫 명령을 놓치는 보드를 위해
-  // 최대 3회 재시도하고 UBX-ACK를 확인한다.
+  // 부팅 직후 쌓인 NMEA로 RX 버퍼가 가득 차면 UBX-ACK가 유실될 수
+  // 있으므로 각 명령 전에 버퍼를 비우고 ACK를 즉시 소비한다.
   for (uint8_t attempt = 1; attempt <= 3; attempt++) {
+    discardGpsSerialInput(100);
     for (size_t i = 0;
          i < sizeof(nmeaMessageRates) / sizeof(nmeaMessageRates[0]);
          i++) {
+      discardGpsSerialInput(20);
       sendGpsUbxCommand(0x06, 0x01, nmeaMessageRates[i], 3);
-      delay(50);
+      waitForGpsUbxAck(0x06, 0x01, 250UL);
     }
 
+    discardGpsSerialInput(30);
     sendGpsUbxCommand(0x06, 0x08, rate5Hz, sizeof(rate5Hz));
-    if (waitForGpsUbxAck(0x06, 0x08, 700UL)) {
+    bool rateAck = waitForGpsUbxAck(0x06, 0x08, 700UL);
+    uint16_t actualRateMs = 0;
+    bool rateReadback = pollGpsMeasurementRate(actualRateMs, 700UL);
+    if (rateReadback) {
+      Serial.printf("[GPS] CFG-RATE readback=%ums (%s)\n",
+                    actualRateMs,
+                    actualRateMs == 200 ? "5Hz" : "not 5Hz");
+    }
+    if (actualRateMs == 200 || (rateAck && !rateReadback)) {
       return true;
     }
 
-    Serial.printf("[GPS] NEO-6M 5Hz ACK timeout attempt=%u/3\n", attempt);
+    Serial.printf("[GPS] NEO-6M 5Hz no response attempt=%u/3\n", attempt);
     delay(300);
   }
 
@@ -701,6 +819,7 @@ bool configureNeo6m5Hz() {
 
 void setupGps() {
 #if USE_GPS
+  gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(1500);
   bool gps5HzConfigured = configureNeo6m5Hz();
@@ -710,6 +829,37 @@ void setupGps() {
   );
   Serial.println("[GPS] GPS TX -> ESP32 GPIO16 RX2");
   Serial.println("[GPS] GPS RX -> ESP32 GPIO17 TX2");
+#endif
+}
+
+void recoverGps5HzIfNeeded() {
+#if USE_GPS
+  if (!gps5HzRecoveryRequested) return;
+
+  uint32_t now = millis();
+  if (now < GPS_5HZ_RECOVERY_MIN_UPTIME_MS) return;
+  if (lastGps5HzRecoveryAttemptMs > 0 &&
+      now - lastGps5HzRecoveryAttemptMs <
+        GPS_5HZ_RECOVERY_COOLDOWN_MS) {
+    return;
+  }
+
+  lastGps5HzRecoveryAttemptMs = now;
+  Serial.printf(
+    "[GPS] observed %.0fms updates -> retrying 5Hz configuration\n",
+    gpsObservedUpdateIntervalMs
+  );
+
+  bool recovered = configureNeo6m5Hz();
+  Serial.printf(
+    "[GPS] runtime 5Hz recovery=%s\n",
+    recovered ? "ACK" : "FAILED"
+  );
+
+  // 재설정 뒤에는 실제 NMEA 간격을 처음부터 다시 측정한다.
+  lastGpsMeasurementMs = 0;
+  gpsObservedUpdateIntervalMs = 200.0f;
+  if (recovered) gps5HzRecoveryRequested = false;
 #endif
 }
 
@@ -739,6 +889,7 @@ void readGps() {
   // GGA와 RMC에 둘 다 위치가 있으므로 RMC에서 속도와 함께
   // 갱신된 위치만 처리해 1회의 GPS fix를 두 번 카운트하지 않는다.
   if (gps.location.isUpdated() && gps.speed.isUpdated()) {
+    updateObservedGpsRate(now);
     rawGpsLat = gps.location.lat();
     rawGpsLng = gps.location.lng();
     rawGpsSatellites =
@@ -1110,25 +1261,29 @@ void applyRisk(uint8_t risk) {
 
 // 유효시간이 지나지 않은 출처들의 최댓값을 적용한다.
 // 한쪽의 "안전(0)" 주장이 다른 쪽의 경고를 지우지 못하게 하는 병합 규칙.
-void applyMergedRisk() {
+bool applyMergedRisk() {
   uint32_t now = millis();
 
   bool vehicleFresh =
     vehicleRiskMs > 0 &&
     now - vehicleRiskMs <= DIRECT_RISK_TIMEOUT_MS;
 
-  bool rsuFresh =
+  bool rsuFresh = false;
+#if ENABLE_RSU_RISK_INPUT
+  rsuFresh =
     rsuRiskMs > 0 &&
     now - rsuRiskMs <= RSU_RISK_TIMEOUT_MS;
+#endif
 
-  // 둘 다 끊겼으면 기존 타임아웃/자체 계산 로직이 처리한다.
-  if (!vehicleFresh && !rsuFresh) return;
+  // 둘 다 끊겼으면 호출자가 자체 계산 또는 SAFE 처리를 선택한다.
+  if (!vehicleFresh && !rsuFresh) return false;
 
   uint8_t merged = RISK_SAFE;
   if (vehicleFresh && vehicleRiskLevel > merged) merged = vehicleRiskLevel;
   if (rsuFresh && rsuRiskLevel > merged) merged = rsuRiskLevel;
 
   applyRisk(merged);
+  return true;
 }
 
 void buildStatusPacket() {
@@ -1209,6 +1364,13 @@ void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
     return;
   }
 
+#if !ENABLE_RSU_RISK_INPUT
+  if (riskMsg.node_type == NODE_RSU) {
+    Serial.println("[CANE RX] RSU risk ignored (direct vehicle mode)");
+    return;
+  }
+#endif
+
   lastRiskSeq = riskMsg.seq_num;
   lastRiskMs = millis();
 
@@ -1252,6 +1414,10 @@ void handleRiskMessage(const v2x_risk_message_t &riskMsg) {
 
 void handleLegacyReply(const v2x_status_message_t &replyMsg) {
   if (replyMsg.msg_type != MSG_RSU_REPLY) return;
+#if !ENABLE_RSU_RISK_INPUT
+  Serial.println("[CANE RX LEGACY] RSU reply ignored (direct vehicle mode)");
+  return;
+#endif
   lastRiskSeq = replyMsg.seq_num;
   lastRiskMs = millis();
 
@@ -1274,13 +1440,9 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
   vehicleRxCount++;
   lastVehicleRxMs = now;
 
-  // 차량이 계산한 직접 위험 패킷이 최근에 도착했다면
-  // 지팡이 자체 계산으로 그 결과를 덮어쓰지 않는다.
-  bool directRiskFresh =
-    lastRiskMs > 0 &&
-    now - lastRiskMs <= DIRECT_RISK_TIMEOUT_MS;
-
-  if (directRiskFresh) {
+  // 차량 직접판정과 RSU 판정을 출처별 유효시간으로 병합한다.
+  // 차량 상태 패킷의 SAFE가 살아 있는 RSU 경고를 지우지 못하게 한다.
+  if (applyMergedRisk()) {
     Serial.printf(
       "[CANE VEHICLE STATUS] vehicle=%lu seq=%u "
       "direct risk active -> local calculation skipped\n",
@@ -1560,6 +1722,12 @@ void sendUdpTelemetry() {
   long rssiAgeMs = rssiValidSnapshot
     ? (long)(telemetryMs - rssiLastMsSnapshot)
     : -1L;
+  long vehicleRiskAgeMs = vehicleRiskMs > 0
+    ? (long)(telemetryMs - vehicleRiskMs)
+    : -1L;
+  long rsuRiskAgeMs = rsuRiskMs > 0
+    ? (long)(telemetryMs - rsuRiskMs)
+    : -1L;
 
   int written = snprintf(
     udpBuffer,
@@ -1567,6 +1735,10 @@ void sendUdpTelemetry() {
     "시각ms:%lu\n"
     "IMU시각ms:%lu\n"
     "위험:%u\n"
+    "차량위험:%u\n"
+    "차량위험경과ms:%ld\n"
+    "RSU위험:%u\n"
+    "RSU위험경과ms:%ld\n"
     "GPS유효:%u\n"
     "위도:%.6f\n"
     "경도:%.6f\n"
@@ -1604,6 +1776,10 @@ void sendUdpTelemetry() {
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     currentRisk == 255 ? 0 : currentRisk,
+    vehicleRiskLevel,
+    vehicleRiskAgeMs,
+    rsuRiskLevel,
+    rsuRiskAgeMs,
     lastGpsValid,
     lastLat,
     lastLng,
@@ -1777,6 +1953,7 @@ void loop() {
   updateActuators();
 
   readGps();
+  recoverGps5HzIfNeeded();
   readImu();
 
   uint32_t now = millis();
@@ -1826,9 +2003,16 @@ if (now - lastBtCheckMs >= 1000UL) {
   // 미래 값이 되어 부호 없는 뺄셈이 거대한 값으로 오버플로우하고,
   // 방금 온 패킷을 타임아웃으로 오판한다. 최신 시각으로 다시 읽고
   // 부호 있는 비교로 판정한다.
-  bool directRiskFresh =
-    lastRiskMs > 0 &&
-    (int32_t)(millis() - lastRiskMs) <= (int32_t)DIRECT_RISK_TIMEOUT_MS;
+  uint32_t riskNow = millis();
+  bool vehicleRiskFresh =
+    vehicleRiskMs > 0 &&
+    (int32_t)(riskNow - vehicleRiskMs) <=
+      (int32_t)DIRECT_RISK_TIMEOUT_MS;
+  bool rsuRiskFresh =
+    rsuRiskMs > 0 &&
+    (int32_t)(riskNow - rsuRiskMs) <=
+      (int32_t)RSU_RISK_TIMEOUT_MS;
+  bool directRiskFresh = vehicleRiskFresh || rsuRiskFresh;
 
   bool vehicleStatusFresh =
     lastVehicleRxMs > 0 &&

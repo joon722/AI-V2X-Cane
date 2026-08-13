@@ -126,18 +126,45 @@ DCPA_FLOOR = 0.2                   # a clear miss still keeps a fifth of the sco
 # 안전 하한. TTC가 이 값 아래면 점수표도 DCPA 게이트도 무시하고 최고 레벨을 낸다.
 # 근거는 ttc_study/SPEC.md에 있고, 항의 합으로 나온 값이다.
 #
-#   GPS 주기 0.2 + 전송 0.1 + 인지·판단 0.3 + 정지 동작 1.2 + 마진 0.2 = 2.0 s
+# GPS 주기만 상수로 뺀 이유는 그것만 하드웨어에 달려 있고 나머지는 사람과 전파의
+# 값이기 때문이다.
 #
-# 전송 0.1초는 2026-08-05 실측(위험도 변경 29건 전수, 계산 1.0 ms + 무선 왕복
-# 102 ms)이고, 정지 1.2초는 보행 급정지 실험의 보수적인 끝(0.84~1.21 s)이다.
-# 합이 GB/T 33577(ISO 15623 준용) 최소 2초 및 NHTSA NCAP FCW 2.0~2.4초와 같은
-# 자리에 떨어진다.
+#   2026-08-12 실측으로 5 Hz 확정: 펌웨어 UDP 텔레메트리의 GPS채택 카운터가
+#   지팡이 전 세션 +5.0/초, 차량도 전원이 안정된 21:11 이후 +4.2~5.0/초.
+#   8/8의 "1 Hz" 판정은 차량 재부팅 루프(UBX 설정 ACK 유실)와 측정 도구의
+#   1초 샘플링·좌표 양자화가 만든 착시였다.
 #
+# 전제: 차량 전원이 안정적일 것. 재부팅이 반복되면 그 부팅은 5Hz 설정이
+# 유실되어 1 Hz로 남고, 그때 필요한 하한은 2.8초다. 전원 문제가 재발하면
+# 이 줄을 1.0으로 되돌린다.
+GPS_PERIOD_S = 0.2
+TRANSPORT_S = 0.1      # 2026-08-05 실측. 위험도 변경 29건 전수에서
+                       # 젯슨 계산 1.0 ms + 무선 왕복 중앙값 102 ms.
+PERCEPTION_S = 0.3     # 촉각 단순반응 0.12~0.18 s의 1.5~2배 (선택 반응).
+STOPPING_S = 1.2       # 보행 급정지 실험 0.84~1.21 s의 보수적인 끝.
+MARGIN_S = 0.2
+
+# round: 부동소수점 합이 2.8000000000000003이 되어 도움말과 로그에 그대로 새어 나온다.
+T_FLOOR_TTC_S = round(
+    GPS_PERIOD_S + TRANSPORT_S + PERCEPTION_S + STOPPING_S + MARGIN_S, 3
+)
+
 # 게이트까지 무시하는 이유: 게이트는 '스쳐 갈 차'를 걸러내는 장치인데 그 판단
-# 자체가 추정이고, 접촉까지 2초도 남지 않았을 때 추정이 틀리면 대가가 너무 크다.
-# 시뮬레이션 검증(시나리오 800개)에서 이 하한은 위험 시나리오 검출을 18/19 ->
-# 19/19로 올리고 오경보율을 2.03% -> 3.24%로 만든다. 놓치지 않는 쪽에 비용을 쓴다.
-T_FLOOR_TTC_S = 2.0
+# 자체가 추정이고, 접촉까지 하한도 남지 않았을 때 추정이 틀리면 대가가 너무 크다.
+#
+# 하한 값별 손익 (시나리오 1200 x 3회, gps_sigma 2.5, 평가 기준 2.8초):
+#
+#   하한   적시경보   오경보   확실안전 경보   검출
+#   없음    52.2%     2.14%      1.64%      87.3/97
+#   2.0s    52.2%     3.36%      2.76%      95.3/97
+#   2.8s    57.7%     4.75%      4.07%      96.3/97
+#
+# 위 표는 GPS 1 Hz 시절(하한 2.8초 운용) 분석이다. 당시 2.0초는 GPS 주기
+# 때문에 적시성에 기여하지 못해 2.8초를 썼고, 그 대가로 인도 오경보가
+# 2.76% -> 4.07%로 늘었다 (ROADSIDE_ALARM.md 2절).
+#
+# 2026-08-12 5 Hz 확정으로 하한이 2.0초로 돌아왔다. 원래 설계값이고,
+# 인도 오경보도 함께 내려간다.
 
 
 def dcpa_gate(dcpa, near_m=DCPA_NEAR_M, far_m=DCPA_FAR_M, floor=DCPA_FLOOR):
@@ -154,6 +181,22 @@ def dcpa_gate(dcpa, near_m=DCPA_NEAR_M, far_m=DCPA_FAR_M, floor=DCPA_FLOOR):
     return 1.0 + frac * (floor - 1.0)
 
 
+# 경보 상한. TTC가 이보다 크면 상충이 아니라 "그냥 근처에 있다"이므로 규칙
+# 레벨을 0으로 누른다. 점수는 기록용으로 그대로 남는다.
+#
+# 2026-08-12 실측: 경보 1004건 중 접근 안 함(TTC 9999) 50.4% + 30초 초과
+# 23.6% = 74%가 위험이 아닌데 울렸다. 점수표의 거리 항(10 m 이내 30점)만으로
+# 레벨 1 기준(20점)을 넘기 때문이다. 반대로 실제 접근의 TTC는 3.7~9.1초로
+# 전부 30초 안 - 이 상한은 진짜 위험을 하나도 걸지 않는다.
+#
+# 30초는 model_features.TTC_MAX_S, upload_events.MAX_TTC_S와 같은 값이다.
+# 판단에 의미가 있는 TTC 구간이 거기까지라는 하나의 결정을 셋이 공유한다.
+#
+# 모델(model_gate)은 이 상한의 영향을 받지 않고 레벨을 올릴 수 있다. TTC가
+# 무한대인 측면 위험을 잡는 것이 모델의 존재 이유라서다.
+T_ALARM_MAX_TTC_S = 30.0
+
+
 @dataclass(frozen=True)
 class RiskAssessment:
     distance_m: float
@@ -165,7 +208,7 @@ class RiskAssessment:
     gate: float
     final_score: float
     risk_level: int
-    reason: str = "table"  # "table" | "safety_floor"
+    reason: str = "table"  # "table" | "safety_floor" | "ttc_capped"
 
 
 def assess_risk(
@@ -176,6 +219,7 @@ def assess_risk(
     far_m=DCPA_FAR_M,
     floor=DCPA_FLOOR,
     floor_ttc_s=T_FLOOR_TTC_S,
+    alarm_max_ttc_s=T_ALARM_MAX_TTC_S,
 ):
     """Score one filtered-track Kinematics sample.
 
@@ -184,7 +228,8 @@ def assess_risk(
     function so the score stays exactly consistent with that table.
 
     TTC가 floor_ttc_s 아래면 점수와 게이트를 모두 건너뛰고 레벨 3을 낸다
-    (reason="safety_floor"). 분석용으로 하한을 끄려면 floor_ttc_s=0을 준다.
+    (reason="safety_floor"). TTC가 alarm_max_ttc_s를 넘으면 규칙 레벨을
+    0으로 누른다(reason="ttc_capped"). 분석용으로 끄려면 각각 0을 준다.
     """
     closing = kinematics.closing_los
     ttc = calculate_ttc(kinematics.distance_m, closing)
@@ -196,6 +241,13 @@ def assess_risk(
 
     # 접근하지 않는 쌍은 calculate_ttc가 9999를 주므로 하한에 걸리지 않는다.
     breached = floor_ttc_s > 0 and ttc <= floor_ttc_s
+    capped = not breached and alarm_max_ttc_s > 0 and ttc > alarm_max_ttc_s
+    if breached:
+        level, reason = 3, "safety_floor"
+    elif capped:
+        level, reason = 0, "ttc_capped"
+    else:
+        level, reason = classify_risk_level(final), "table"
     return RiskAssessment(
         distance_m=kinematics.distance_m,
         closing_los=closing,
@@ -205,8 +257,8 @@ def assess_risk(
         base_score=base,
         gate=round(gate, 3),
         final_score=final,
-        risk_level=3 if breached else classify_risk_level(final),
-        reason="safety_floor" if breached else "table",
+        risk_level=level,
+        reason=reason,
     )
 
 

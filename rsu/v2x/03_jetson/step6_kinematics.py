@@ -50,6 +50,28 @@ MS_PER_DAY = 86_400_000
 # velocity across a gap fabricates motion that was never measured.
 MAX_TRACK_GAP_S = 10.0
 
+# The receiver measures speed from the Doppler shift of the satellite signals,
+# so it does not inherit position error and is available the moment the fix
+# arrives - unlike a velocity recovered from differentiating noisy positions,
+# which needs several fixes of lag. 0.5 m/s is conservative for this receiver
+# class in motion (vibration, low speed course jitter).
+DOPPLER_SPEED_SIGMA_MPS = 0.5
+
+# Below this reported speed the cane is treated as standing still and its
+# filter velocity is observed as zero. 2026-08-12 field data: a cane lying
+# still reported speed noise up to 0.38 m/s while the position-only filter
+# fabricated up to 6.85 m/s of phantom velocity - the zero observation kills
+# the phantom, and walking (about 1 m/s) stays above the gate.
+CANE_STILL_SPEED_MPS = 0.45
+ZUPT_SIGMA_MPS = 0.2
+
+# The vehicle's heading field is its actual motion direction (GPS course,
+# reverse-corrected by the firmware), so the full Doppler vector is usable -
+# but only while the node vouches for it (heading_valid) and moves fast enough
+# for course to mean anything. The cane's heading is IMU pointing direction,
+# not walking direction, so the cane never gets a vector observation.
+VEHICLE_DOPPLER_MIN_SPEED_MPS = 0.4
+
 
 def measurement_time(row):
     """(seconds, is_gps): when the row's fix was measured, not when it arrived.
@@ -115,6 +137,12 @@ class Kinematics:
     ttc_simple: float | None
     tcpa: float | None
     dcpa: float | None
+    # Where the vehicle is, not just how far away. A scalar distance cannot say
+    # whether the car is straight ahead or off to one side, which is the one
+    # thing a display has to know to draw it. Same metric plane as LocalFrame:
+    # east, north, in metres, relative to the cane.
+    rel_east: float
+    rel_north: float
 
 
 def relative_kinematics(
@@ -165,6 +193,8 @@ def relative_kinematics(
         ttc_simple=ttc_simple,
         tcpa=tcpa,
         dcpa=dcpa,
+        rel_east=rx,
+        rel_north=ry,
     )
 
 
@@ -204,6 +234,28 @@ class KalmanCV1D:
     def predict_to(self, dt):
         """Position and velocity `dt` ahead, leaving the filter untouched."""
         return self.pos + self.vel * dt, self.vel
+
+    def observe_velocity(self, measurement, var):
+        """Direct velocity measurement update (H = [0, 1]).
+
+        Applied at the same instant as the position update it follows, so
+        there is no predict step here: time has not advanced.
+        """
+        if self.pos is None:
+            return
+        (p00, p01), (p10, p11) = self.cov
+        innovation_var = p11 + var
+        gain_pos = p01 / innovation_var
+        gain_vel = p11 / innovation_var
+
+        residual = measurement - self.vel
+        self.pos += gain_pos * residual
+        self.vel += gain_vel * residual
+
+        self.cov = [
+            [p00 - gain_pos * p10, p01 - gain_pos * p11],
+            [(1.0 - gain_vel) * p10, (1.0 - gain_vel) * p11],
+        ]
 
     def _predict(self, dt):
         self.pos += self.vel * dt
@@ -263,6 +315,11 @@ class NodeTracker:
         self.day_offset = 0.0
 
     def observe(self, east, north, timestamp, is_gps=False):
+        """Feed one fix. Returns True when it advanced the filter.
+
+        The return value lets the caller attach same-instant follow-up
+        measurements (Doppler velocity) only to fixes that were actually new.
+        """
         # Switching between the GPS clock and the arrival clock mid-track would
         # make dt meaningless, so a base change starts the track over.
         if self.time_is_gps is not None and is_gps != self.time_is_gps:
@@ -279,7 +336,7 @@ class NodeTracker:
                 # The same fix arriving again through the faster send loop
                 # carries no new information; feeding it again would only
                 # shrink the covariance without cause.
-                return
+                return False
             if timestamp - self.last_time > MAX_TRACK_GAP_S:
                 self._reset()
 
@@ -287,6 +344,13 @@ class NodeTracker:
         self.east.observe(east, dt)
         self.north.observe(north, dt)
         self.last_time = timestamp
+        return True
+
+    def observe_velocity(self, vel_east, vel_north, sigma):
+        """Doppler velocity for the fix just accepted by observe()."""
+        var = sigma * sigma
+        self.east.observe_velocity(vel_east, var)
+        self.north.observe_velocity(vel_north, var)
 
     def state_ahead(self, dt):
         """Position and velocity `dt` seconds past the last accepted fix."""
@@ -351,7 +415,38 @@ class KinematicsPipeline:
             self.frame = LocalFrame(lat, lng)
         east, north = self.frame.to_enu(lat, lng)
         t_meas, is_gps = measurement_time(row)
-        self.trackers[row["type"]].observe(east, north, t_meas, is_gps)
+        tracker = self.trackers[row["type"]]
+        if not tracker.observe(east, north, t_meas, is_gps):
+            return
+        self._observe_doppler(row, tracker)
+
+    def _observe_doppler(self, row, tracker):
+        """Fold the node's own Doppler speed into the freshly updated filter.
+
+        Positions alone recover velocity only after several fixes of lag, and
+        position noise on a stationary node fabricates velocity outright. The
+        receiver already measured the real thing; use it, per node:
+
+        - cane: zero-velocity observation while its reported speed says it is
+          standing still. Its heading is IMU pointing, not walking direction,
+          so a moving cane gets no vector observation.
+        - vehicle: full velocity vector, but only while the firmware vouches
+          for the motion heading (heading_valid) and the speed is above the
+          course-jitter floor. No zero-velocity clamp for the vehicle: when
+          its GPS misreads motion as standstill, clamping would suppress a
+          real approach, and misses cost more than false alarms here.
+        """
+        speed = to_float(row.get("speed_mps"))
+        if row["type"] == "cane":
+            if speed < CANE_STILL_SPEED_MPS:
+                tracker.observe_velocity(0.0, 0.0, ZUPT_SIGMA_MPS)
+            return
+        heading_valid = to_float(row.get("heading_valid"), 0.0) == 1.0
+        if heading_valid and speed >= VEHICLE_DOPPLER_MIN_SPEED_MPS:
+            vel_east, vel_north = velocity_from_heading(
+                speed, to_float(row.get("heading_deg"))
+            )
+            tracker.observe_velocity(vel_east, vel_north, DOPPLER_SPEED_SIGMA_MPS)
 
     def compute(self):
         """Kinematics for the current pair, or None when it is not computable."""
