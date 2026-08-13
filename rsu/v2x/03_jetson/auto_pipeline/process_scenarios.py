@@ -332,6 +332,8 @@ def main():
                 process_scenario(scenario_dir, session, feature_columns,
                                  mean, scale, seq_len,
                                  do_upload=not args.no_upload)
+                # 전원/발열 보호: 연속 추론 사이 휴식 (Nano 브라운아웃 방지)
+                time.sleep(2.0)
             except Exception:
                 log.exception("%s 처리 실패", scenario_dir.name)
                 # 실패 표시를 남겨 같은 시나리오를 무한 재시도하지 않게 함
