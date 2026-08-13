@@ -355,5 +355,120 @@ class NodeTrackerTest(unittest.TestCase):
         self.assertAlmostEqual(vel_n, 0.0, places=6)
 
 
+class DopplerVelocityObservationTest(unittest.TestCase):
+    """Feeding the receiver's own Doppler velocity into the filter."""
+
+    def test_velocity_observation_pulls_the_filter_velocity(self):
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 0.0)
+        tracker.observe_velocity(3.0, 0.0, 0.5)
+        _, _, vel_e, vel_n = tracker.state_ahead(0.0)
+        self.assertGreater(vel_e, 2.0)
+        self.assertAlmostEqual(vel_n, 0.0, places=6)
+
+    def test_zero_velocity_observation_suppresses_phantom_speed(self):
+        """A stationary node's position noise must not fabricate velocity.
+
+        2026-08-12 field data: a cane lying still was rendered at up to
+        6.85 m/s by position noise alone, which fabricated approach speed and
+        therefore TTC. The zero-velocity observation is the fix.
+        """
+        import random
+
+        rng = random.Random(42)
+        with_zupt = NodeTracker()
+        without_zupt = NodeTracker()
+        max_with = 0.0
+        max_without = 0.0
+        for step in range(50):
+            t = step * 0.2
+            east = rng.gauss(0.0, 2.0)
+            north = rng.gauss(0.0, 2.0)
+            with_zupt.observe(east, north, t)
+            with_zupt.observe_velocity(0.0, 0.0, 0.2)
+            without_zupt.observe(east, north, t)
+            if step > 5:
+                _, _, ve, vn = with_zupt.state_ahead(0.0)
+                max_with = max(max_with, math.hypot(ve, vn))
+                _, _, ve, vn = without_zupt.state_ahead(0.0)
+                max_without = max(max_without, math.hypot(ve, vn))
+        self.assertLess(max_with, max_without * 0.5)
+        self.assertLess(max_with, 0.6)
+
+    def test_velocity_observation_converges_faster_than_positions_alone(self):
+        """Two fixes plus Doppler must know the speed positions need many for."""
+        doppler = NodeTracker()
+        position_only = NodeTracker()
+        for step in range(3):
+            t = step * 0.2
+            doppler.observe(0.0, -2.0 * t, t)
+            doppler.observe_velocity(0.0, -2.0, 0.5)
+            position_only.observe(0.0, -2.0 * t, t)
+        _, _, _, vel_n_doppler = doppler.state_ahead(0.0)
+        _, _, _, vel_n_position = position_only.state_ahead(0.0)
+        self.assertLess(abs(vel_n_doppler - (-2.0)), abs(vel_n_position - (-2.0)))
+        self.assertLess(abs(vel_n_doppler - (-2.0)), 0.5)
+
+
+class PipelineDopplerPolicyTest(unittest.TestCase):
+    """Which node gets which Doppler observation, decided from the row itself."""
+
+    def _observe(self, pipeline, type_, seq, now, lat, lng, speed, heading,
+                 heading_valid):
+        payload = {
+            "type": type_,
+            "node_id": 1 if type_ == "cane" else 2,
+            "seq": seq,
+            "gps_valid": 1,
+            "lat": lat,
+            "lng": lng,
+            "speed_mps": speed,
+            "heading_deg": heading,
+            "heading_valid": heading_valid,
+        }
+        row = normalize_record(payload, "test", now=now)
+        pipeline.store.update(row)
+        pipeline.observe(row)
+
+    def _pipeline(self):
+        return KinematicsPipeline(StateStore())
+
+    def test_valid_vehicle_heading_feeds_the_velocity_vector(self):
+        pipeline = self._pipeline()
+        self._observe(pipeline, "cane", 0, 0.0, CANE_LAT, CANE_LNG, 0.0, 0.0, 0)
+        for step in range(3):
+            t = step * 0.2
+            lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, 30.0 - 2.0 * t)
+            self._observe(pipeline, "vehicle", step, t, lat, lng, 2.0, 180.0, 1)
+        _, _, _, vel_n = pipeline.trackers["vehicle"].state_ahead(0.0)
+        self.assertLess(abs(vel_n - (-2.0)), 0.5)
+
+    def test_invalid_vehicle_heading_is_never_trusted(self):
+        """heading_valid=0 means the heading field may be stale garbage."""
+        pipeline = self._pipeline()
+        self._observe(pipeline, "cane", 0, 0.0, CANE_LAT, CANE_LNG, 0.0, 0.0, 0)
+        for step in range(3):
+            t = step * 0.2
+            lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, 30.0 - 2.0 * t)
+            # Stale heading says east while the vehicle actually moves south.
+            self._observe(pipeline, "vehicle", step, t, lat, lng, 2.0, 90.0, 0)
+        _, _, vel_e, _ = pipeline.trackers["vehicle"].state_ahead(0.0)
+        # Had the stale heading been folded in, east velocity would be near 2.
+        self.assertLess(abs(vel_e), 1.0)
+
+    def test_still_cane_gets_the_zero_velocity_observation(self):
+        pipeline = self._pipeline()
+        import random
+
+        rng = random.Random(7)
+        for step in range(30):
+            t = step * 0.2
+            lat = CANE_LAT + rng.gauss(0.0, 2.0) / 111320.0
+            lng = CANE_LNG + rng.gauss(0.0, 2.0) / 111320.0
+            self._observe(pipeline, "cane", step, t, lat, lng, 0.2, 0.0, 0)
+        _, _, vel_e, vel_n = pipeline.trackers["cane"].state_ahead(0.0)
+        self.assertLess(math.hypot(vel_e, vel_n), 0.6)
+
+
 if __name__ == "__main__":
     unittest.main()
