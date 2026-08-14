@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).parent
-SCENARIO = "scenario_7552"
+SCENARIO = "scenario_9380"
 SRC = HERE / f"{SCENARIO}_result.csv"
 PED_SRC = HERE / f"{SCENARIO}_pedestrian.csv"
 
@@ -32,7 +32,12 @@ df["phys_level"] = [classify(s * gate(d))
 danger_ids, safe_ids = [], []
 for vid, g in df.groupby("vehicle_id"):
     (danger_ids if g["onnx_risk_level"].max() >= 2 else safe_ids).append(vid)
-picked = danger_ids[:12] + safe_ids[:8]
+# 교내(campus_*) 차량을 우선 포함하고 교외 차량을 섞는다
+is_campus = lambda v: str(v).startswith("campus_")
+picked = ([v for v in danger_ids if is_campus(v)][:8]
+          + [v for v in danger_ids if not is_campus(v)][:6]
+          + [v for v in safe_ids if is_campus(v)][:4]
+          + [v for v in safe_ids if not is_campus(v)][:4])
 sub = df[df["vehicle_id"].isin(picked)]
 
 vehicles = []
@@ -69,7 +74,10 @@ for vid, g in sub.groupby("vehicle_id"):
         lead = int(t[a_idx[0]] - t[p_idx[0]])
         leads.append(lead)
 
-    vid_label = str(int(vid)) if float(vid) == int(float(vid)) else str(vid)
+    try:
+        vid_label = str(int(float(vid))) if float(vid) == int(float(vid)) else str(vid)
+    except ValueError:
+        vid_label = str(vid)  # campus_* 같은 문자 id
     vehicles.append({
         "id": vid_label,
         "danger": int(pred.max()),
@@ -104,7 +112,8 @@ stats = {
     "physSame": round(tot_phys_same / max(1, len(sub)) * 100, 1),
     "aiCorr": round((1 - tot_phys_same / max(1, len(sub))) * 100, 1),
 }
-data = {"scenario": f"{SCENARIO} (현실성 v2 — 보행자 {len(peds)}명)",
+n_campus_all = sum(1 for v in danger_ids + safe_ids if is_campus(v))
+data = {"scenario": f"{SCENARIO} (생성기 v3 — 진짜 교내 주행 차량 {n_campus_all}대, 보행자 {len(peds)}명)",
         "peds": peds,
         "vehicles": vehicles, "stats": stats}
 data_js = json.dumps(data, ensure_ascii=False)
