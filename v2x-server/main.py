@@ -1,3 +1,4 @@
+import json
 import os, hmac, csv, io, datetime
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
@@ -244,5 +245,75 @@ def refresh_stats(x_api_key: str = Header(default="")):
         return {"ok": True, "segments": made}
     finally:
         conn.close()
+
+
+# ===== 실시간 상태 (/api/live) =====
+# 젯슨이 0.5초마다 현재 상태를 덮어쓰고, drive.html이 읽어간다.
+# Cloud Run은 인스턴스가 오토스케일되므로 전역 변수가 아니라 DB에 저장한다.
+
+class NodeState(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    speed_mps: Optional[float] = None
+    heading_deg: Optional[float] = None
+    gps_valid: bool = False
+
+
+class RiskState(BaseModel):
+    level: int
+    distance_m: Optional[float] = None
+    ttc_s: Optional[float] = None
+    closing_mps: Optional[float] = None
+    source: Optional[str] = None
+
+
+class LiveIn(BaseModel):
+    device_id: str
+    ts: str
+    age_s: float = 0.0
+    cane: NodeState
+    vehicle: NodeState
+    risk: RiskState
+
+
+@app.post("/api/live")
+def post_live(payload: LiveIn, x_api_key: str = Header(default="")):
+    require_key(x_api_key)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO live_state (device_id, payload, received_at) "
+            "VALUES (%s, %s::jsonb, now()) "
+            "ON CONFLICT (device_id) DO UPDATE SET payload = EXCLUDED.payload, "
+            "received_at = now()",
+            (payload.device_id, json.dumps(payload.model_dump())))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/live/latest")
+def get_live_latest():
+    try:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT device_id, payload, "
+                        "EXTRACT(EPOCH FROM (now() - received_at)) "
+                        "FROM live_state ORDER BY received_at DESC LIMIT 1")
+            row = cur.fetchone()
+            if not row:
+                return JSONResponse({"device_id": None})
+            data = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+            data["server_age_s"] = round(float(row[2]), 2)
+            return JSONResponse(data)
+        finally:
+            conn.close()
+    except Exception as ex:
+        print("DB error:", ex)
+        return JSONResponse({"device_id": None})
+
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

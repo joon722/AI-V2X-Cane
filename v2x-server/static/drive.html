@@ -95,7 +95,7 @@
       </div>
       <div class="rt">
         <div class="link"><span class="dot"></span><span>연결됨 · 10 Hz</span></div>
-        <div id="demo">예시 데이터 · 모델 연동 전</div>
+        <div id="demo">목업 재생 중</div>
       </div>
     </div>
 
@@ -399,30 +399,102 @@ function setLevel(l,o){
   }else{b.classList.remove("on");glow.style.opacity="0";}
 }
 
+// ===== 실시간 연동 =====
+// /api/live/latest 가 살아 있으면 그 값으로, 아니면 목업(샘플 궤적)으로 화면을 돌린다.
+// 좌표는 GPS 오차가 커서 신뢰하지 않고, 판정에 쓰인 distance_m / ttc_s / closing_mps 를 쓴다.
+const LIVE={on:false,fail:0,data:null,at:0};
+let MOCK=null,mockI=0,mockT=0;
+
+async function pollLive(){
+  try{
+    const r=await fetch("/api/live/latest",{cache:"no-store"});
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    if(!j||!j.device_id)throw 0;
+    LIVE.on=true;LIVE.fail=0;LIVE.data=j;LIVE.at=performance.now();
+  }catch(e){
+    if(++LIVE.fail>=3){LIVE.on=false;LIVE.data=null;}
+  }
+}
+setInterval(pollLive,500);pollLive();
+
+fetch("/mock/riskmap_live_sample.json").then(r=>r.json())
+  .then(j=>{MOCK=j.frames||null;}).catch(()=>{MOCK=null;});
+
+function liveFrame(){
+  if(LIVE.on&&LIVE.data)return LIVE.data;
+  if(MOCK&&MOCK.length)return MOCK[mockI];
+  return null;
+}
+
+function applyFrame(fr,dt){
+  if(!LIVE.on&&MOCK){mockT+=dt;if(mockT>=0.5){mockT=0;mockI=(mockI+1)%MOCK.length;}}
+  if(!fr)return null;
+  const r=fr.risk||{};
+  const d=(r.distance_m==null)?null:r.distance_m;
+  const ttcRaw=(r.ttc_s==null)?null:r.ttc_s;
+  const ttc=(ttcRaw==null||ttcRaw>=9999)?null:ttcRaw;
+  const clos=(r.closing_mps==null)?0:r.closing_mps;
+  const age=(fr.server_age_s!=null)?fr.server_age_s:(fr.age_s||0);
+  const vGps=fr.vehicle?fr.vehicle.gps_valid:false;
+  const vHas=fr.vehicle&&fr.vehicle.lat!=null;
+  return {level:r.level||0,d:d,ttc:ttc,clos:clos,age:age,
+          approaching:clos>0,vGps:vGps,vHas:vHas,
+          src:LIVE.on?"live":"mock"};
+}
+
 let last=performance.now();
 function tick(now){
   const dt=Math.min((now-last)/1000,.06);last=now;
   spawnT+=dt;
   if(spawnT>=3){spawnT=0;spawnPed();}
 
-  for(const c of cars){
+  const drivenByData=!!(LIVE.on||MOCK);
+  cars.forEach((c,i)=>{
+    if(i===0&&drivenByData)return;   // 실데이터가 위치를 정하는 차량
     c.z+=(c.away?1:-1)*c.v/3.6*dt;
     if(!c.away&&c.z<-18){c.z=82+Math.random()*22;c.v=20+Math.random()*20;}
     if(c.away&&c.z>140){c.z=-16-Math.random()*20;c.v=20+Math.random()*20;}
-  }
+  });
   peds.forEach(p=>{p.z+=p.vz*dt;p.x+=p.vx*dt;});
   peds=peds.filter(p=>p.z>-6&&Math.abs(p.x)<11.5);
 
+  const F=applyFrame(liveFrame(),dt);
   const a=assess();
-  const o=a?a.best:null;
-  const l=levelOf(o);
-  document.getElementById("dist").textContent=o?fmt(o.d,1):"--";
-  document.getElementById("ttc").textContent=(o&&o.ttc<99)?fmt(o.ttc,1):"--";
-  document.getElementById("clos").textContent=o?fmt(o.clos,1):"0.0";
+  let o=a?a.best:null;
+  let l=levelOf(o);
+
+  if(F){
+    // 실측/목업 프레임이 있으면 지팡이-차량 관계는 그 값을 정본으로 쓴다.
+    if(F.d!=null){
+      cars[0].z=Math.max(F.d,0.4)+ME.z;
+      cars[0].x=2.7;
+      cars[0].v=Math.abs(F.clos)*3.6;
+      cars[0].away=!F.approaching;
+    }
+    const src=F.src==="live"?"실측 · 젯슨":"목업 재생";
+    document.getElementById("demo").textContent=
+      F.src==="live"?(F.age>3?"신호 없음 ("+fmt(F.age,1)+"s)":
+        F.age>1?"갱신 지연 ("+fmt(F.age,1)+"s)":"실시간 연결됨"):"목업 재생 중";
+    const stale=F.src==="live"&&F.age>3;
+    const self={d:F.d==null?999:F.d,clos:F.clos,ttc:F.ttc==null?999:F.ttc,
+                label:F.vHas?(F.vGps?"차량":"차량 (GPS 불안정)"):"차량 위치 확인 불가",
+                zone:"차도",isCar:true,who:"나",forced:stale?0:F.level};
+    if(!stale&&(F.level>=l||F.level>=2)){o=self;l=F.level;}
+    document.getElementById("dist").textContent=F.d!=null?fmt(F.d,1):"--";
+    document.getElementById("ttc").textContent=F.ttc!=null?fmt(F.ttc,1):"--";
+    document.getElementById("clos").textContent=fmt(F.clos,1);
+    document.getElementById("srcTag").textContent=src;
+  }else{
+    document.getElementById("dist").textContent=o?fmt(o.d,1):"--";
+    document.getElementById("ttc").textContent=(o&&o.ttc<99)?fmt(o.ttc,1):"--";
+    document.getElementById("clos").textContent=o?fmt(o.clos,1):"0.0";
+    document.getElementById("srcTag").textContent=o?o.label:"대기 중";
+  }
+
   window.__atRisk=a?a.atRisk:0;
   document.getElementById("cnt").textContent=a?(a.count+(a.atRisk?" ("+a.atRisk+"위험)":"")):0;
   document.getElementById("zone").textContent=o?o.zone:"--";
-  document.getElementById("srcTag").textContent=o?o.label:"대기 중";
   setLevel(l,o);draw();
   requestAnimationFrame(tick);
 }

@@ -1,0 +1,5207 @@
+{
+ "note": "2026-08-05 숭실대 야외 실험 실측 궤적. step8이 계산한 실제 위험 판정이며 좌표도 실측값이다. 화면 목업용이므로 ts만 0.5초 간격으로 다시 매겼다.",
+ "interval_s": 0.5,
+ "frame_count": 200,
+ "frames": [
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:00+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.038,
+    "heading_deg": 174.3,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496708,
+    "lng": 126.957771,
+    "speed_mps": 0.224,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.97,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.81,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:00.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.038,
+    "heading_deg": 174.3,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.88,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.68,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:01+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.3,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.88,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.69,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:01.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.3,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.79,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.56,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:02+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.3,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.7,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.42,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:02.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 175.51,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.7,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.42,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:03+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 175.51,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.71,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.43,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:03.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 175.51,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.62,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.29,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:04+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 175.51,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.62,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.29,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:04.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 175.51,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.53,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.16,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:05+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.53,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.17,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:05.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.45,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.03,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:06+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.45,
+    "ttc_s": 9999.0,
+    "closing_mps": -2.03,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:06.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.36,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.91,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:07+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.36,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.9,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:07.500000+00:00",
+   "cane": {
+    "lat": 37.496696,
+    "lng": 126.957787,
+    "speed_mps": 0.035,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.28,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.78,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:08+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.03,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.192,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.28,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.78,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:08.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.03,
+    "heading_deg": 174.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.181,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.19,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.66,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:09+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.027,
+    "heading_deg": 177.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.181,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.19,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.66,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:09.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.027,
+    "heading_deg": 177.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.11,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.54,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:10+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.027,
+    "heading_deg": 177.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.11,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.54,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:10.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.027,
+    "heading_deg": 177.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.02,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.42,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:11+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957787,
+    "speed_mps": 0.027,
+    "heading_deg": 177.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.02,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.42,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:11.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.35,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.02,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.42,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:12+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.35,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 14.02,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.41,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:12.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.35,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.93,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.28,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:13+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.93,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.28,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:13.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.85,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.16,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:14+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.85,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.15,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:14.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.76,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.02,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:15+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.76,
+    "ttc_s": 9999.0,
+    "closing_mps": -1.02,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:15.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 177.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.68,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.91,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:16+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 176.71,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.68,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.9,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:16.500000+00:00",
+   "cane": {
+    "lat": 37.4967,
+    "lng": 126.957794,
+    "speed_mps": 0.027,
+    "heading_deg": 176.71,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.115,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.6,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.79,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:17+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.032,
+    "heading_deg": 176.71,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.115,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.59,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.78,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:17.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.032,
+    "heading_deg": 176.71,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.115,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.51,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.65,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:18+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.032,
+    "heading_deg": 176.71,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.43,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.54,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:18.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 177.73,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.42,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.53,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:19+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 177.73,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.34,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.42,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:19.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.34,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.41,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:20+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.26,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.31,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:20.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.25,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.3,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:21+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.17,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.18,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:21.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.17,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.18,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:22+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.09,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.06,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:22.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 1,
+    "distance_m": 13.08,
+    "ttc_s": 9999.0,
+    "closing_mps": -0.05,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:23+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 13.01,
+    "ttc_s": 229.74,
+    "closing_mps": 0.06,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:23.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 13.0,
+    "ttc_s": 176.52,
+    "closing_mps": 0.07,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:24+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 178.01,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.92,
+    "ttc_s": 71.57,
+    "closing_mps": 0.18,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:24.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 180.14,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.92,
+    "ttc_s": 68.98,
+    "closing_mps": 0.19,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:25+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.035,
+    "heading_deg": 180.14,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.84,
+    "ttc_s": 42.34,
+    "closing_mps": 0.3,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:25.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.1,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.111,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.83,
+    "ttc_s": 42.13,
+    "closing_mps": 0.3,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:26+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957794,
+    "speed_mps": 0.1,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.11,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.76,
+    "ttc_s": 30.79,
+    "closing_mps": 0.41,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:26.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.11,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.75,
+    "ttc_s": 29.13,
+    "closing_mps": 0.44,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:27+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.68,
+    "ttc_s": 23.56,
+    "closing_mps": 0.54,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:27.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.67,
+    "ttc_s": 23.02,
+    "closing_mps": 0.55,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:28+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.59,
+    "ttc_s": 18.99,
+    "closing_mps": 0.66,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:28.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.58,
+    "ttc_s": 18.61,
+    "closing_mps": 0.68,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:29+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957771,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.51,
+    "ttc_s": 16.11,
+    "closing_mps": 0.78,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:29.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.44,
+    "ttc_s": 14.28,
+    "closing_mps": 0.87,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:30+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.43,
+    "ttc_s": 14.06,
+    "closing_mps": 0.88,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:30.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.36,
+    "ttc_s": 12.65,
+    "closing_mps": 0.98,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:31+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.35,
+    "ttc_s": 12.34,
+    "closing_mps": 1.0,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:31.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.28,
+    "ttc_s": 11.3,
+    "closing_mps": 1.09,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:32+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.27,
+    "ttc_s": 11.17,
+    "closing_mps": 1.1,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:32.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.2,
+    "ttc_s": 10.26,
+    "closing_mps": 1.19,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:33+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.19,
+    "ttc_s": 10.15,
+    "closing_mps": 1.2,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:33.500000+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.12,
+    "ttc_s": 9.31,
+    "closing_mps": 1.3,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:34+00:00",
+   "cane": {
+    "lat": 37.496704,
+    "lng": 126.957802,
+    "speed_mps": 0.143,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.11,
+    "ttc_s": 9.21,
+    "closing_mps": 1.31,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:34.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.118,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.117,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.1,
+    "ttc_s": 9.1,
+    "closing_mps": 1.33,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:35+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.118,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.03,
+    "ttc_s": 8.48,
+    "closing_mps": 1.42,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:35.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 12.02,
+    "ttc_s": 8.38,
+    "closing_mps": 1.44,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:36+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.95,
+    "ttc_s": 7.85,
+    "closing_mps": 1.52,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:36.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.94,
+    "ttc_s": 7.71,
+    "closing_mps": 1.55,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:37+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.87,
+    "ttc_s": 7.25,
+    "closing_mps": 1.64,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:37.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.12,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.86,
+    "ttc_s": 7.18,
+    "closing_mps": 1.65,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:38+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.8,
+    "ttc_s": 6.74,
+    "closing_mps": 1.75,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:38.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.78,
+    "ttc_s": 6.68,
+    "closing_mps": 1.76,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:39+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.72,
+    "ttc_s": 6.3,
+    "closing_mps": 1.86,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:39.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.71,
+    "ttc_s": 6.25,
+    "closing_mps": 1.87,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:40+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.64,
+    "ttc_s": 5.91,
+    "closing_mps": 1.97,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:40.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.63,
+    "ttc_s": 5.88,
+    "closing_mps": 1.98,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:41+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.56,
+    "ttc_s": 5.64,
+    "closing_mps": 2.05,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:41.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 179.45,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.56,
+    "ttc_s": 5.64,
+    "closing_mps": 2.05,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:42+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.09,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.55,
+    "ttc_s": 5.59,
+    "closing_mps": 2.07,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:42.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.102,
+    "heading_deg": 180.09,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.48,
+    "ttc_s": 5.35,
+    "closing_mps": 2.15,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:43+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.079,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.127,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.47,
+    "ttc_s": 5.28,
+    "closing_mps": 2.17,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:43.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.079,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.13,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.4,
+    "ttc_s": 5.06,
+    "closing_mps": 2.26,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:44+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.13,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.39,
+    "ttc_s": 5.0,
+    "closing_mps": 2.28,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:44.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.33,
+    "ttc_s": 4.82,
+    "closing_mps": 2.35,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:45+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.32,
+    "ttc_s": 4.78,
+    "closing_mps": 2.37,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:45.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.25,
+    "ttc_s": 4.59,
+    "closing_mps": 2.45,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:46+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.24,
+    "ttc_s": 4.56,
+    "closing_mps": 2.46,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:46.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.17,
+    "ttc_s": 4.4,
+    "closing_mps": 2.54,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:47+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.16,
+    "ttc_s": 4.37,
+    "closing_mps": 2.56,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:47.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.1,
+    "ttc_s": 4.21,
+    "closing_mps": 2.63,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:48+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.09,
+    "ttc_s": 4.18,
+    "closing_mps": 2.65,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:48.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.02,
+    "ttc_s": 4.03,
+    "closing_mps": 2.74,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:49+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 11.01,
+    "ttc_s": 4.0,
+    "closing_mps": 2.75,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:49.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957802,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.95,
+    "ttc_s": 3.87,
+    "closing_mps": 2.83,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:50+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.93,
+    "ttc_s": 3.84,
+    "closing_mps": 2.85,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:50.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.92,
+    "ttc_s": 3.8,
+    "closing_mps": 2.87,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:51+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.86,
+    "ttc_s": 3.69,
+    "closing_mps": 2.94,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:51.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496712,
+    "lng": 126.957779,
+    "speed_mps": 0.135,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.84,
+    "ttc_s": 3.66,
+    "closing_mps": 2.97,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:52+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.064,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.79,
+    "ttc_s": 3.56,
+    "closing_mps": 3.03,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:52.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.043,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.78,
+    "ttc_s": 3.52,
+    "closing_mps": 3.06,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:53+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.043,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.72,
+    "ttc_s": 3.43,
+    "closing_mps": 3.13,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:53.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.137,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.7,
+    "ttc_s": 3.4,
+    "closing_mps": 3.15,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:54+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.65,
+    "ttc_s": 3.32,
+    "closing_mps": 3.21,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:54.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.63,
+    "ttc_s": 3.28,
+    "closing_mps": 3.24,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:55+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.58,
+    "ttc_s": 3.21,
+    "closing_mps": 3.3,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:55.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.57,
+    "ttc_s": 3.17,
+    "closing_mps": 3.33,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:56+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 180.34,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.51,
+    "ttc_s": 3.1,
+    "closing_mps": 3.39,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:56.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.5,
+    "ttc_s": 3.07,
+    "closing_mps": 3.42,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:57+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.44,
+    "ttc_s": 3.0,
+    "closing_mps": 3.48,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:57.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.43,
+    "ttc_s": 2.97,
+    "closing_mps": 3.51,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:58+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.37,
+    "ttc_s": 2.91,
+    "closing_mps": 3.57,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:58.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.36,
+    "ttc_s": 2.89,
+    "closing_mps": 3.59,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:59+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.31,
+    "ttc_s": 2.82,
+    "closing_mps": 3.66,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:00:59.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 0,
+    "distance_m": 10.31,
+    "ttc_s": 2.82,
+    "closing_mps": 3.66,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:00+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 179.02,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.25,
+    "ttc_s": 2.76,
+    "closing_mps": 3.71,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:00.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 181.95,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.24,
+    "ttc_s": 2.74,
+    "closing_mps": 3.73,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:01+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 181.95,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.19,
+    "ttc_s": 2.68,
+    "closing_mps": 3.8,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:01.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 182.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.17,
+    "ttc_s": 2.66,
+    "closing_mps": 3.82,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:02+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 182.29,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.12,
+    "ttc_s": 2.61,
+    "closing_mps": 3.88,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:02.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.027,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.1,
+    "ttc_s": 2.59,
+    "closing_mps": 3.9,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:03+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.027,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.05,
+    "ttc_s": 2.54,
+    "closing_mps": 3.95,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:03.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.03,
+    "ttc_s": 2.53,
+    "closing_mps": 3.97,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:04+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.98,
+    "ttc_s": 2.48,
+    "closing_mps": 4.03,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:04.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.97,
+    "ttc_s": 2.46,
+    "closing_mps": 4.05,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:05+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.92,
+    "ttc_s": 2.41,
+    "closing_mps": 4.12,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:05.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.9,
+    "ttc_s": 2.39,
+    "closing_mps": 4.14,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:06+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.89,
+    "ttc_s": 2.38,
+    "closing_mps": 4.15,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:06.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.84,
+    "ttc_s": 2.34,
+    "closing_mps": 4.21,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:07+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.84,
+    "ttc_s": 2.34,
+    "closing_mps": 4.21,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:07.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.82,
+    "ttc_s": 2.32,
+    "closing_mps": 4.23,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:08+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.77,
+    "ttc_s": 2.28,
+    "closing_mps": 4.29,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:08.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.76,
+    "ttc_s": 2.26,
+    "closing_mps": 4.31,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:09+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.71,
+    "ttc_s": 2.22,
+    "closing_mps": 4.36,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:09.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.7,
+    "ttc_s": 2.21,
+    "closing_mps": 4.39,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:10+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.7,
+    "ttc_s": 2.21,
+    "closing_mps": 4.39,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:10.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.025,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.68,
+    "ttc_s": 2.2,
+    "closing_mps": 4.4,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:11+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957809,
+    "speed_mps": 0.03,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.68,
+    "ttc_s": 2.2,
+    "closing_mps": 4.4,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:11.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.66,
+    "ttc_s": 2.18,
+    "closing_mps": 4.43,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:12+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.61,
+    "ttc_s": 2.15,
+    "closing_mps": 4.48,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:12.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.61,
+    "ttc_s": 2.15,
+    "closing_mps": 4.48,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:13+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.59,
+    "ttc_s": 2.13,
+    "closing_mps": 4.5,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:13.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.58,
+    "ttc_s": 2.12,
+    "closing_mps": 4.53,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:14+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 182.5,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.52,
+    "ttc_s": 2.08,
+    "closing_mps": 4.57,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:14.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.5,
+    "ttc_s": 2.07,
+    "closing_mps": 4.59,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:15+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.46,
+    "ttc_s": 2.03,
+    "closing_mps": 4.65,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:15.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.44,
+    "ttc_s": 2.02,
+    "closing_mps": 4.68,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:16+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.39,
+    "ttc_s": 1.99,
+    "closing_mps": 4.73,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:16.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.37,
+    "ttc_s": 1.97,
+    "closing_mps": 4.75,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:17+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.33,
+    "ttc_s": 1.94,
+    "closing_mps": 4.81,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:17.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.31,
+    "ttc_s": 1.93,
+    "closing_mps": 4.83,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:18+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.26,
+    "ttc_s": 1.9,
+    "closing_mps": 4.88,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:18.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.25,
+    "ttc_s": 1.88,
+    "closing_mps": 4.92,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:19+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 181.44,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.2,
+    "ttc_s": 1.85,
+    "closing_mps": 4.97,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:19.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 183.77,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.18,
+    "ttc_s": 1.84,
+    "closing_mps": 4.99,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:20+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.034,
+    "heading_deg": 183.77,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.14,
+    "ttc_s": 1.81,
+    "closing_mps": 5.05,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:20.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.028,
+    "heading_deg": 183.91,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.12,
+    "ttc_s": 1.8,
+    "closing_mps": 5.08,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:21+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.028,
+    "heading_deg": 183.91,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.07,
+    "ttc_s": 1.77,
+    "closing_mps": 5.12,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:21.500000+00:00",
+   "cane": {
+    "lat": 37.496708,
+    "lng": 126.957817,
+    "speed_mps": 0.023,
+    "heading_deg": 183.91,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.496716,
+    "lng": 126.957787,
+    "speed_mps": 0.164,
+    "heading_deg": 274.83,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.06,
+    "ttc_s": 1.76,
+    "closing_mps": 5.16,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:22+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.131,
+    "heading_deg": 190.49,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.288,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.51,
+    "ttc_s": 1.33,
+    "closing_mps": 6.4,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:22.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.41,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.288,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.48,
+    "ttc_s": 1.32,
+    "closing_mps": 6.42,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:23+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.41,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.288,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.63,
+    "ttc_s": 1.31,
+    "closing_mps": 6.59,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:23.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.41,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.63,
+    "ttc_s": 1.31,
+    "closing_mps": 6.59,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:24+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.59,
+    "ttc_s": 1.3,
+    "closing_mps": 6.61,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:24.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.76,
+    "ttc_s": 1.3,
+    "closing_mps": 6.72,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:25+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.76,
+    "ttc_s": 1.3,
+    "closing_mps": 6.72,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:25.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.72,
+    "ttc_s": 1.29,
+    "closing_mps": 6.74,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:26+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.91,
+    "ttc_s": 1.31,
+    "closing_mps": 6.78,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:26.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 8.87,
+    "ttc_s": 1.3,
+    "closing_mps": 6.8,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:27+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 190.31,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.08,
+    "ttc_s": 1.34,
+    "closing_mps": 6.78,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:27.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 189.66,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.04,
+    "ttc_s": 1.33,
+    "closing_mps": 6.81,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:28+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 189.76,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.0,
+    "ttc_s": 1.32,
+    "closing_mps": 6.84,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:28.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957771,
+    "speed_mps": 0.132,
+    "heading_deg": 189.76,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.22,
+    "ttc_s": 1.36,
+    "closing_mps": 6.76,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:29+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.123,
+    "heading_deg": 190.12,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.18,
+    "ttc_s": 1.35,
+    "closing_mps": 6.79,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:29.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.17,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.347,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.18,
+    "ttc_s": 1.35,
+    "closing_mps": 6.79,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:30+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.17,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.377,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.4,
+    "ttc_s": 1.41,
+    "closing_mps": 6.66,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:30.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.25,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.377,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.37,
+    "ttc_s": 1.4,
+    "closing_mps": 6.69,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:31+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.25,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.6,
+    "ttc_s": 1.48,
+    "closing_mps": 6.51,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:31.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.54,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.57,
+    "ttc_s": 1.46,
+    "closing_mps": 6.54,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:32+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.54,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.81,
+    "ttc_s": 1.55,
+    "closing_mps": 6.32,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:32.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 190.85,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.78,
+    "ttc_s": 1.54,
+    "closing_mps": 6.36,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:33+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 191.28,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.78,
+    "ttc_s": 1.54,
+    "closing_mps": 6.36,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:33.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 191.85,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.73,
+    "ttc_s": 1.52,
+    "closing_mps": 6.4,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:34+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 191.85,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.98,
+    "ttc_s": 1.63,
+    "closing_mps": 6.14,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:34.500000+00:00",
+   "cane": {
+    "lat": 37.496754,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 192.14,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.95,
+    "ttc_s": 1.61,
+    "closing_mps": 6.18,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:35+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 192.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 9.91,
+    "ttc_s": 1.59,
+    "closing_mps": 6.22,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:35.500000+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 192.22,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.17,
+    "ttc_s": 1.72,
+    "closing_mps": 5.93,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:36+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 192.2,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.13,
+    "ttc_s": 1.7,
+    "closing_mps": 5.97,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:36.500000+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957764,
+    "speed_mps": 0.118,
+    "heading_deg": 192.2,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.4,
+    "ttc_s": 1.84,
+    "closing_mps": 5.66,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:37+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.102,
+    "heading_deg": 192.23,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.37,
+    "ttc_s": 1.82,
+    "closing_mps": 5.7,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:37.500000+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.102,
+    "heading_deg": 192.23,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.64,
+    "ttc_s": 1.99,
+    "closing_mps": 5.36,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:38+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.091,
+    "heading_deg": 192.21,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.6,
+    "ttc_s": 1.96,
+    "closing_mps": 5.4,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:38.500000+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.091,
+    "heading_deg": 192.19,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.57,
+    "ttc_s": 1.94,
+    "closing_mps": 5.44,
+    "source": "table"
+   },
+   "age_s": 0.5
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:39+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.091,
+    "heading_deg": 192.2,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.325,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.57,
+    "ttc_s": 1.94,
+    "closing_mps": 5.44,
+    "source": "table"
+   },
+   "age_s": 0.0
+  },
+  {
+   "device_id": "jetson-01",
+   "ts": "2026-08-17T14:01:39.500000+00:00",
+   "cane": {
+    "lat": 37.496758,
+    "lng": 126.957756,
+    "speed_mps": 0.091,
+    "heading_deg": 192.2,
+    "gps_valid": true
+   },
+   "vehicle": {
+    "lat": 37.497139,
+    "lng": 126.957207,
+    "speed_mps": 0.172,
+    "heading_deg": 0.0,
+    "gps_valid": true
+   },
+   "risk": {
+    "level": 3,
+    "distance_m": 10.84,
+    "ttc_s": 2.13,
+    "closing_mps": 5.08,
+    "source": "table"
+   },
+   "age_s": 0.5
+  }
+ ]
+}
