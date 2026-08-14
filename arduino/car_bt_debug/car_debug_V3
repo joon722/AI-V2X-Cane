@@ -27,6 +27,8 @@
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <Preferences.h>
+#include <WebServer.h>
 #include <esp_now.h>
 #include "esp_wifi.h"
 #include <Wire.h>
@@ -45,18 +47,25 @@
 // 실제 도로 주행에서는 반드시 0 권장.
 #define USE_DEMO_MOVING_FALLBACK 0
 
-// Jetson/RSU 없이 차량 ESP32가 직접 위험도를 계산할 때 1.
-#define VEHICLE_CALCULATES_RISK 1
-// 현재 야외 직접판정 시험에서는 차량 자체 계산만 음성/지팡이에 적용한다.
-// RSU의 예전 위험 패킷이 원시위험=0인 평행 주행에서도 차량 음성을
-// 순간 재생한 것이 07/08 로그에서 확인되어 기본 비활성화한다.
-#define ENABLE_RSU_RISK_INPUT 0
+// 야외 RSU/Jetson 시연에서는 위험도 판정과 하행 전송을 RSU 단독으로 맡긴다.
+// 차량 상태(GPS/속도/방향) 10Hz 송신과 차량 내부 진단 계산은 유지된다.
+#define VEHICLE_CALCULATES_RISK 0
+// RSU가 지팡이와 차량에 같은 MSG_RISK_ALERT를 보내며,
+// 차량 스피커도 RSU 판정값만 사용한다.
+#define ENABLE_RSU_RISK_INPUT 1
 
 // 1: 실내 책상 테스트 거리, 0: 실제 도로용 거리
 #define USE_INDOOR_RISK_DISTANCE 0
 
 // 블루투스 디버그 (뷰어/폰용). 시연/실전 때는 0.
 #define USE_BT_DEBUG 0
+
+// 아이패드/폰 브라우저용 웹뷰어. V2X-LOG 에 접속 후 http://192.168.4.1
+// 시연 때 부하를 줄이고 싶으면 0으로 바꾼다.
+#define USE_WEB_VIEWER 1
+#define WEB_VIEWER_PORT 80
+#define CANE_LOG_UDP_PORT 4210
+#define CANE_CMD_REPLY_PORT 4301
 
 #if USE_BT_DEBUG
 #include "BluetoothSerial.h"
@@ -102,6 +111,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 // 최종 진단 로그는 10Hz. IMU 자체 처리는 loop에서 가능한 한 빠르게 수행한다.
 #define UDP_TELEMETRY_INTERVAL_MS 100UL
 #define CANE_TIMEOUT_MS 2000UL
+#define RSU_RISK_TIMEOUT_MS 3000UL
 #define SENSOR_LOG_INTERVAL_MS 1000UL
 #define GPS_FIX_MAX_AGE_MS 3000UL
 
@@ -138,7 +148,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define REL_CAL_STILL_TIME_MS 8000UL
 #define REL_CAL_TIMEOUT_MS 30000UL
 #define REL_CAL_MIN_SAMPLES 40
-#define REL_CAL_MAX_OFFSET_SPREAD_M 12.0f
+#define REL_CAL_MAX_OFFSET_SPREAD_M 5.0f
 
 // GPS 품질/이상치 필터 설정: RC카 기준.
 #define GPS_MIN_SATELLITES 4
@@ -303,6 +313,380 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define CANE_FIXED_LAT 37.000000
 #define CANE_FIXED_LNG 127.000000
 
+// =====================
+// 실시간 튜닝 파라미터 (뷰어 입력창 / USB 시리얼에서 변경 가능)
+// 초기값은 위의 #define을 그대로 사용한다.
+// =====================
+float cfgGpsFilterAlpha = GPS_FILTER_ALPHA;
+float cfgGpsFilterBeta = GPS_FILTER_BETA;
+float cfgGpsOutlierBaseM = GPS_OUTLIER_BASE_M;
+float cfgGpsMaxHdop = GPS_MAX_HDOP;
+uint32_t cfgGpsMinSatellites = GPS_MIN_SATELLITES;
+uint32_t cfgGpsPredictionMaxMs = GPS_PREDICTION_MAX_MS;
+uint32_t cfgGpsFixMaxAgeMs = GPS_FIX_MAX_AGE_MS;
+float cfgGpsMaxSpeed = GPS_NODE_MAX_SPEED_MPS;
+float cfgGpsStationarySpeed = GPS_STATIONARY_SPEED_MPS;
+float cfgGpsStationaryAlpha = GPS_STATIONARY_ALPHA;
+float cfgGpsStationaryBeta = GPS_STATIONARY_BETA;
+float cfgMinHeadingSpeed = MIN_VALID_HEADING_SPEED_MPS;
+float cfgCpaDangerM = CPA_DANGER_DISTANCE_M;
+float cfgCpaWarningM = CPA_WARNING_DISTANCE_M;
+float cfgCpaCautionM = CPA_CAUTION_DISTANCE_M;
+float cfgCpaHorizonS = CPA_PREDICTION_HORIZON_S;
+float cfgEmergencyM = EMERGENCY_DISTANCE_M;
+float cfgMinPredictVehicleSpeed = MIN_PREDICT_VEHICLE_SPEED_MPS;
+float cfgMinPredictCaneSpeed = MIN_PREDICT_CANE_SPEED_MPS;
+float cfgMinClosingSpeed = MIN_RADIAL_CLOSING_SPEED_MPS;
+float cfgApproachConeDeg = DIRECT_APPROACH_CONE_HALF_ANGLE_DEG;
+float cfgForwardConeDeg = FORWARD_CONE_HALF_ANGLE_DEG;
+uint32_t cfgRiskEscalateCount = RISK_ESCALATE_CONFIRM_COUNT;
+uint32_t cfgRiskClearCount = RISK_CLEAR_CONFIRM_COUNT;
+float cfgRssiGateDbm = RISK_RSSI_GATE_DBM;
+float cfgRssiAlpha = CANE_RSSI_FILTER_ALPHA;
+float cfgImpactThreshold = IMPACT_THRESHOLD_MPS2;
+uint32_t cfgDfplayerVolume = DFPLAYER_VOLUME;
+uint32_t cfgTelemetryIntervalMs = UDP_TELEMETRY_INTERVAL_MS;
+
+#if USE_WEB_VIEWER
+// =====================
+// 아이패드/폰 웹뷰어
+// 차량이 자기 로그와 지팡이 브로드캐스트 로그를 모아 브라우저에 보여주고,
+// 브라우저에서 보낸 명령을 자기 자신 또는 지팡이에게 전달한다.
+// =====================
+WebServer webServer(WEB_VIEWER_PORT);
+WiFiUDP caneLogUdp;   // 지팡이 텔레메트리(4210) 수신
+WiFiUDP caneCmdUdp;   // 지팡이로 명령 전달 및 응답 수신
+
+char webCarTelemetry[1500] = "";
+char webCaneTelemetry[1300] = "";
+char webReplyBuffer[700] = "";
+uint32_t webCarUpdatedMs = 0;
+uint32_t webCaneUpdatedMs = 0;
+IPAddress caneNodeIp;
+bool caneNodeIpKnown = false;
+
+// ===WEB_PAGE_BEGIN=== (build_web_viewer.py 가 생성. 직접 고치지 말 것)
+static const char WEB_PAGE[] PROGMEM = R"HTMLPAGE(
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>V2X 듀얼 뷰어</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--line:#d8dbe0;--ink:#1a1c1f;--dim:#6b7280;
+      --ok:#1a7f37;--warn:#b8860b;--bad:#c62828;--accent:#1a56db}
+*{box-sizing:border-box;-webkit-text-size-adjust:100%}
+body{margin:0;padding:10px;background:var(--bg);color:var(--ink);
+     font:15px/1.45 -apple-system,"Apple SD Gothic Neo",sans-serif}
+h1{font-size:17px;margin:0 0 8px}
+h2{font-size:15px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.bar{background:var(--card);border:1px solid var(--line);border-radius:10px;
+     padding:8px 10px;margin-bottom:10px;display:flex;flex-wrap:wrap;
+     gap:8px;align-items:center}
+.grid{display:grid;grid-template-columns:1fr;gap:10px}
+@media(min-width:820px){.grid{grid-template-columns:1fr 1fr}}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td{padding:3px 4px;border-bottom:1px solid #eef0f3;
+   font-variant-numeric:tabular-nums}
+td.k{color:var(--dim);width:44%;word-break:keep-all}
+td.v{font-family:ui-monospace,Menlo,monospace}
+tr.chg td.v{background:#fff6d5}
+input,select,button{font:inherit;border-radius:8px;border:1px solid var(--line);
+                    padding:7px 10px;background:#fff;color:var(--ink)}
+input{flex:1;min-width:80px}
+button{background:var(--accent);color:#fff;border-color:transparent;
+       cursor:pointer;-webkit-appearance:none}
+button.sub{background:#eef1f6;color:var(--ink);border-color:var(--line)}
+button:active{opacity:.7}
+.row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#bbb;display:inline-block}
+.dot.on{background:var(--ok)}.dot.old{background:var(--warn)}
+.age{font-size:12px;color:var(--dim);font-weight:400}
+pre{background:#0f1115;color:#e6e8eb;border-radius:8px;padding:8px;
+    font:12px/1.4 ui-monospace,Menlo,monospace;height:230px;overflow:auto;
+    margin:0;white-space:pre-wrap;word-break:break-all}
+.rec{color:var(--bad);font-weight:600}
+a.dl{display:inline-block;background:var(--ok);color:#fff;text-decoration:none;
+     padding:7px 10px;border-radius:8px;margin:4px 4px 0 0;font-size:14px}
+</style>
+</head>
+<body>
+
+<h1>V2X 듀얼 뷰어 <span class="age" id="conn"></span></h1>
+
+<div class="bar">
+  <input id="recName" placeholder="기록 이름 (예: 직선접근1)">
+  <button id="recBtn" onclick="toggleRecord()">기록 시작</button>
+  <span id="recInfo" class="age">기록 안 함</span>
+  <span style="flex:1"></span>
+  <select id="interval" onchange="restartTimer()">
+    <option value="200">0.2초</option>
+    <option value="500" selected>0.5초</option>
+    <option value="1000">1초</option>
+  </select>
+</div>
+<div id="dlBox"></div>
+
+<div class="grid">
+  <section>
+    <h2><span class="dot" id="dotCar"></span>차량<span class="age" id="ageCar"></span></h2>
+    <table id="tblCar"></table>
+    <div class="row">
+      <input id="cmdCar" placeholder="명령 (예: alpha 0.25)"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button onclick="send('car')">전송</button>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="quick('car','get')">get</button>
+      <button class="sub" onclick="quick('car','help')">help</button>
+      <button class="sub" onclick="quick('car','save')">save</button>
+      <button class="sub" onclick="quick('car','reset')">reset</button>
+      <button class="sub" onclick="quick('car','play 3')">음성</button>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="dot" id="dotCane"></span>지팡이<span class="age" id="ageCane"></span></h2>
+    <table id="tblCane"></table>
+    <div class="row">
+      <input id="cmdCane" placeholder="명령 (예: alpha 0.25)"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button onclick="send('cane')">전송</button>
+    </div>
+    <div class="row">
+      <button class="sub" onclick="quick('cane','get')">get</button>
+      <button class="sub" onclick="quick('cane','help')">help</button>
+      <button class="sub" onclick="quick('cane','save')">save</button>
+      <button class="sub" onclick="quick('cane','reset')">reset</button>
+      <button class="sub" onclick="quick('cane','test 3')">진동</button>
+    </div>
+  </section>
+</div>
+
+<section style="margin-top:10px">
+  <h2>수신 로그
+    <button class="sub" onclick="paused=!paused" id="pauseBtn"
+            style="margin-left:auto;padding:4px 9px">일시정지</button>
+    <button class="sub" onclick="logLines=[];draw()"
+            style="padding:4px 9px">지우기</button>
+  </h2>
+  <pre id="log"></pre>
+</section>
+
+<script>
+var logLines = [], paused = false, timer = null;
+var prev = {car:{}, cane:{}};
+var recording = false, recStart = 0, recName = "";
+var recRows = {car:[], cane:[]}, recKeys = {car:[], cane:[]}, recLog = [];
+
+function esc(s){return String(s).replace(/[&<>]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+function stamp(){
+  var d = new Date();
+  return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+
+         ":"+("0"+d.getSeconds()).slice(-2);
+}
+
+function pushLog(line){
+  logLines.push(stamp()+"  "+line);
+  if (logLines.length > 600) logLines.splice(0, 200);
+  if (recording) recLog.push(stamp()+"  "+line);
+}
+
+function parseSections(text){
+  var out = {}, cur = null, lines = text.split("\n");
+  for (var i=0;i<lines.length;i++){
+    var l = lines[i];
+    if (l.indexOf("###") === 0){ cur = l.slice(3).trim(); out[cur] = []; continue; }
+    if (cur) out[cur].push(l);
+  }
+  return out;
+}
+
+function toPairs(lines){
+  var pairs = [];
+  for (var i=0;i<lines.length;i++){
+    var p = lines[i].indexOf(":");
+    if (p > 0) pairs.push([lines[i].slice(0,p), lines[i].slice(p+1)]);
+  }
+  return pairs;
+}
+
+function fillTable(id, node, pairs){
+  var html = "", changed = 0;
+  for (var i=0;i<pairs.length;i++){
+    var k = pairs[i][0], v = pairs[i][1];
+    var cls = (prev[node][k] !== undefined && prev[node][k] !== v) ? " class='chg'" : "";
+    if (cls) changed++;
+    prev[node][k] = v;
+    html += "<tr"+cls+"><td class='k'>"+esc(k)+"</td><td class='v'>"+esc(v)+"</td></tr>";
+  }
+  document.getElementById(id).innerHTML = html;
+  return changed;
+}
+
+function markAge(dotId, ageId, ms){
+  var dot = document.getElementById(dotId), age = document.getElementById(ageId);
+  if (ms < 0 || ms > 60000){ dot.className = "dot"; age.textContent = "수신 없음"; return false; }
+  dot.className = ms < 3000 ? "dot on" : "dot old";
+  age.textContent = (ms/1000).toFixed(1)+"초 전";
+  return true;
+}
+
+function recordRow(node, pairs){
+  if (!recording || !pairs.length) return;
+  var row = {"시각": stamp(),
+             "경과초": ((Date.now()-recStart)/1000).toFixed(3)};
+  for (var i=0;i<pairs.length;i++){
+    row[pairs[i][0]] = pairs[i][1];
+    if (recKeys[node].indexOf(pairs[i][0]) < 0) recKeys[node].push(pairs[i][0]);
+  }
+  recRows[node].push(row);
+}
+
+function refresh(){
+  fetch("/data", {cache:"no-store"}).then(function(r){return r.text();})
+  .then(function(text){
+    var s = parseSections(text);
+    var meta = {};
+    (s.META||[]).forEach(function(l){
+      var p = l.indexOf(":"); if (p>0) meta[l.slice(0,p)] = parseInt(l.slice(p+1),10);
+    });
+
+    var carOk = markAge("dotCar","ageCar", meta.carAge===undefined?-1:meta.carAge);
+    var caneOk = markAge("dotCane","ageCane", meta.caneAge===undefined?-1:meta.caneAge);
+    document.getElementById("conn").textContent =
+      (carOk?"차량 O":"차량 X") + " / " + (caneOk?"지팡이 O":"지팡이 X");
+
+    var carPairs = toPairs(s.CAR||[]), canePairs = toPairs(s.CANE||[]);
+    if (!paused){
+      fillTable("tblCar","car", carPairs);
+      fillTable("tblCane","cane", canePairs);
+    }
+    recordRow("car", carPairs);
+    recordRow("cane", canePairs);
+
+    if (!paused){
+      if (carPairs.length) pushLog("[차량] " + carPairs.map(function(p){
+        return p[0]+":"+p[1];}).join(" "));
+      if (canePairs.length) pushLog("[지팡이] " + canePairs.map(function(p){
+        return p[0]+":"+p[1];}).join(" "));
+    }
+    (s.REPLY||[]).forEach(function(l){ if (l.trim()) pushLog(l); });
+    draw();
+  })
+  .catch(function(){
+    document.getElementById("conn").textContent = "보드 연결 끊김";
+  });
+}
+
+function draw(){
+  var el = document.getElementById("log");
+  el.textContent = logLines.slice(-300).join("\n");
+  if (!paused) el.scrollTop = el.scrollHeight;
+  document.getElementById("pauseBtn").textContent = paused ? "재개" : "일시정지";
+  if (recording){
+    var sec = Math.floor((Date.now()-recStart)/1000);
+    document.getElementById("recInfo").innerHTML =
+      "<span class='rec'>기록 중 " + ("0"+Math.floor(sec/60)).slice(-2) + ":" +
+      ("0"+(sec%60)).slice(-2) + " (" +
+      (recRows.car.length + recRows.cane.length) + "행)</span>";
+  }
+}
+
+function send(target, text){
+  var el = document.getElementById(target === "car" ? "cmdCar" : "cmdCane");
+  if (text === undefined) text = el.value.trim();
+  if (!text) return;
+  pushLog("> [" + (target==="car"?"차량":"지팡이") + "] " + text);
+  if (recording) recLog.push(stamp()+"  > ["+target+"] "+text);
+  fetch("/cmd?target="+target+"&text="+encodeURIComponent(text))
+    .then(function(){ setTimeout(refresh, 250); });
+  if (el.value) el.value = "";
+  draw();
+}
+function quick(target, text){ send(target, text); }
+
+function toggleRecord(){
+  if (!recording){
+    recName = (document.getElementById("recName").value || "기록").trim();
+    recording = true; recStart = Date.now();
+    recRows = {car:[], cane:[]}; recKeys = {car:[], cane:[]}; recLog = [];
+    document.getElementById("recBtn").textContent = "기록 중지";
+    document.getElementById("dlBox").innerHTML = "";
+  } else {
+    recording = false;
+    document.getElementById("recBtn").textContent = "기록 시작";
+    document.getElementById("recInfo").textContent =
+      "기록 완료 — 아래 버튼으로 저장";
+    showDownloads();
+  }
+}
+
+function toCsv(node){
+  var keys = ["시각","경과초"].concat(recKeys[node]);
+  var out = "﻿" + keys.join(",") + "\n";
+  for (var i=0;i<recRows[node].length;i++){
+    var r = recRows[node][i], line = [];
+    for (var j=0;j<keys.length;j++){
+      var v = r[keys[j]] === undefined ? "" : String(r[keys[j]]);
+      line.push(v.indexOf(",") >= 0 ? '"'+v+'"' : v);
+    }
+    out += line.join(",") + "\n";
+  }
+  return out;
+}
+
+function fileName(suffix){
+  var d = new Date(recStart), p = function(n){return ("0"+n).slice(-2);};
+  return recName + "_" + d.getFullYear() + "-" + p(d.getMonth()+1) + "-" +
+         p(d.getDate()) + "_" + p(d.getHours()) + "-" + p(d.getMinutes()) +
+         "-" + p(d.getSeconds()) + "_" + suffix;
+}
+
+function makeLink(text, content, name, type){
+  var blob = new Blob([content], {type:type||"text/csv;charset=utf-8"});
+  var a = document.createElement("a");
+  a.className = "dl"; a.textContent = text;
+  a.href = URL.createObjectURL(blob); a.download = name;
+  return a;
+}
+
+function showDownloads(){
+  var box = document.getElementById("dlBox");
+  box.innerHTML = "";
+  if (recRows.car.length)
+    box.appendChild(makeLink("차량 CSV 저장", toCsv("car"), fileName("차량.csv")));
+  if (recRows.cane.length)
+    box.appendChild(makeLink("지팡이 CSV 저장", toCsv("cane"), fileName("지팡이.csv")));
+  if (recLog.length)
+    box.appendChild(makeLink("로그 저장", recLog.join("\n"),
+                             fileName("로그.txt"), "text/plain;charset=utf-8"));
+}
+
+function restartTimer(){
+  if (timer) clearInterval(timer);
+  timer = setInterval(refresh, parseInt(document.getElementById("interval").value,10));
+}
+
+document.getElementById("cmdCar").addEventListener("keydown", function(e){
+  if (e.key === "Enter") send("car"); });
+document.getElementById("cmdCane").addEventListener("keydown", function(e){
+  if (e.key === "Enter") send("cane"); });
+
+refresh();
+restartTimer();
+</script>
+</body>
+</html>
+)HTMLPAGE";
+// ===WEB_PAGE_END===
+#endif
+
 typedef struct __attribute__((packed)) v2x_status_message {
   uint32_t magic;
   uint8_t version;
@@ -341,6 +725,9 @@ typedef struct __attribute__((packed)) v2x_risk_message {
   uint16_t seq_num;
 } v2x_risk_message_t;
 
+static_assert(sizeof(v2x_risk_message_t) == 35,
+              "risk alert packet must be 35 bytes");
+
 HardwareSerial gpsSerial(2);
 HardwareSerial dfSerial(1);
 TinyGPSPlus gps;
@@ -373,6 +760,8 @@ uint32_t lastBtTelemetryMs = 0;
 uint32_t lastBtCheckMs = 0;
 
 uint32_t lastCaneRxMs = 0;
+volatile uint32_t lastRsuRiskRxMs = 0;
+volatile uint32_t rsuRiskRxCount = 0;
 uint32_t lastSensorLogMs = 0;
 
 // 지팡이 -> 차량 ESP-NOW 수신 신호 세기 진단값.
@@ -571,11 +960,11 @@ bool updateGpsFilter(double lat,
     velocityValid ? speedMps : 0.0f
   );
   expectedSpeed = constrain(
-    expectedSpeed, 0.0f, GPS_NODE_MAX_SPEED_MPS
+    expectedSpeed, 0.0f, cfgGpsMaxSpeed
   );
 
   float outlierGateM =
-    GPS_OUTLIER_BASE_M + expectedSpeed * dt * 1.5f;
+    cfgGpsOutlierBaseM + expectedSpeed * dt * 1.5f;
 
   if (residualM > outlierGateM) {
     gpsRejectedCount++;
@@ -590,7 +979,7 @@ bool updateGpsFilter(double lat,
     }
 
     if (!gpsFilter.hasRelocationCandidate ||
-        relocationDifferenceM > GPS_OUTLIER_BASE_M) {
+        relocationDifferenceM > cfgGpsOutlierBaseM) {
       gpsFilter.hasRelocationCandidate = true;
       gpsFilter.relocationX = measuredX;
       gpsFilter.relocationY = measuredY;
@@ -629,13 +1018,13 @@ bool updateGpsFilter(double lat,
   gpsFilter.hasRelocationCandidate = false;
 
   bool likelyStationary =
-    velocityValid && speedMps < GPS_STATIONARY_SPEED_MPS;
+    velocityValid && speedMps < cfgGpsStationarySpeed;
 
   float positionAlpha =
-    likelyStationary ? GPS_STATIONARY_ALPHA : GPS_FILTER_ALPHA;
+    likelyStationary ? cfgGpsStationaryAlpha : cfgGpsFilterAlpha;
 
   float velocityBeta =
-    likelyStationary ? GPS_STATIONARY_BETA : GPS_FILTER_BETA;
+    likelyStationary ? cfgGpsStationaryBeta : cfgGpsFilterBeta;
 
   gpsFilter.xM = predictedX + positionAlpha * residualX;
   gpsFilter.yM = predictedY + positionAlpha * residualY;
@@ -657,8 +1046,8 @@ bool updateGpsFilter(double lat,
     gpsFilter.vxMps * gpsFilter.vxMps +
     gpsFilter.vyMps * gpsFilter.vyMps
   );
-  if (filteredSpeed > GPS_NODE_MAX_SPEED_MPS) {
-    float scale = GPS_NODE_MAX_SPEED_MPS / filteredSpeed;
+  if (filteredSpeed > cfgGpsMaxSpeed) {
+    float scale = cfgGpsMaxSpeed / filteredSpeed;
     gpsFilter.vxMps *= scale;
     gpsFilter.vyMps *= scale;
   }
@@ -679,7 +1068,7 @@ void projectGpsPosition(uint32_t now,
                         double *outLng) {
   float predictionMs =
     min((float)(now - gpsFilter.lastFixMs),
-        (float)GPS_PREDICTION_MAX_MS);
+        (float)cfgGpsPredictionMaxMs);
   float dt = predictionMs / 1000.0f;
 
   float projectedX = gpsFilter.xM + gpsFilter.vxMps * dt;
@@ -699,8 +1088,8 @@ bool gpsQualityIsGood() {
     return false;
   }
 
-  return gps.satellites.value() >= GPS_MIN_SATELLITES &&
-         gps.hdop.hdop() <= GPS_MAX_HDOP;
+  return gps.satellites.value() >= cfgGpsMinSatellites &&
+         gps.hdop.hdop() <= cfgGpsMaxHdop;
 }
 
 bool imuReady = false;
@@ -978,8 +1367,10 @@ void startRelativeGpsCalibration() {
   stableRiskLevel = RISK_SAFE;
   candidateRiskLevel = RISK_SAFE;
   candidateRiskCount = 0;
+#if !ENABLE_RSU_RISK_INPUT
   lastRiskLevel = RISK_SAFE;
   announceRisk(RISK_SAFE);
+#endif
 
   Serial.println(
     "[REL CAL] started: keep both GPS antennas together and still for 8s"
@@ -1076,6 +1467,418 @@ void updateRelativeGpsCalibration(
   );
 }
 
+
+// 차량 전용 명령. 처리했으면 true를 돌려준다.
+bool runDeviceCommand(const String &name, bool hasValue, float number) {
+  // 숫자 한 글자만 입력하면 기존처럼 바로 음성 테스트.
+  if (name.length() == 1 && name[0] >= '1' && name[0] <= '4') {
+    playTestAudio((uint8_t)(name[0] - '0'));
+    return true;
+  }
+
+  if (name == "play") {
+    if (!hasValue) {
+      cmdReply("사용법: play <1-4> (1주의 2경고 3위험 4충격)");
+      return true;
+    }
+    int track = (int)number;
+    if (track < 1 || track > 4) {
+      cmdReply("play 범위는 1~4");
+      return true;
+    }
+    playTestAudio((uint8_t)track);
+    return true;
+  }
+
+  if (name == "cal" || name == "c") {
+    startRelativeGpsCalibration();
+    cmdReply("GPS 상대좌표 영점 보정 시작");
+    return true;
+  }
+
+  // 음량은 값을 저장한 뒤 스피커에 즉시 반영해야 한다.
+  if (name == "vol") {
+    int index = findTuningParam("vol");
+    if (index < 0) return false;
+
+    if (hasValue) {
+      writeTuningValue((size_t)index, number);
+      char command[24];
+      snprintf(command, sizeof(command), "AT+VOL=%lu",
+               (unsigned long)cfgDfplayerVolume);
+      sendDfPlayerAtCommand(command);
+    }
+    reportTuningValue((size_t)index);
+    return true;
+  }
+
+  return false;
+}
+
+void playTestAudio(uint8_t track) {
+  if (track == 1) {
+    playAudioFile(TRACK_CAUTION_FILE);
+    riskAudioPlayCount++;
+    lastPlayedRiskAudio = RISK_CAUTION;
+  } else if (track == 2) {
+    playAudioFile(TRACK_WARNING_FILE);
+    riskAudioPlayCount++;
+    lastPlayedRiskAudio = RISK_WARNING;
+  } else if (track == 3) {
+    playAudioFile(TRACK_DANGER_FILE);
+    riskAudioPlayCount++;
+    lastPlayedRiskAudio = RISK_DANGER;
+  } else if (track == 4) {
+    playAudioFile(TRACK_IMPACT_FILE);
+    impactAudioPlayCount++;
+  }
+  cmdReply("음성 테스트 재생: %u", track);
+}
+
+// =====================
+// 실시간 튜닝 명령 (USB 시리얼 + WiFi UDP 공용)
+// 뷰어 입력창에서 UDP로 보낸 명령과 USB 시리얼 입력을 같은 해석기로 처리한다.
+// 응답은 명령을 보낸 쪽으로 되돌려주므로 뷰어 로그에 그대로 표시된다.
+//
+// 값 변경은 즉시 적용되지만 기본적으로 메모리에만 남는다.
+// save 명령을 쓰면 플래시(NVS)에 저장되어 전원을 껐다 켜도 유지되고,
+// factory 명령으로 코드에 적힌 기본값으로 되돌릴 수 있다.
+// =====================
+#define CMD_UDP_PORT 4300
+#define TUNING_NVS_NAMESPACE "v2xtune"
+
+WiFiUDP cmdUdp;
+bool cmdUdpStarted = false;
+IPAddress cmdReplyIp;
+uint16_t cmdReplyPort = 0;
+Preferences tuningPrefs;
+
+enum TuningValueType {
+  TUNING_FLOAT,
+  TUNING_UINT32
+};
+
+typedef struct {
+  const char *name;      // 명령 이름 (NVS 키로도 사용, 15자 이내)
+  void *pointer;         // 실제 설정 변수
+  uint8_t type;
+  float minValue;
+  float maxValue;
+  const char *unit;      // 응답에 붙일 단위
+  const char *note;      // help에 표시할 설명
+} TuningParam;
+
+TuningParam tuningParams[] = {
+  {"alpha", &cfgGpsFilterAlpha, TUNING_FLOAT, 0.01f, 1.0f, "",
+   "위치 보정 세기(클수록 원시GPS를 빨리 추종)"},
+  {"beta", &cfgGpsFilterBeta, TUNING_FLOAT, 0.0f, 1.0f, "",
+   "속도 보정 세기"},
+  {"gate", &cfgGpsOutlierBaseM, TUNING_FLOAT, 0.5f, 50.0f, "m",
+   "이보다 크게 튀면 이상치로 버림"},
+  {"hdop", &cfgGpsMaxHdop, TUNING_FLOAT, 0.5f, 99.0f, "",
+   "이보다 나쁜 HDOP은 품질 거부"},
+  {"sats", &cfgGpsMinSatellites, TUNING_UINT32, 0.0f, 20.0f, "개",
+   "최소 위성 수"},
+  {"predict", &cfgGpsPredictionMaxMs, TUNING_UINT32, 0.0f, 5000.0f, "ms",
+   "fix 없을 때 예측 최대시간"},
+  {"fixage", &cfgGpsFixMaxAgeMs, TUNING_UINT32, 500.0f, 10000.0f, "ms",
+   "이 시간 지난 fix는 무효"},
+  {"maxspeed", &cfgGpsMaxSpeed, TUNING_FLOAT, 0.5f, 60.0f, "m/s",
+   "차량 최대 속도 상한"},
+  {"statspeed", &cfgGpsStationarySpeed, TUNING_FLOAT, 0.0f, 5.0f, "m/s",
+   "이 속도 미만이면 정지로 간주"},
+  {"statalpha", &cfgGpsStationaryAlpha, TUNING_FLOAT, 0.0f, 1.0f, "",
+   "정지 중 위치 보정 세기"},
+  {"statbeta", &cfgGpsStationaryBeta, TUNING_FLOAT, 0.0f, 1.0f, "",
+   "정지 중 속도 보정 세기"},
+  {"headspeed", &cfgMinHeadingSpeed, TUNING_FLOAT, 0.0f, 5.0f, "m/s",
+   "GPS 방향을 믿을 최소 속도"},
+  {"danger", &cfgCpaDangerM, TUNING_FLOAT, 0.1f, 20.0f, "m",
+   "위험 판정 CPA 거리"},
+  {"warn", &cfgCpaWarningM, TUNING_FLOAT, 0.1f, 30.0f, "m",
+   "경고 판정 CPA 거리"},
+  {"caution", &cfgCpaCautionM, TUNING_FLOAT, 0.1f, 40.0f, "m",
+   "주의 판정 CPA 거리"},
+  {"horizon", &cfgCpaHorizonS, TUNING_FLOAT, 0.5f, 30.0f, "s",
+   "CPA 예측 시간창"},
+  {"emergency", &cfgEmergencyM, TUNING_FLOAT, 0.0f, 10.0f, "m",
+   "방향 무관 즉시 위험 거리"},
+  {"vspeed", &cfgMinPredictVehicleSpeed, TUNING_FLOAT, 0.0f, 10.0f, "m/s",
+   "CPA 계산 최소 차량속도"},
+  {"cspeed", &cfgMinPredictCaneSpeed, TUNING_FLOAT, 0.0f, 10.0f, "m/s",
+   "CPA 계산 최소 지팡이속도"},
+  {"closing", &cfgMinClosingSpeed, TUNING_FLOAT, 0.0f, 10.0f, "m/s",
+   "최소 접근속도"},
+  {"cone", &cfgApproachConeDeg, TUNING_FLOAT, 5.0f, 180.0f, "도",
+   "정면접근 인정 반각"},
+  {"fwdcone", &cfgForwardConeDeg, TUNING_FLOAT, 5.0f, 180.0f, "도",
+   "전방 판정 반각"},
+  {"escalate", &cfgRiskEscalateCount, TUNING_UINT32, 1.0f, 50.0f, "회",
+   "위험 상승 확정 횟수"},
+  {"clearcnt", &cfgRiskClearCount, TUNING_UINT32, 1.0f, 100.0f, "회",
+   "위험 해제 확정 횟수"},
+  {"rssigate", &cfgRssiGateDbm, TUNING_FLOAT, -100.0f, -30.0f, "dBm",
+   "이보다 약하면 근거리 보조판정 제외"},
+  {"rssialpha", &cfgRssiAlpha, TUNING_FLOAT, 0.01f, 1.0f, "",
+   "RSSI 평활 계수"},
+  {"impact", &cfgImpactThreshold, TUNING_FLOAT, 5.0f, 300.0f, "m/s2",
+   "충격 감지 임계값"},
+  {"vol", &cfgDfplayerVolume, TUNING_UINT32, 0.0f, 30.0f, "",
+   "스피커 음량 (즉시 반영)"},
+  {"rate", &cfgTelemetryIntervalMs, TUNING_UINT32, 20.0f, 5000.0f, "ms",
+   "뷰어 로그 전송 주기"},
+};
+
+const size_t tuningParamCount =
+  sizeof(tuningParams) / sizeof(tuningParams[0]);
+
+// 부팅 직후 기본값을 기억해 두고 factory 명령에서 사용한다.
+float tuningDefaults[sizeof(tuningParams) / sizeof(tuningParams[0])];
+
+void cmdReply(const char *format, ...) {
+  char message[200];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+
+  Serial.print("[CMD] ");
+  Serial.println(message);
+
+#if USE_WEB_VIEWER
+  webLogReply("[CMD] ", message);
+#endif
+
+  if (cmdReplyPort == 0 || !cmdUdpStarted) return;
+
+  char line[220];
+  int written = snprintf(line, sizeof(line), "[CMD] %s\n", message);
+  if (written <= 0) return;
+
+  size_t length = written < (int)sizeof(line)
+                    ? (size_t)written
+                    : sizeof(line) - 1;
+
+  if (cmdUdp.beginPacket(cmdReplyIp, cmdReplyPort)) {
+    cmdUdp.write((const uint8_t *)line, length);
+    cmdUdp.endPacket();
+  }
+}
+
+float readTuningValue(size_t index) {
+  if (tuningParams[index].type == TUNING_UINT32) {
+    return (float)(*(uint32_t *)tuningParams[index].pointer);
+  }
+  return *(float *)tuningParams[index].pointer;
+}
+
+void writeTuningValue(size_t index, float value) {
+  float clamped = constrain(value,
+                            tuningParams[index].minValue,
+                            tuningParams[index].maxValue);
+  if (tuningParams[index].type == TUNING_UINT32) {
+    *(uint32_t *)tuningParams[index].pointer = (uint32_t)(clamped + 0.5f);
+  } else {
+    *(float *)tuningParams[index].pointer = clamped;
+  }
+}
+
+int findTuningParam(const String &name) {
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    if (name.equals(tuningParams[i].name)) return (int)i;
+  }
+  return -1;
+}
+
+void captureTuningDefaults() {
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    tuningDefaults[i] = readTuningValue(i);
+  }
+}
+
+// 플래시에 저장된 값이 있으면 덮어쓴다. 부팅 시 한 번 호출한다.
+void loadTuningFromFlash() {
+  if (!tuningPrefs.begin(TUNING_NVS_NAMESPACE, true)) return;
+
+  uint16_t restored = 0;
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    if (!tuningPrefs.isKey(tuningParams[i].name)) continue;
+    float saved = tuningPrefs.getFloat(tuningParams[i].name,
+                                       tuningDefaults[i]);
+    writeTuningValue(i, saved);
+    restored++;
+  }
+  tuningPrefs.end();
+
+  if (restored > 0) {
+    Serial.printf("[CMD] 플래시에서 저장된 설정 %u개 복원\n",
+                  (unsigned)restored);
+  }
+}
+
+void saveTuningToFlash() {
+  if (!tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+    cmdReply("저장 실패: 플래시를 열 수 없다");
+    return;
+  }
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    tuningPrefs.putFloat(tuningParams[i].name, readTuningValue(i));
+  }
+  tuningPrefs.end();
+  cmdReply("현재 설정 %u개를 플래시에 저장 (전원 껐다 켜도 유지)",
+           (unsigned)tuningParamCount);
+}
+
+void restoreTuningDefaults() {
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    writeTuningValue(i, tuningDefaults[i]);
+  }
+  if (tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+    tuningPrefs.clear();
+    tuningPrefs.end();
+  }
+  cmdReply("코드에 적힌 기본값으로 되돌리고 플래시 저장분도 삭제");
+}
+
+void reportTuningValue(size_t index) {
+  if (tuningParams[index].type == TUNING_UINT32) {
+    cmdReply("%s = %lu%s", tuningParams[index].name,
+             (unsigned long)(*(uint32_t *)tuningParams[index].pointer),
+             tuningParams[index].unit);
+  } else {
+    cmdReply("%s = %.3f%s", tuningParams[index].name,
+             *(float *)tuningParams[index].pointer,
+             tuningParams[index].unit);
+  }
+}
+
+void reportAllTuningValues() {
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    reportTuningValue(i);
+  }
+}
+
+void reportTuningHelp() {
+  cmdReply("== 공통 명령 ==");
+  cmdReply("get / save / load / factory / reset / help");
+  cmdReply("== 값 변경: <이름> <숫자> ==");
+  for (size_t i = 0; i < tuningParamCount; i++) {
+    cmdReply("%-11s %.3f~%.3f%s  %s", tuningParams[i].name,
+             tuningParams[i].minValue, tuningParams[i].maxValue,
+             tuningParams[i].unit, tuningParams[i].note);
+  }
+  cmdReply("== 차량 전용 ==");
+  cmdReply("play <1-4>  음성 테스트 "
+           "(1주의 2경고 3위험 4충격)");
+  cmdReply("cal         GPS 상대좌표 영점 보정 시작");
+}
+
+void runTuningCommand(String line) {
+  line.trim();
+  if (line.length() == 0) return;
+  // 다른 노드의 응답이 되돌아온 경우는 명령으로 해석하지 않는다.
+  if (line.startsWith("[CMD]") || line.startsWith(">")) return;
+
+  String name = line;
+  String value = "";
+  int space = line.indexOf(' ');
+  if (space > 0) {
+    name = line.substring(0, space);
+    value = line.substring(space + 1);
+    value.trim();
+  }
+  name.toLowerCase();
+
+  bool hasValue = value.length() > 0;
+  float number = hasValue ? value.toFloat() : 0.0f;
+
+  if (name == "help") { reportTuningHelp(); return; }
+  if (name == "get") { reportAllTuningValues(); return; }
+  if (name == "save") { saveTuningToFlash(); return; }
+  if (name == "load") { loadTuningFromFlash(); reportAllTuningValues(); return; }
+  if (name == "factory") { restoreTuningDefaults(); return; }
+
+  if (name == "reset") {
+    gpsFilter.initialized = false;
+    gpsFilter.consecutiveOutliers = 0;
+    gpsFilter.hasRelocationCandidate = false;
+    cmdReply("GPS 필터 기준점 초기화");
+    return;
+  }
+
+  if (runDeviceCommand(name, hasValue, number)) return;
+
+  int index = findTuningParam(name);
+  if (index < 0) {
+    cmdReply("알 수 없는 명령: %s (help 입력)", name.c_str());
+    return;
+  }
+
+  if (!hasValue) {
+    reportTuningValue((size_t)index);
+    return;
+  }
+
+  writeTuningValue((size_t)index, number);
+  reportTuningValue((size_t)index);
+}
+
+void handleUdpCommands() {
+  if (!cmdUdpStarted) {
+
+    if (cmdUdp.begin(CMD_UDP_PORT)) {
+      cmdUdpStarted = true;
+      Serial.printf("[CMD] UDP 명령 대기 포트=%u\n", (unsigned)CMD_UDP_PORT);
+    }
+    return;
+  }
+
+  for (int size = cmdUdp.parsePacket(); size > 0; size = cmdUdp.parsePacket()) {
+    char buffer[160];
+    int length = cmdUdp.read(buffer, sizeof(buffer) - 1);
+    if (length < 0) length = 0;
+    buffer[length] = '\0';
+
+    cmdReplyIp = cmdUdp.remoteIP();
+    cmdReplyPort = cmdUdp.remotePort();
+
+    // 한 패킷에 여러 줄이 들어올 수 있으므로 줄 단위로 처리한다.
+    char *context = NULL;
+    for (char *token = strtok_r(buffer, "\r\n", &context);
+         token != NULL;
+         token = strtok_r(NULL, "\r\n", &context)) {
+      runTuningCommand(String(token));
+    }
+  }
+}
+
+void readSerialCommandLines() {
+  static char serialBuffer[140];
+  static size_t serialLength = 0;
+
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+
+    if (c == '\r') continue;
+
+    if (c == '\n') {
+      serialBuffer[serialLength] = '\0';
+      if (serialLength > 0) {
+        cmdReplyPort = 0;  // USB로 들어온 명령의 응답은 시리얼로만 보낸다.
+        runTuningCommand(String(serialBuffer));
+      }
+      serialLength = 0;
+      continue;
+    }
+
+    if (serialLength < sizeof(serialBuffer) - 1) {
+      serialBuffer[serialLength++] = c;
+    } else {
+      serialLength = 0;  // 너무 긴 입력은 버린다.
+    }
+  }
+}
+
 void handleVehicleSerialCommands() {
   static bool previousButtonPressed = false;
   static uint32_t lastButtonEventMs = 0;
@@ -1089,31 +1892,7 @@ void handleVehicleSerialCommands() {
   }
   previousButtonPressed = buttonPressed;
 
-  while (Serial.available() > 0) {
-    char command = (char)Serial.read();
-    if (command == 'C' || command == 'c') {
-      startRelativeGpsCalibration();
-    }
-    else if (command == '1') {
-      playAudioFile(TRACK_CAUTION_FILE);
-      riskAudioPlayCount++;
-      lastPlayedRiskAudio = RISK_CAUTION;
-    }
-    else if (command == '2') {
-      playAudioFile(TRACK_WARNING_FILE);
-      riskAudioPlayCount++;
-      lastPlayedRiskAudio = RISK_WARNING;
-    }
-    else if (command == '3') {
-      playAudioFile(TRACK_DANGER_FILE);
-      riskAudioPlayCount++;
-      lastPlayedRiskAudio = RISK_DANGER;
-    }
-    else if (command == '4') {
-      playAudioFile(TRACK_IMPACT_FILE);
-      impactAudioPlayCount++;
-    }
-  }
+  readSerialCommandLines();
 }
 
 // =====================
@@ -1147,7 +1926,7 @@ void initializeDfPlayer() {
   snprintf(volumeCommand,
            sizeof(volumeCommand),
            "AT+VOL=%u",
-           (unsigned int)constrain(DFPLAYER_VOLUME, 0, 30));
+           (unsigned int)constrain(cfgDfplayerVolume, 0, 30));
 // 재생 모드 설정
 sendDfPlayerAtCommand("AT+PLAYMODE=3");
 delay(200);
@@ -1478,7 +2257,7 @@ void updateVehiclePathHeading() {
   if (usingDemoGps) return;
 
   uint32_t now = millis();
-  bool moving = vehicleSpeed >= MIN_VALID_HEADING_SPEED_MPS;
+  bool moving = vehicleSpeed >= cfgMinHeadingSpeed;
   bool gpsHeadingFresh =
     gpsMotionHeadingHasFix &&
     lastGpsMotionHeadingMs > 0 &&
@@ -1792,7 +2571,7 @@ void readGps() {
     bool speedOk =
       gps.speed.isValid() &&
       rawSpeed >= 0.0f &&
-      rawSpeed <= GPS_NODE_MAX_SPEED_MPS;
+      rawSpeed <= cfgGpsMaxSpeed;
     bool courseOk = rawGpsCourseValid;
     bool velocityOk = speedOk && courseOk;
 
@@ -1824,7 +2603,7 @@ void readGps() {
         // GPS course는 차체 전방이 아니라 실제 이동 경로다.
         // 따라서 후진과 완벽하지 않은 직선 주행도 그대로 반영한다.
         if (courseOk &&
-            rawSpeed >= MIN_VALID_HEADING_SPEED_MPS) {
+            rawSpeed >= cfgMinHeadingSpeed) {
           float rawHeading = rawGpsCourseDeg;
           bool previousCourseFresh =
             gpsMotionHeadingHasFix &&
@@ -1845,7 +2624,7 @@ void readGps() {
   }
 
   if (gpsFilter.initialized &&
-      now - gpsFilter.lastFixMs <= GPS_FIX_MAX_AGE_MS) {
+      now - gpsFilter.lastFixMs <= cfgGpsFixMaxAgeMs) {
     projectGpsPosition(now, &vehicleLat, &vehicleLng);
     vehicleGpsValid = 1;
     usingDemoGps = false;
@@ -1943,7 +2722,7 @@ void readImu() {
     lastImpactMs == 0 ||
     now - lastImpactMs >= IMPACT_COOLDOWN_MS;
 
-  if (cooldownDone && linearAccelMagnitude >= IMPACT_THRESHOLD_MPS2) {
+  if (cooldownDone && linearAccelMagnitude >= cfgImpactThreshold) {
     lastImpactMs = now;
     lastImpactTriggerMagnitude = linearAccelMagnitude;
     lastImpactTriggerAtMs = now;
@@ -2016,9 +2795,9 @@ float angleDifferenceDegrees(float headingDeg,
 
 bool isCaneInVehiclePath(float headingErrorDeg) {
   if (!vehicleHeadingValid) return false;
-  if (vehicleSpeed < MIN_VALID_HEADING_SPEED_MPS) return false;
+  if (vehicleSpeed < cfgMinHeadingSpeed) return false;
 
-  return fabsf(headingErrorDeg) <= FORWARD_CONE_HALF_ANGLE_DEG;
+  return fabsf(headingErrorDeg) <= cfgForwardConeDeg;
 }
 
 void resetAllCaneRiskStates() {
@@ -2090,8 +2869,8 @@ uint8_t stabilizeRiskLevel(uint8_t rawRisk) {
 
   uint8_t requiredCount =
     rawRisk > stableRiskLevel
-      ? RISK_ESCALATE_CONFIRM_COUNT
-      : RISK_CLEAR_CONFIRM_COUNT;
+      ? cfgRiskEscalateCount
+      : cfgRiskClearCount;
 
   if (candidateRiskCount >= requiredCount) {
     stableRiskLevel = rawRisk;
@@ -2155,24 +2934,24 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   // 먼 거리 RSSI에서는 독립 GPS 두 대의 순간 상대오차만으로 경보하지 않는다.
   // 05-2 평행 로그의 GPS가 실제 약 4m를 0.9m로 오인했지만 RSSI는
   // -72dBm보다 약했으므로 이 게이트에서 제거된다.
-  if (filteredCaneRssiDbm < RISK_RSSI_GATE_DBM) {
+  if (filteredCaneRssiDbm < cfgRssiGateDbm) {
     return RISK_SAFE;
   }
 
-  if (distanceM < EMERGENCY_DISTANCE_M) {
+  if (distanceM < cfgEmergencyM) {
     *outInVehiclePath = true;
     return RISK_DANGER;
   }
 
   bool vehicleMoving =
     vehicleHeadingValid &&
-    vehicleSpeed >= MIN_PREDICT_VEHICLE_SPEED_MPS;
+    vehicleSpeed >= cfgMinPredictVehicleSpeed;
   if (!vehicleMoving) return RISK_SAFE;
 
   bool frontalRssiApproach =
     vehicleDriveModeKnown &&
     !vehicleIsReversing &&
-    fabsf(headingError) <= DIRECT_APPROACH_CONE_HALF_ANGLE_DEG;
+    fabsf(headingError) <= cfgApproachConeDeg;
   if (frontalRssiApproach) {
     *outInVehiclePath = true;
   }
@@ -2183,7 +2962,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
 
   bool caneMoving =
     cane.heading_valid &&
-    cane.speed_mps >= MIN_PREDICT_CANE_SPEED_MPS;
+    cane.speed_mps >= cfgMinPredictCaneSpeed;
 
   float caneVx = 0.0f;
   float caneVy = 0.0f;
@@ -2207,9 +2986,9 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
 
   *outClosingSpeed = closingSpeed;
 
-  if (closingSpeed < MIN_RADIAL_CLOSING_SPEED_MPS ||
+  if (closingSpeed < cfgMinClosingSpeed ||
       tCpa <= 0.0f ||
-      tCpa > CPA_PREDICTION_HORIZON_S) {
+      tCpa > cfgCpaHorizonS) {
     return frontalRssiApproach ? RISK_CAUTION : RISK_SAFE;
   }
 
@@ -2218,19 +2997,19 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   float dCpa = sqrtf(closestX * closestX + closestY * closestY);
 
   *outTtc = tCpa;
-  *outInVehiclePath = dCpa <= CPA_CAUTION_DISTANCE_M;
+  *outInVehiclePath = dCpa <= cfgCpaCautionM;
 
-  if (dCpa <= CPA_DANGER_DISTANCE_M &&
+  if (dCpa <= cfgCpaDangerM &&
       tCpa <= RISK_DANGER_TTC_S) {
     return RISK_DANGER;
   }
 
-  if (dCpa <= CPA_WARNING_DISTANCE_M &&
+  if (dCpa <= cfgCpaWarningM &&
       tCpa <= RISK_WARNING_TTC_S) {
     return RISK_WARNING;
   }
 
-  if (dCpa <= CPA_CAUTION_DISTANCE_M &&
+  if (dCpa <= cfgCpaCautionM &&
       tCpa <= RISK_CAUTION_TTC_S) {
     return RISK_CAUTION;
   }
@@ -2337,14 +3116,65 @@ void handleRsuReply(const v2x_status_message_t &message) {
                 message.seq_num);
   return;
 #endif
+  if (message.risk_level > RISK_DANGER) return;
+  lastRsuRiskRxMs = millis();
+  rsuRiskRxCount++;
   lastRiskLevel = message.risk_level;
   announceRisk(lastRiskLevel);
-  Serial.printf("[RSU RX] risk=%u seq=%u\n",
+  Serial.printf("[RSU RX LEGACY] risk=%u seq=%u\n",
                 message.risk_level,
                 message.seq_num);
 }
 
+bool isRiskForThisVehicle(uint32_t targetId) {
+  return targetId == 0 ||
+         targetId == vehicleId ||
+         targetId == 0xFFFFFFFFUL;
+}
+
+void handleRsuRiskAlert(const v2x_risk_message_t &message) {
+#if !ENABLE_RSU_RISK_INPUT
+  Serial.printf("[RSU RISK RX] ignored risk=%u seq=%u\n",
+                message.risk_level,
+                message.seq_num);
+  return;
+#endif
+  if (!isRiskForThisVehicle(message.target_id) ||
+      message.risk_level > RISK_DANGER) {
+    return;
+  }
+
+  lastRsuRiskRxMs = millis();
+  rsuRiskRxCount++;
+  lastRiskLevel = message.risk_level;
+  announceRisk(lastRiskLevel);
+
+  Serial.printf(
+    "[RSU RISK RX] risk=%u target=%lu src=%lu "
+    "distance=%.2f closing=%.2f ttc=%.2f seq=%u\n",
+    message.risk_level,
+    (unsigned long)message.target_id,
+    (unsigned long)message.src_id,
+    message.distance_m,
+    message.closing_speed_mps,
+    message.ttc_s,
+    message.seq_num
+  );
+}
+
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (len == sizeof(v2x_risk_message_t)) {
+    v2x_risk_message_t riskMessage;
+    memcpy(&riskMessage, data, sizeof(riskMessage));
+    if (riskMessage.magic == V2X_MAGIC &&
+        riskMessage.version == V2X_VERSION &&
+        riskMessage.msg_type == MSG_RISK_ALERT &&
+        riskMessage.node_type == NODE_RSU) {
+      handleRsuRiskAlert(riskMessage);
+    }
+    return;
+  }
+
   if (len != sizeof(v2x_status_message_t)) return;
 
   v2x_status_message_t message;
@@ -2380,8 +3210,8 @@ void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
       hasCaneRssi = true;
     } else {
       filteredCaneRssiDbm =
-        CANE_RSSI_FILTER_ALPHA * (float)receivedRssiDbm +
-        (1.0f - CANE_RSSI_FILTER_ALPHA) * filteredCaneRssiDbm;
+        cfgRssiAlpha * (float)receivedRssiDbm +
+        (1.0f - cfgRssiAlpha) * filteredCaneRssiDbm;
     }
 
     caneRssiSampleCount++;
@@ -2457,8 +3287,10 @@ void processLatestCanePacket() {
     lastCalculatedHeadingErrorDeg = 0.0f;
     lastCalculatedInPath = false;
 
+#if !ENABLE_RSU_RISK_INPUT
     lastRiskLevel = RISK_SAFE;
     announceRisk(RISK_SAFE);
+#endif
 
     // GPS가 끊겼다가 다시 잡혔을 때 오래된 거리 기록으로
     // 잘못된 TTC가 계산되지 않도록 초기화한다.
@@ -2503,8 +3335,10 @@ void processLatestCanePacket() {
   lastCalculatedHeadingErrorDeg = headingError;
   lastCalculatedInPath = inVehiclePath;
 
+#if !ENABLE_RSU_RISK_INPUT
   lastRiskLevel = risk;
   announceRisk(risk);
+#endif
 
   sendRiskAlertToCane(
     risk,
@@ -2556,13 +3390,30 @@ void resetStaleCaneRisk() {
   candidateRiskLevel = RISK_SAFE;
   candidateRiskCount = 0;
 
+#if !ENABLE_RSU_RISK_INPUT
   lastRiskLevel = RISK_SAFE;
   announceRisk(RISK_SAFE);
+#endif
 
   // 기존 거리 및 접근속도 기록을 모두 초기화.
   resetAllCaneRiskStates();
 
   Serial.println("[CANE] timeout -> risk reset");
+}
+
+void resetStaleRsuRisk() {
+#if ENABLE_RSU_RISK_INPUT
+  uint32_t receivedMs = lastRsuRiskRxMs;
+  if (receivedMs == 0 ||
+      millis() - receivedMs <= RSU_RISK_TIMEOUT_MS) {
+    return;
+  }
+
+  lastRsuRiskRxMs = 0;
+  lastRiskLevel = RISK_SAFE;
+  announceRisk(RISK_SAFE);
+  Serial.println("[RSU RISK] timeout -> SAFE");
+#endif
 }
 
 void logSensors() {
@@ -2763,6 +3614,11 @@ void sendUdpTelemetry() {
       ? (size_t)written
       : sizeof(udpBuffer) - 1;
 
+#if USE_WEB_VIEWER
+  strlcpy(webCarTelemetry, udpBuffer, sizeof(webCarTelemetry));
+  webCarUpdatedMs = millis();
+#endif
+
   if (!logUdp.beginPacket(
         udpBroadcastAddress,
         VEHICLE_UDP_PORT
@@ -2784,6 +3640,156 @@ void sendUdpTelemetry() {
 // =====================
 // Arduino setup / loop
 // =====================
+#if USE_WEB_VIEWER
+// 웹 화면 하단에 표시할 응답을 모아 둔다. 가득 차면 앞쪽 절반을 버린다.
+void webLogReply(const char *prefix, const char *message) {
+  size_t used = strlen(webReplyBuffer);
+  size_t need = strlen(prefix) + strlen(message) + 2;
+
+  if (used + need >= sizeof(webReplyBuffer)) {
+    size_t drop = sizeof(webReplyBuffer) / 2;
+    if (drop < used) {
+      memmove(webReplyBuffer, webReplyBuffer + drop, used - drop + 1);
+    } else {
+      webReplyBuffer[0] = '\0';
+    }
+  }
+
+  strlcat(webReplyBuffer, prefix, sizeof(webReplyBuffer));
+  strlcat(webReplyBuffer, message, sizeof(webReplyBuffer));
+  strlcat(webReplyBuffer, "\n", sizeof(webReplyBuffer));
+}
+
+void handleWebRoot() {
+  webServer.send_P(200, "text/html; charset=utf-8", WEB_PAGE);
+}
+
+// 애플/안드로이드 기기의 인터넷 확인 요청에 정상 응답을 돌려준다.
+void handleCaptiveCheck() {
+  webServer.send(200, "text/html",
+                 "<HTML><HEAD><TITLE>Success</TITLE></HEAD>"
+                 "<BODY>Success</BODY></HTML>");
+}
+
+void handleWebData() {
+  uint32_t now = millis();
+  long carAge = webCarUpdatedMs == 0 ? -1L : (long)(now - webCarUpdatedMs);
+  long caneAge = webCaneUpdatedMs == 0 ? -1L : (long)(now - webCaneUpdatedMs);
+
+  String out;
+  out.reserve(3200);
+  out += "###META\ncarAge:";
+  out += carAge;
+  out += "\ncaneAge:";
+  out += caneAge;
+  out += "\n###CAR\n";
+  out += webCarTelemetry;
+  out += "\n###CANE\n";
+  out += webCaneTelemetry;
+  out += "\n###REPLY\n";
+  out += webReplyBuffer;
+
+  // 한 번 보낸 응답은 비워서 같은 줄이 반복 표시되지 않게 한다.
+  webReplyBuffer[0] = '\0';
+
+  webServer.send(200, "text/plain; charset=utf-8", out);
+}
+
+void handleWebCmd() {
+  String target = webServer.arg("target");
+  String text = webServer.arg("text");
+  text.trim();
+
+  if (text.length() == 0) {
+    webServer.send(200, "text/plain", "empty");
+    return;
+  }
+
+  if (target == "cane") {
+    if (!caneNodeIpKnown) {
+      webLogReply("[지팡이] ", "아직 지팡이 로그를 받지 못해 주소를 모른다");
+    } else {
+      String line = text + "\n";
+      if (caneCmdUdp.beginPacket(caneNodeIp, CMD_UDP_PORT)) {
+        caneCmdUdp.write((const uint8_t *)line.c_str(), line.length());
+        caneCmdUdp.endPacket();
+      }
+    }
+  } else {
+    cmdReplyPort = 0;  // 응답은 시리얼과 웹 버퍼로만 보낸다.
+    runTuningCommand(text);
+  }
+
+  webServer.send(200, "text/plain", "ok");
+}
+
+// 지팡이가 브로드캐스트한 텔레메트리를 받아 웹 화면용으로 저장한다.
+void pollCaneTelemetry() {
+  for (int size = caneLogUdp.parsePacket(); size > 0;
+       size = caneLogUdp.parsePacket()) {
+    int length = caneLogUdp.read(webCaneTelemetry,
+                                 sizeof(webCaneTelemetry) - 1);
+    if (length < 0) length = 0;
+    webCaneTelemetry[length] = '\0';
+
+    if (!caneNodeIpKnown) {
+      Serial.print("[WEB] 지팡이 로그 수신 시작: ");
+      Serial.println(caneLogUdp.remoteIP());
+    }
+
+    caneNodeIp = caneLogUdp.remoteIP();
+    caneNodeIpKnown = true;
+    webCaneUpdatedMs = millis();
+  }
+}
+
+// 지팡이에게 보낸 명령의 응답을 받아 웹 화면에 표시한다.
+void pollCaneCommandReplies() {
+  for (int size = caneCmdUdp.parsePacket(); size > 0;
+       size = caneCmdUdp.parsePacket()) {
+    char buffer[240];
+    int length = caneCmdUdp.read(buffer, sizeof(buffer) - 1);
+    if (length < 0) length = 0;
+    buffer[length] = '\0';
+
+    char *context = NULL;
+    for (char *token = strtok_r(buffer, "\r\n", &context);
+         token != NULL;
+         token = strtok_r(NULL, "\r\n", &context)) {
+      webLogReply("[지팡이] ", token);
+      Serial.printf("[CANE CMD] %s\n", token);
+    }
+  }
+}
+
+void setupWebViewer() {
+  webServer.on("/", handleWebRoot);
+  webServer.on("/data", handleWebData);
+  webServer.on("/cmd", handleWebCmd);
+
+  // iOS/맥은 와이파이에 붙으면 인터넷 확인용 주소를 먼저 찔러본다.
+  // 여기서 엉뚱한 페이지를 돌려주면 "로그인이 필요한 와이파이"로 오해해
+  // 로그인 창을 띄우거나 연결을 제한한다. 기대하는 Success 응답을 준다.
+  webServer.on("/hotspot-detect.html", handleCaptiveCheck);
+  webServer.on("/library/test/success.html", handleCaptiveCheck);
+  webServer.on("/generate_204", handleCaptiveCheck);   // 안드로이드용
+
+  // 그 밖의 주소는 페이지 대신 404를 돌려준다.
+  webServer.onNotFound([]() {
+    webServer.send(404, "text/plain", "not found");
+  });
+
+  webServer.begin();
+
+  caneLogUdp.begin(CANE_LOG_UDP_PORT);
+  caneCmdUdp.begin(CANE_CMD_REPLY_PORT);
+
+  Serial.print("[WEB] 아이패드에서 V2X-LOG 접속 후 http://");
+  Serial.print(WiFi.softAPIP());
+  Serial.println(" 열기");
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -2792,11 +3798,14 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
   pinMode(REL_CAL_BUTTON_PIN, INPUT_PULLUP);
 
+  captureTuningDefaults();
+  loadTuningFromFlash();
+
   Serial.println("\n=== V2X Vehicle + GPS + ICM-20948 + DFPlayer Pro ===");
   Serial.printf("[CONFIG] CPA distance: %.1f / %.1f / %.1f m\n",
-                (float)CPA_CAUTION_DISTANCE_M,
-                (float)CPA_WARNING_DISTANCE_M,
-                (float)CPA_DANGER_DISTANCE_M);
+                (float)cfgCpaCautionM,
+                (float)cfgCpaWarningM,
+                (float)cfgCpaDangerM);
 
   setupGps();
   setupImu();
@@ -2809,11 +3818,21 @@ void setup() {
   Serial.println("[BT] debug started: ESP32-Car");
 #endif
 
+#if USE_WEB_VIEWER
+  setupWebViewer();
+#endif
+
   Serial.println("[VEHICLE] system ready");
 }
 
 void loop() {
   handleVehicleSerialCommands();
+  handleUdpCommands();
+#if USE_WEB_VIEWER
+  webServer.handleClient();
+  pollCaneTelemetry();
+  pollCaneCommandReplies();
+#endif
   readGps();
   recoverGps5HzIfNeeded();
   readImu();
@@ -2821,6 +3840,7 @@ void loop() {
   updateDfPlayer();
   processLatestCanePacket();
   resetStaleCaneRisk();
+  resetStaleRsuRisk();
   logSensors();
 
 uint32_t now = millis();
@@ -2831,7 +3851,7 @@ if (now - lastSendMs >= SEND_INTERVAL_MS) {
 }
 
   // 차량 로그는 1초마다 UDP 4211로 전송
-if (now - lastUdpTelemetryMs >= UDP_TELEMETRY_INTERVAL_MS) {
+if (now - lastUdpTelemetryMs >= cfgTelemetryIntervalMs) {
   lastUdpTelemetryMs = now;
   sendUdpTelemetry();
 }
