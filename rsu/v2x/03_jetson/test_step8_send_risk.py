@@ -12,7 +12,33 @@ from step8_send_risk import (
     TxDecision,
     csv_row,
     format_tx,
+    _run,
 )
+
+
+class HotLoopSurvivesRowErrorsTest(unittest.TestCase):
+    """한 줄 처리가 실패해도 경보 루프가 계속 돌아야 한다(루프 사망 = 미탐)."""
+
+    def test_a_failing_line_does_not_kill_the_loop(self):
+        seen = []
+
+        class FlakySender:
+            def process_line(self, line, source_mode):
+                seen.append(line)
+                if line == "boom":
+                    raise RuntimeError("serial write failed")
+
+        _run(FlakySender(), ["a", "boom", "b"], "real", vehicle=None)
+        # boom 에서 죽지 않고 그 뒤 "b" 까지 처리했어야 한다.
+        self.assertEqual(seen, ["a", "boom", "b"])
+
+    def test_keyboard_interrupt_still_stops(self):
+        class StopSender:
+            def process_line(self, line, source_mode):
+                raise KeyboardInterrupt
+
+        # KeyboardInterrupt 는 삼키지 않고 정상 종료로 빠져나와야 한다(예외 전파 X).
+        _run(StopSender(), ["x"], "real", vehicle=None)
 
 
 class OnChangeAndHeartbeatTest(unittest.TestCase):

@@ -467,8 +467,15 @@ def main():
         args.live_port, on_message=lambda text: print(text, file=sys.stderr)
     )
 
-    model_gate = (ModelGate() if args.no_model
-                  else ModelGate.load(args.model))
+    # 모델 파일이 손상돼도 엔진은 떠야 한다. 로드 실패 시 규칙만으로 동작한다
+    # (파일 부재는 load 안에서 이미 규칙 폴백; 여기선 파싱·형식 오류를 잡는다).
+    try:
+        model_gate = (ModelGate() if args.no_model
+                      else ModelGate.load(args.model))
+    except Exception as exc:  # noqa: BLE001 - 손상 모델이 경보 엔진을 못 죽이게
+        print(f"[WARN] model_load_failed error={exc!r} -> 규칙만으로 동작",
+              file=sys.stderr)
+        model_gate = ModelGate()
 
     vehicle = None
     if args.test_vehicle:
@@ -520,9 +527,17 @@ def _serial_lines(connection):
 def _run(sender, lines, source_mode, vehicle):
     try:
         for line in lines:
-            sender.process_line(line, source_mode)
-            if vehicle is not None:
-                inject_vehicle(vehicle, sender, source_mode, time.time())
+            # 한 줄 처리가 실패해도(시리얼 쓰기 오류·CSV append·계산 예외) 경보
+            # 루프는 계속 돌아야 한다. 여기서 루프가 죽으면 그 자체가 미탐이다.
+            # 그래서 한 줄의 예외는 로그만 남기고 다음 줄로 넘어간다.
+            try:
+                sender.process_line(line, source_mode)
+                if vehicle is not None:
+                    inject_vehicle(vehicle, sender, source_mode, time.time())
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:  # noqa: BLE001 - 루프 생존이 우선
+                print(f"[WARN] process_failed error={exc!r}", file=sys.stderr)
     except KeyboardInterrupt:
         print("\n[INFO] stopped", file=sys.stderr)
 
