@@ -133,12 +133,19 @@ CSV_FIELDS = (
     "cane_speed_mps",
     "cane_heading_deg",
     "veh_gps_valid",
+    "veh_lat",
+    "veh_lng",
     "veh_speed_mps",
     "veh_heading_deg",
+    # 차량의 지팡이 기준 상대위치(로컬 ENU). 차량 1인칭 화면이 차량 GPS(veh_lat/lng
+    # 는 자주 무효)가 아니라 이 상대좌표를 heading 으로 회전해 보행자를 배치한다.
+    "rel_east_m",
+    "rel_north_m",
 )
 
 
-def csv_row(now, store, transmitter, decision, assessment, gate=None):
+def csv_row(now, store, transmitter, decision, assessment, gate=None,
+            kinematics=None):
     cane = store.latest["cane"]
     vehicle = store.latest["vehicle"]
     return {
@@ -168,8 +175,13 @@ def csv_row(now, store, transmitter, decision, assessment, gate=None):
         "cane_speed_mps": cane["speed_mps"],
         "cane_heading_deg": cane["heading_deg"],
         "veh_gps_valid": vehicle["gps_valid"],
+        # 차량은 GPS 픽스가 없을 때가 잦아 없으면 빈 값으로 둔다(화면이 상대좌표를 씀).
+        "veh_lat": vehicle.get("lat"),
+        "veh_lng": vehicle.get("lng"),
         "veh_speed_mps": vehicle["speed_mps"],
         "veh_heading_deg": vehicle["heading_deg"],
+        "rel_east_m": None if kinematics is None else round(kinematics.rel_east, 2),
+        "rel_north_m": None if kinematics is None else round(kinematics.rel_north, 2),
     }
 
 
@@ -311,7 +323,8 @@ class RiskSender:
         )
         append_row(
             self.csv_path,
-            csv_row(now, store, self.transmitter, decision, assessment, gate),
+            csv_row(now, store, self.transmitter, decision, assessment, gate,
+                    kinematics=filtered),
         )
 
 
