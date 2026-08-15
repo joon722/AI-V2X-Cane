@@ -45,8 +45,15 @@ METERS_PER_DEGREE_LAT = 111320.0
 D_CRIT_M = 2.0
 # 모델 검증에 쓸 만한 접근으로 볼 최소 차량 속도.
 FAST_MPS = 3.0
-# step7_risk.T_FLOOR_TTC_S와 같은 값. 이 아래면 하한이 발동한다.
-T_FLOOR_TTC_S = 2.0
+# 하한이 발동하는 TTC. 값을 복사해 두면 step7이 바뀔 때 조용히 갈라지므로
+# 정본에서 직접 읽는다. import가 실패해도 화면 도구가 죽으면 안 되니 대비값을 둔다.
+try:
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from step7_risk import T_FLOOR_TTC_S
+except ImportError:  # 03_jetson 밖에서 로그만 볼 때
+    T_FLOOR_TTC_S = 2.8
 # 근접 이벤트 목표치. EXPERIMENT_PLAN.md 기준.
 TARGET_EVENTS = 30
 # 이보다 큰 TTC는 숫자로 보여주지 않는다. 접근속도가 0에 가까우면 TTC가
@@ -68,20 +75,34 @@ def tail_lines(path, count):
         block = min(size, count * 300)
         handle.seek(size - block)
         text = handle.read().decode("utf-8", errors="replace")
-    return text.splitlines()[-count:]
+    lines = text.splitlines()
+    # 중간부터 읽었으면 첫 줄은 잘린 조각이다. 깨진 줄로 오해하지 않도록 버린다.
+    if block < size and lines:
+        lines = lines[1:]
+    return lines[-count:]
 
 
 def summarize(lines, now, window_s):
-    """최근 window_s 초 안의 줄만 종류별로 모은다."""
+    """최근 window_s 초 안의 줄만 종류별로 모은다.
+
+    깨진 줄도 센다. 보드레이트가 어긋나면 JSON이 아니라 쓰레기 바이트가
+    쏟아지는데(2026-08-08에 11분을 그렇게 날렸다), 조용히 건너뛰면 화면에는
+    "신호없음"으로만 보여서 브리지가 꺼진 것과 구분이 안 된다.
+    """
     nodes = {"cane": [], "vehicle": []}
     tx = []
+    good = bad = 0
     for line in lines:
         parts = line.split(" ", 2)
         if len(parts) < 3:
+            # 쓰레기 바이트에는 개행도 공백도 없어서 "시각 RX 본문" 꼴이 되지 않는다.
+            if line.strip():
+                bad += 1
             continue
         try:
             stamp = float(parts[0])
         except ValueError:
+            bad += 1
             continue
         if now - stamp > window_s:
             continue
@@ -91,10 +112,23 @@ def summarize(lines, now, window_s):
         try:
             record = json.loads(parts[2])
         except json.JSONDecodeError:
+            bad += 1
             continue
+        good += 1
         if record.get("type") in nodes:
             nodes[record["type"]].append(record)
-    return nodes, tx
+    return nodes, tx, good, bad
+
+
+def heading_rate(records):
+    """최근 창에서 heading_valid=1 비율.
+
+    차량은 GPS 진행방향이라 멈추면 0%가 정상이고, 지팡이는 IMU라 멈춰 있어도
+    나와야 한다. 그래서 이 값은 노드마다 다르게 읽어야 한다.
+    """
+    if not records:
+        return None
+    return sum(1 for r in records if str(r.get("heading_valid")) == "1") / len(records)
 
 
 def describe(label, records):
@@ -103,7 +137,10 @@ def describe(label, records):
     last = records[-1]
     rssi = sum(int(r.get("rssi", 0)) for r in records) / len(records)
     warn = " 약함!" if rssi < RSSI_WEAK else ""
-    return f"{label} {len(records):3d}건 gps={last.get('gps_valid')} rssi={rssi:.0f}{warn}"
+    head = heading_rate(records)
+    head_part = "방향 --" if head is None else f"방향{head*100:3.0f}%"
+    return (f"{label} {len(records):3d}건 gps={last.get('gps_valid')} "
+            f"{head_part} rssi={rssi:.0f}{warn}")
 
 
 def verdict(nodes):
@@ -121,16 +158,22 @@ def verdict(nodes):
     return "READY"
 
 
-def status_line(path, now, window_s):
-    nodes, tx = summarize(tail_lines(path, 400), now, window_s)
+def status_line(now, nodes, tx, good, bad):
     clock = time.strftime("%H:%M:%S", time.localtime(now))
     tx_part = f"TX {len(tx)}건"
     if tx:
         tx_part += f" {tx[-1]}"
+    # 깨진 줄이 섞이면 보드레이트 불일치나 브리지 부팅 루프다. 노드가 안 보이는
+    # 것과 원인이 전혀 다르므로 따로 띄운다.
+    broken = ""
+    if bad and bad > good:
+        broken = f" !!시리얼깨짐 {bad}줄 - 브리지 재부팅/보드레이트 확인"
+    elif bad:
+        broken = f" !깨진줄 {bad}"
     return (
         f"{clock} [{verdict(nodes)}] "
         f"{describe('지팡이', nodes['cane'])} | "
-        f"{describe('차량', nodes['vehicle'])} | {tx_part}"
+        f"{describe('차량', nodes['vehicle'])} | {tx_part}{broken}"
     )
 
 
@@ -304,8 +347,8 @@ def main():
     try:
         while True:
             now = time.time()
-            nodes, tx = summarize(tail_lines(path, 400), now, args.window_s)
-            print(status_line(path, now, args.window_s), flush=True)
+            nodes, tx, good, bad = summarize(tail_lines(path, 400), now, args.window_s)
+            print(status_line(now, nodes, tx, good, bad), flush=True)
             if not args.simple:
                 progress.feed(now, nodes, tx)
                 print(progress_line(progress), flush=True)

@@ -26,12 +26,19 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import live_server
 from step3_parse_v2x import SOURCE_MODES, normalize_record
 from step4_state_store import FRESH_WINDOW_S, StateStore, has_position
 from step5_test_vehicle import SPEED_MPS, START_DISTANCE_M, TestVehicle
 from step6_kinematics import KinematicsPipeline, to_float
 from model_gate import ModelGate
-from step7_risk import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, assess_risk
+from step7_risk import (
+    DCPA_FAR_M,
+    DCPA_FLOOR,
+    DCPA_NEAR_M,
+    T_FLOOR_TTC_S,
+    assess_risk,
+)
 from step8_stability import HOLD_S, LevelStabilizer
 
 
@@ -213,7 +220,7 @@ class RiskSender:
     """Scores each record and pushes the resulting level through the transmitter."""
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
-                 stabilizer=None, raw_log=None, model_gate=None):
+                 stabilizer=None, raw_log=None, model_gate=None, live_state=None):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
@@ -221,6 +228,8 @@ class RiskSender:
         self.gate_params = gate_params
         self.stabilizer = stabilizer
         self.raw_log = raw_log
+        # 화면용 최신 상태. None이면 화면 경로 자체가 없는 것과 같다.
+        self.live_state = live_state
         # 모델 판정은 규칙 위에 얹힌다(max). 게이트가 없거나 모델 파일이 없으면
         # 규칙만으로 이전과 똑같이 돈다.
         self.model_gate = model_gate or ModelGate()
@@ -271,6 +280,20 @@ class RiskSender:
         if self.stabilizer is not None:
             level = self.stabilizer.stabilize(level, now)
         decision = self.transmitter.consider(level, cane_gps_valid, now)
+        # 화면은 전송 여부와 무관하게 매 판정마다 갱신한다. 다운링크는 등급이
+        # 바뀌거나 heartbeat일 때만 나가지만 거리와 TTC는 그 사이에도 계속
+        # 변하고, 화면이 보여줘야 하는 것이 바로 그 변화다.
+        #
+        # 감싸는 이유: 화면은 곁가지고 경보가 본체다. 여기서 무슨 일이 나도
+        # 아래 다운링크까지 같이 죽으면 안 된다.
+        if self.live_state is not None:
+            try:
+                self.live_state.update(
+                    now, store, decision, assessment, filtered,
+                    gate=gate, target_id=self.transmitter.target_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - 경보를 지키는 쪽이 우선
+                print(f"[WARN] live_state_failed error={exc}", file=sys.stderr)
         if not decision.should_send:
             return
 
@@ -380,9 +403,24 @@ def parse_args():
         help=f"a lower level must persist this long before the alarm drops; "
         f"0 disables the hysteresis (default: {HOLD_S})",
     )
+    parser.add_argument(
+        "--live-port",
+        type=int,
+        default=live_server.DEFAULT_PORT,
+        help=f"차량뷰 화면을 내주는 포트. 0이면 화면을 끈다 "
+        f"(기본: {live_server.DEFAULT_PORT})",
+    )
     parser.add_argument("--dcpa-near-m", type=float, default=DCPA_NEAR_M)
     parser.add_argument("--dcpa-far-m", type=float, default=DCPA_FAR_M)
     parser.add_argument("--dcpa-floor", type=float, default=DCPA_FLOOR)
+    parser.add_argument(
+        "--floor-ttc-s",
+        type=float,
+        default=T_FLOOR_TTC_S,
+        help=f"TTC가 이 값 아래면 무조건 레벨 3. 0이면 하한을 끈다 "
+        f"(기본: {T_FLOOR_TTC_S}). 실험 중 같은 시나리오를 값만 바꿔 찍으면 "
+        f"하한이 실제로 몇 번 울리는지 비교할 수 있다",
+    )
     return parser.parse_args()
 
 
@@ -399,14 +437,21 @@ def main():
         "near_m": args.dcpa_near_m,
         "far_m": args.dcpa_far_m,
         "floor": args.dcpa_floor,
+        "floor_ttc_s": args.floor_ttc_s,
     }
     stabilizer = LevelStabilizer(hold_s=args.level_hold_s) if args.level_hold_s > 0 else None
     raw_log = RawLog(args.raw_log) if args.raw_log else None
     print(
         f"[INFO] source_mode={args.source_mode} csv={args.csv} target_id={args.target_id} "
         f"heartbeat_s={args.tx_heartbeat_s} tx_untrusted={args.tx_untrusted} "
-        f"level_hold_s={args.level_hold_s} raw_log={args.raw_log}",
+        f"level_hold_s={args.level_hold_s} floor_ttc_s={args.floor_ttc_s} "
+        f"raw_log={args.raw_log} live_port={args.live_port}",
         file=sys.stderr,
+    )
+
+    # 화면 서버. 못 띄워도 None이 돌아올 뿐이고 경보는 그대로 나간다.
+    live_state = live_server.start_or_none(
+        args.live_port, on_message=lambda text: print(text, file=sys.stderr)
     )
 
     model_gate = (ModelGate() if args.no_model
@@ -426,6 +471,7 @@ def main():
         sender = RiskSender(
             pipeline, transmitter, stdout_transport, args.csv, gate_params,
             stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
+            live_state=live_state,
         )
         _run(sender, sys.stdin, args.source_mode, vehicle)
         if raw_log is not None:
@@ -443,6 +489,7 @@ def main():
         sender = RiskSender(
             pipeline, transmitter, serial_transport(connection), args.csv, gate_params,
             stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
+            live_state=live_state,
         )
         _run(sender, _serial_lines(connection), args.source_mode, vehicle)
 

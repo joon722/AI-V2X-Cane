@@ -2,6 +2,7 @@
 
 네트워크 없이 가짜 sender로 선별·스로틀·오프셋 재개 로직을 검증한다.
 """
+import io
 import sys
 from pathlib import Path
 
@@ -185,6 +186,51 @@ def test_send_failure_keeps_offset_for_retry(tmp_path):
     ]
 
 
+def test_server_rejection_does_not_block_following_rows(tmp_path):
+    """서버가 거부한 행에서 멈추면 뒤따르는 행이 영영 안 올라간다."""
+    path = write_log(
+        tmp_path, [make_row(100.0, 1), make_row(115.0, 1), make_row(130.0, 1)]
+    )
+    rejected = []
+
+    def sender(event):
+        # 첫 건만 서버가 좌표를 거부 (도로에서 멀다)
+        if not rejected:
+            rejected.append(event)
+            return upload_events.SKIP
+        return True
+
+    state = {}
+    assert process(path, state, sender)
+    assert state["offset"] > 0
+
+    # 거부된 행은 다음 주기에 재시도되지 않는다
+    sender2 = FakeSender()
+    assert process(path, state, sender2)
+    assert sender2.sent == []
+
+
+def test_http_sender_skips_rejected_but_retries_auth_error(monkeypatch):
+    """400은 건너뛰고, 403(키 문제)은 데이터를 지키려고 재시도한다."""
+    def raise_status(code, body=b'{"detail":"\\uac00\\uae4c\\uc6b4 \\ub3c4\\ub85c \\uc5c6\\uc74c"}'):
+        def fake_urlopen(request, timeout=None):
+            raise upload_events.urllib.error.HTTPError(
+                request.full_url, code, "rejected", {}, io.BytesIO(body)
+            )
+        return fake_urlopen
+
+    send = upload_events.http_sender("https://example.test", "key")
+
+    monkeypatch.setattr(upload_events.urllib.request, "urlopen", raise_status(400))
+    assert send({"event_uid": "x"}) is upload_events.SKIP
+
+    monkeypatch.setattr(upload_events.urllib.request, "urlopen", raise_status(403))
+    assert send({"event_uid": "x"}) is False
+
+    monkeypatch.setattr(upload_events.urllib.request, "urlopen", raise_status(500))
+    assert send({"event_uid": "x"}) is False
+
+
 def test_state_offset_skips_processed_rows(tmp_path):
     path = write_log(tmp_path, [make_row(100.0, 2)])
     sender = FakeSender()
@@ -195,3 +241,43 @@ def test_state_offset_skips_processed_rows(tmp_path):
     sender2 = FakeSender()
     assert process(path, state, sender2)
     assert [e["event_uid"] for e in sender2.sent] == ["jetson-test-200.0"]
+
+
+# ---------- TTC 상한 ----------
+#
+# 지도는 도로 구간별 risk 평균으로 등급을 매기므로, 접근하지도 않는 시점이
+# 쌓이면 평균이 눌려 모든 구간이 같은 등급이 된다. 실제로 배포 지도의 live
+# 구간 11개가 전부 1등급이었고 그 안에 TTC 513초짜리가 있었다.
+
+def test_far_ttc_is_not_uploaded(tmp_path):
+    """TTC가 상한을 넘으면 레벨이 있어도 지도에 올리지 않는다."""
+    path = write_log(tmp_path, [make_row(100.0, 1, ttc="513.3")])
+    sender = FakeSender()
+    assert process(path, {}, sender)
+    assert sender.sent == []
+
+
+def test_near_ttc_is_uploaded(tmp_path):
+    """상한 안쪽은 그대로 올라간다."""
+    path = write_log(tmp_path, [make_row(100.0, 1, ttc="3.5")])
+    sender = FakeSender()
+    assert process(path, {}, sender)
+    assert len(sender.sent) == 1
+    assert sender.sent[0]["ttc"] == 3.5
+
+
+def test_no_approach_sentinel_is_filtered(tmp_path):
+    """접근하지 않는 쌍의 9999도 상한에 걸려 걸러진다."""
+    path = write_log(tmp_path, [make_row(100.0, 2, ttc="9999.0")])
+    sender = FakeSender()
+    assert process(path, {}, sender)
+    assert sender.sent == []
+
+
+def test_unreadable_ttc_still_uploads(tmp_path):
+    """TTC를 읽을 수 없으면 판단 근거가 없으므로 기존대로 통과시킨다."""
+    path = write_log(tmp_path, [make_row(100.0, 2, ttc="")])
+    sender = FakeSender()
+    assert process(path, {}, sender)
+    assert len(sender.sent) == 1
+    assert sender.sent[0]["ttc"] is None
