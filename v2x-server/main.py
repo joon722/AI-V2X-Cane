@@ -257,6 +257,10 @@ class NodeState(BaseModel):
     speed_mps: Optional[float] = None
     heading_deg: Optional[float] = None
     gps_valid: bool = False
+    # 지팡이를 원점으로 둔 로컬 ENU 좌표(동/북, m). 차량 lat/lng는 야외에서 자주
+    # null이라, 화면 배치는 이 두 값만 쓴다. (젯슨 step6의 veh - cane)
+    rel_east_m: Optional[float] = None
+    rel_north_m: Optional[float] = None
 
 
 class RiskState(BaseModel):
