@@ -125,6 +125,9 @@ def attach_labels(rows, truth, base_epoch=BASE_EPOCH, d_crit_m=D_CRIT_M, horizon
     """
     ts = [float(r["t"]) for r in truth]
     dist = [float(r["distance_m"]) for r in truth]
+    # 시나리오의 첫 접촉 시각(참값이 d_crit 이내로 처음 들어온 순간). 없으면 NaN.
+    # safety_floor.timely_alarm_rate 가 "첫 경보가 접촉보다 T_floor 이상 앞섰나"를 볼 때 쓴다.
+    t_hit = next((base_epoch + t for t, d in zip(ts, dist) if d <= d_crit_m), math.nan)
     out = []
     j = 0
     for r in rows:
@@ -139,6 +142,7 @@ def attach_labels(rows, truth, base_epoch=BASE_EPOCH, d_crit_m=D_CRIT_M, horizon
         rec["y"] = int(dmin <= d_crit_m)
         rec["y_train"] = int(dmin_lead <= d_crit_m)
         rec["d_min_future"] = dmin if math.isfinite(dmin) else dist[j]
+        rec["t_hit"] = t_hit
         out.append(rec)
     return out
 
@@ -226,7 +230,7 @@ def train_and_export(df, out_path, seed=0):
     from dataset import split_by_scenario
     from model import predict_proba, threshold_at_false_alarm_rate, train
     from model_runtime import TreeEnsemble, save_model
-    from safety_floor import T_FLOOR_S
+    from safety_floor import T_FLOOR_S, timely_alarm_rate
 
     train_df, test_df = split_by_scenario(df, test_ratio=0.3, seed=seed)
     clf = train(train_df, seed=seed, label_col="y_train")
@@ -240,6 +244,9 @@ def train_and_export(df, out_path, seed=0):
     model_alarm = proba >= threshold
     recall_model = float(model_alarm[y == 1].mean()) if (y == 1).any() else float("nan")
     recall_rule = float(rule_alarm[y == 1].mean()) if (y == 1).any() else float("nan")
+    # 시나리오 단위 '반응할 수 있을 만큼 미리 울렸나' — model_runtime.main 과 같은 본 지표
+    timely_rule = timely_alarm_rate(test_df, rule_alarm)
+    timely_model = timely_alarm_rate(test_df, model_alarm)
     meta = {
         "trained_rows": int(len(train_df)),
         "trained_scenarios": int(train_df.scenario_id.nunique()),
@@ -248,6 +255,8 @@ def train_and_export(df, out_path, seed=0):
         "target_false_alarm_rate": target_far,
         "recall_rule": recall_rule,
         "recall_model": recall_model,
+        "timely_rule": timely_rule,
+        "timely_model": timely_model,
         "t_floor_s": T_FLOOR_S,
         "trained_on": "field-noise streams (gps_noise.FieldNoiseParams) through runtime pipeline",
     }
@@ -256,8 +265,9 @@ def train_and_export(df, out_path, seed=0):
     rows = test_df[list(runtime.features)].to_numpy(dtype=float)
     check = np.array([runtime.predict_proba(dict(zip(runtime.features, r))) for r in rows[:200]])
     gap = float(np.max(np.abs(check - proba[:200]))) if len(rows) else 0.0
-    print(f"  임계값 {threshold:.4f} (규칙 오경보 {target_far*100:.2f}% 기준)  "
-          f"위험시점 재현율 규칙 {recall_rule*100:.1f}% -> 모델 {recall_model*100:.1f}%")
+    print(f"  임계값 {threshold:.4f} (규칙 오경보 {target_far*100:.2f}% 기준)")
+    print(f"  적시경보(시나리오, T_floor 앞)  규칙 {timely_rule*100:.1f}% -> 모델 {timely_model*100:.1f}%")
+    print(f"  위험시점 재현율(행)            규칙 {recall_rule*100:.1f}% -> 모델 {recall_model*100:.1f}%")
     print(f"  저장 {path}  sklearn 대비 최대 오차 {gap:.2e}")
     return path
 

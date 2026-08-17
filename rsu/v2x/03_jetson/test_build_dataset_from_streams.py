@@ -57,6 +57,10 @@ def test_labels_join_by_time_with_and_without_lead():
     assert at(16.0)["y"] == 0 and at(16.0)["y_train"] == 1
     assert at(10.0)["y"] == 0 and at(10.0)["y_train"] == 0
     assert all(math.isfinite(r["d_min_future"]) for r in joined)
+    # t_hit = 시나리오에서 처음 2 m 이내가 되는 참값 시각(base_epoch 상대) — 적시경보율 계산용
+    assert abs(joined[0]["t_hit"] - 1019.6) < 0.3
+    far = bds.attach_labels(rows[:5], [{"t": r["t"], "distance_m": 50.0} for r in truth], base_epoch=1000.0)
+    assert all(math.isnan(r["t_hit"]) for r in far)
 
 
 def test_scenario_sim_source_gives_labelled_rows_per_scenario():
