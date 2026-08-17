@@ -29,7 +29,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_INTERVAL_S = 0.5
+# 라이브뷰(8080)가 5~10Hz로 갱신되므로 0.2초(5Hz)로 폴링해 저지연을 살린다.
+DEFAULT_INTERVAL_S = 0.2
 # step8의 heartbeat는 1초다. 그 10배 동안 새 행이 없다면 엔진이 멈춘 것이므로,
 # 마지막 위치를 계속 보내 화면을 살아있는 것처럼 보이게 하면 안 된다.
 DEFAULT_MAX_AGE_S = 10.0
@@ -124,6 +125,60 @@ def snapshot_from_row(row, device_id):
     }
 
 
+def snapshot_from_state(state, device_id):
+    """젯슨 8080 /api/state 응답 -> /api/live 페이로드. 시각(t)이 없으면 None.
+
+    CSV는 step8 heartbeat라 1Hz로만 기록되지만 live_state는 매 판정(5~10Hz)마다
+    갱신된다. 이쪽을 읽으면 화면 지연이 크게 준다. veh에는 lat/lng가 없고 상대좌표는
+    최상위 rel_east_m/rel_north_m 로 온다. gps_valid는 0/1 숫자다.
+    """
+    if _to_float(state.get("t")) is None:
+        return None
+    cane = state.get("cane") or {}
+    veh = state.get("veh") or {}
+
+    def node(src):
+        lat = _to_float(src.get("lat"))
+        lng = _to_float(src.get("lng"))
+        if lat is None or lng is None or (lat == 0.0 and lng == 0.0):
+            lat = lng = None
+        return {
+            "lat": lat,
+            "lng": lng,
+            "speed_mps": _to_float(src.get("speed_mps")),
+            "heading_deg": _to_float(src.get("heading_deg")),
+            "gps_valid": _to_float(src.get("gps_valid")) == 1,
+        }
+
+    vehicle = node(veh)
+    vehicle["rel_east_m"] = _to_float(state.get("rel_east_m"))
+    vehicle["rel_north_m"] = _to_float(state.get("rel_north_m"))
+    return {
+        "device_id": device_id,
+        "ts": datetime.fromtimestamp(_to_float(state.get("t")), tz=timezone.utc).isoformat(),
+        "cane": node(cane),
+        "vehicle": vehicle,
+        "risk": {
+            "level": int(_to_float(state.get("level")) or 0),
+            "distance_m": _to_float(state.get("distance_m")),
+            "ttc_s": _to_float(state.get("ttc_s")),
+            "closing_mps": _to_float(state.get("closing_mps")),
+            "source": state.get("level_source") or None,
+        },
+    }
+
+
+def fetch_state(url):
+    """젯슨 8080 라이브뷰를 한 번 읽어 dict로. 실패하면 None."""
+    try:
+        with urllib.request.urlopen(url, timeout=1.0) as response:
+            if not 200 <= response.status < 300:
+                return None
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 class LiveStreamer:
     """마지막 스냅샷을 들고 있다가 주기마다 내보낸다.
 
@@ -146,6 +201,13 @@ class LiveStreamer:
                 self.snapshot = snapshot
                 self.row_time = _to_float(row.get("pc_time"))
                 return
+
+    def observe_state(self, state):
+        # 젯슨 8080 라이브뷰(매 판정 갱신)를 최신 스냅샷으로 삼는다.
+        snapshot = snapshot_from_state(state, self.device_id)
+        if snapshot is not None:
+            self.snapshot = snapshot
+            self.row_time = _to_float(state.get("t"))
 
     def payload(self, now):
         if self.snapshot is None:
@@ -202,6 +264,10 @@ def parse_args():
     parser.add_argument("--url", default=os.environ.get("RISKMAP_URL", ""))
     parser.add_argument("--api-key", default=os.environ.get("RISKMAP_API_KEY", ""))
     parser.add_argument("--device-id", default=socket.gethostname())
+    parser.add_argument("--live-url",
+                        default="http://127.0.0.1:8080/api/state",
+                        help="젯슨 8080 라이브뷰에서 직접 읽어 전송(5~10Hz, 저지연). "
+                             "빈 문자열('')이면 CSV(1Hz)로 폴백")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
     parser.add_argument("--max-age-s", type=float, default=DEFAULT_MAX_AGE_S)
     parser.add_argument("--dry-run", action="store_true",
@@ -225,17 +291,25 @@ def main():
 
     tail = None
     fail_streak = 0
+    if args.live_url:
+        print(f"[INFO] 소스: 젯슨 라이브뷰 {args.live_url} (CSV 대신, 저지연 5~10Hz)",
+              file=sys.stderr)
     try:
         while True:
-            path = fixed or latest_csv(args.logs_dir)
-            if path is not None:
-                if tail is None or tail.path != path:
-                    print(f"[INFO] 로그 파일: {path}", file=sys.stderr)
-                    tail = CsvTail(path)
-                try:
-                    streamer.observe(tail.new_rows())
-                except OSError as ex:
-                    print(f"[WARN] 로그 읽기 실패: {ex}", file=sys.stderr)
+            if args.live_url:
+                state = fetch_state(args.live_url)
+                if state is not None:
+                    streamer.observe_state(state)
+            else:
+                path = fixed or latest_csv(args.logs_dir)
+                if path is not None:
+                    if tail is None or tail.path != path:
+                        print(f"[INFO] 로그 파일: {path}", file=sys.stderr)
+                        tail = CsvTail(path)
+                    try:
+                        streamer.observe(tail.new_rows())
+                    except OSError as ex:
+                        print(f"[WARN] 로그 읽기 실패: {ex}", file=sys.stderr)
 
             payload = streamer.payload(time.time())
             sent = payload is not None and sender(payload)
