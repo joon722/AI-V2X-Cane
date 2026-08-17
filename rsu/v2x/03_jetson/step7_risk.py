@@ -196,6 +196,15 @@ def dcpa_gate(dcpa, near_m=DCPA_NEAR_M, far_m=DCPA_FAR_M, floor=DCPA_FLOOR):
 # 무한대인 측면 위험을 잡는 것이 모델의 존재 이유라서다.
 T_ALARM_MAX_TTC_S = 30.0
 
+# 근접 거리 하한. 아주 가까우면 접근속도(closing_los)가 GPS 노이즈로 0↔음수로
+# 튀어 TTC가 9999로 뻥튀기되고, 그 순간 ttc_capped에 걸려 레벨이 0으로 떨어지는
+# 미탐이 생긴다(2 m 코앞인데 "안전"). 코앞이면 접근 여부와 무관하게 위험하므로
+# 이 거리 안에서는 최소 레벨을 보장한다. 상한/게이트/노이즈를 모두 무시한다.
+# 미탐 > 오경보 원칙이고, 이 거리대의 오경보(가까이 있는데 울림)는 감수 가능하다.
+# 끄려면 각각 0을 준다.
+NEAR_FLOOR_L2_M = 3.0   # 이 거리 안이면 최소 레벨 2(경고)
+NEAR_FLOOR_L1_M = 5.0   # 이 거리 안이면 최소 레벨 1(주의)
+
 
 @dataclass(frozen=True)
 class RiskAssessment:
@@ -220,6 +229,8 @@ def assess_risk(
     floor=DCPA_FLOOR,
     floor_ttc_s=T_FLOOR_TTC_S,
     alarm_max_ttc_s=T_ALARM_MAX_TTC_S,
+    near_floor_l2_m=NEAR_FLOOR_L2_M,
+    near_floor_l1_m=NEAR_FLOOR_L1_M,
 ):
     """Score one filtered-track Kinematics sample.
 
@@ -248,6 +259,18 @@ def assess_risk(
         level, reason = 0, "ttc_capped"
     else:
         level, reason = classify_risk_level(final), "table"
+
+    # 근접 거리 하한: 코앞이면 접근속도/TTC 상한·게이트와 무관하게 최소 레벨 보장.
+    # 노이즈로 튄 closing 때문에 2 m에서 레벨 0으로 떨어지는 미탐을 막는다.
+    dist = kinematics.distance_m
+    near = 0
+    if near_floor_l2_m > 0 and dist <= near_floor_l2_m:
+        near = 2
+    elif near_floor_l1_m > 0 and dist <= near_floor_l1_m:
+        near = 1
+    if near > level:
+        level, reason = near, "near_floor"
+
     return RiskAssessment(
         distance_m=kinematics.distance_m,
         closing_los=closing,
