@@ -23,7 +23,7 @@ import csv
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import live_server
@@ -43,6 +43,51 @@ from step8_stability import HOLD_S, LevelStabilizer
 
 
 HEARTBEAT_S = 1.0
+
+# 접근속도(closing_los) 평활 계수. 저속·GPS 노이즈로 접근속도가 프레임마다
+# 0↔음수로 튀고, TTC=거리/접근속도라 그 노이즈가 TTC를 심하게 출렁이게 한다.
+# 짧은 EMA로 접근속도를 평활하면 TTC·레벨이 안정된다(≈0.3~0.5s 지연, 근접
+# 거리 하한이 그 지연을 커버). 도플러 융합이 저속(heading_valid=0)에서 안
+# 켜지는 것을 보완한다. 1.0이면 평활 없음(원값). 낮을수록 더 부드럽고 더 느리다.
+CLOSING_EMA_ALPHA = 0.2
+
+# calibrate_bias.py 가 저장하는 차량 GPS 상대 바이어스. 없으면 보정 없이 동작.
+VEHICLE_BIAS_FILE = Path(__file__).resolve().with_name("vehicle_bias.json")
+# 바이어스는 시간에 따라 변한다. 이보다 오래된 값이면 재보정을 권한다.
+VEHICLE_BIAS_STALE_S = 30 * 60
+
+
+def load_vehicle_bias(path):
+    """(bias_east, bias_north, meta) from calibrate_bias.py's file.
+
+    A missing file means "not calibrated" → zero bias. A corrupt file must not
+    keep the alarm engine from starting, so it degrades to zero as well, loudly.
+    """
+    path = Path(path)
+    if not path.exists():
+        return 0.0, 0.0, None
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        east = float(meta["bias_east_m"])
+        north = float(meta["bias_north_m"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"[WARN] vehicle_bias_load_failed path={path} error={exc!r} -> 보정 없이 동작",
+              file=sys.stderr)
+        return 0.0, 0.0, None
+    return east, north, meta
+
+
+def vehicle_bias_messages(bias_east, bias_north, meta, now):
+    """시작 로그 줄들: 무엇이 적용됐고 얼마나 오래된 값인지."""
+    if meta is None:
+        return ["[INFO] vehicle_bias 없음 → 보정 없이 동작 (calibrate_bias.py 로 측정)"]
+    age_min = (now - to_float(meta.get("created_at"))) / 60.0
+    lines = [f"[INFO] vehicle_bias east={bias_east:+.2f} north={bias_north:+.2f} m "
+             f"age={age_min:.0f}min"]
+    if age_min * 60.0 > VEHICLE_BIAS_STALE_S:
+        lines.append(f"[WARN] vehicle_bias 가 {age_min:.0f}분 전 값 — 바이어스는 시간에 따라 "
+                     f"변하므로 재보정 권장 (calibrate_bias.py → 재시작)")
+    return lines
 
 # After the RSU accepts a downlink it echoes these two record types back on the
 # same serial line (documented in the session summary). They confirm the command
@@ -245,6 +290,8 @@ class RiskSender:
         # 모델 판정은 규칙 위에 얹힌다(max). 게이트가 없거나 모델 파일이 없으면
         # 규칙만으로 이전과 똑같이 돈다.
         self.model_gate = model_gate or ModelGate()
+        # 접근속도 EMA 상태. None이면 아직 첫 샘플(원값 그대로).
+        self.closing_ema = None
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -274,6 +321,17 @@ class RiskSender:
             return
 
         now, _raw, filtered = result
+        # 접근속도 평활(EMA): 노이즈로 튀는 closing_los를 부드럽게 해 TTC를 안정화.
+        # 첫 샘플은 원값 그대로라 기존 동작과 동일하게 시작한다.
+        if CLOSING_EMA_ALPHA < 1.0:
+            if self.closing_ema is None:
+                self.closing_ema = filtered.closing_los
+            else:
+                self.closing_ema = (
+                    CLOSING_EMA_ALPHA * filtered.closing_los
+                    + (1.0 - CLOSING_EMA_ALPHA) * self.closing_ema
+                )
+            filtered = replace(filtered, closing_los=self.closing_ema)
         store = self.pipeline.store
         vehicle_speed = to_float(store.latest["vehicle"]["speed_mps"])
         assessment = assess_risk(filtered, vehicle_speed, **self.gate_params)
@@ -434,13 +492,19 @@ def parse_args():
         f"(기본: {T_FLOOR_TTC_S}). 실험 중 같은 시나리오를 값만 바꿔 찍으면 "
         f"하한이 실제로 몇 번 울리는지 비교할 수 있다",
     )
+    parser.add_argument(
+        "--vehicle-bias-file",
+        default=str(VEHICLE_BIAS_FILE),
+        help="calibrate_bias.py 가 저장한 차량 GPS 상대 바이어스 파일. 없으면 보정 없이 동작",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     store = StateStore(fresh_window_s=args.fresh_window_ms / 1000)
-    pipeline = KinematicsPipeline(store)
+    bias_east, bias_north, bias_meta = load_vehicle_bias(args.vehicle_bias_file)
+    pipeline = KinematicsPipeline(store, vehicle_bias=(bias_east, bias_north))
     transmitter = RiskTransmitter(
         target_id=args.target_id,
         heartbeat_s=args.tx_heartbeat_s,
@@ -461,6 +525,8 @@ def main():
         f"raw_log={args.raw_log} live_port={args.live_port}",
         file=sys.stderr,
     )
+    for line in vehicle_bias_messages(bias_east, bias_north, bias_meta, time.time()):
+        print(line, file=sys.stderr)
 
     # 화면 서버. 못 띄워도 None이 돌아올 뿐이고 경보는 그대로 나간다.
     live_state = live_server.start_or_none(
