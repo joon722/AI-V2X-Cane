@@ -9,6 +9,7 @@ from step7_risk import (
     DCPA_FLOOR,
     DCPA_NEAR_M,
     MIN_CLOSING_MPS,
+    NEAR_FLOOR_M,
     T_ALARM_MAX_TTC_S,
     T_FLOOR_TTC_S,
     assess_risk,
@@ -274,6 +275,57 @@ class ClosingDeadbandTest(unittest.TestCase):
         result = assess_risk(kin, vehicle_speed_mps=0.1, min_closing_mps=0.0)
         self.assertAlmostEqual(result.ttc, 8.0 / 0.3, places=6)
         self.assertEqual(result.reason, "table")
+
+
+class NearFloorTest(unittest.TestCase):
+    """코앞 규칙 — 2026-08-17 현준 확정: "2.5 m 안에서 다가올 때는 울리고, 멀어지면
+    안 울린다. 5 m쯤 떨어져 평행이면 울리지 말아야 한다."
+
+    접근속도가 잡음(데드밴드 0.5) 아래라 TTC가 안 나와도, 2.5 m 안에서 멀어지는
+    중이 아니면 레벨 2. 멀어지는 중(closing<0)이면 코앞이라도 울리지 않는다.
+    이전의 5 m 레벨-1 하한은 5 m 평행 통과를 울리게 하므로 없앤다.
+    """
+
+    def _pair(self, distance_m, closing_mps):
+        return relative_kinematics(
+            cane_pos=(0.0, 0.0), cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, distance_m), veh_vel=(0.0, -closing_mps),
+        )
+
+    def test_slow_approach_inside_two_and_a_half_metres_is_level_2(self):
+        result = assess_risk(self._pair(2.0, 0.3), vehicle_speed_mps=0.3)
+        self.assertEqual(result.risk_level, 2)
+        self.assertEqual(result.reason, "near_floor")
+
+    def test_receding_inside_two_and_a_half_metres_is_silent(self):
+        result = assess_risk(self._pair(2.0, -0.3), vehicle_speed_mps=0.3)
+        self.assertEqual(result.risk_level, 0)
+        self.assertNotEqual(result.reason, "near_floor")
+
+    def test_standing_still_inside_two_and_a_half_metres_counts_as_not_receding(self):
+        result = assess_risk(self._pair(2.4, 0.0), vehicle_speed_mps=0.0)
+        self.assertEqual(result.risk_level, 2)
+        self.assertEqual(result.reason, "near_floor")
+
+    def test_parallel_pass_at_five_metres_is_silent(self):
+        # 5 m 옆으로 평행 통과: 접근속도 0, TTC 없음 → 이전 5 m 레벨-1 하한이 울리던 자리
+        result = assess_risk(self._pair(4.0, 0.0), vehicle_speed_mps=1.0)
+        self.assertEqual(result.risk_level, 0)
+        result = assess_risk(self._pair(5.0, 0.0), vehicle_speed_mps=1.0)
+        self.assertEqual(result.risk_level, 0)
+
+    def test_just_outside_the_floor_is_left_to_the_table(self):
+        result = assess_risk(self._pair(2.6, 0.3), vehicle_speed_mps=0.3)
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+
+    def test_safety_floor_still_wins_over_the_near_floor(self):
+        result = assess_risk(self._pair(1.0, 1.0), vehicle_speed_mps=1.0)
+        self.assertEqual(result.risk_level, 3)
+        self.assertEqual(result.reason, "safety_floor")
+
+    def test_floor_distance_is_two_and_a_half_metres(self):
+        self.assertEqual(NEAR_FLOOR_M, 2.5)
 
 
 class SafetyFloorTest(unittest.TestCase):

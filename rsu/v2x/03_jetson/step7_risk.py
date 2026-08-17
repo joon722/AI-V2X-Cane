@@ -198,12 +198,18 @@ T_ALARM_MAX_TTC_S = 30.0
 
 # 근접 거리 하한. 아주 가까우면 접근속도(closing_los)가 GPS 노이즈로 0↔음수로
 # 튀어 TTC가 9999로 뻥튀기되고, 그 순간 ttc_capped에 걸려 레벨이 0으로 떨어지는
-# 미탐이 생긴다(2 m 코앞인데 "안전"). 코앞이면 접근 여부와 무관하게 위험하므로
-# 이 거리 안에서는 최소 레벨을 보장한다. 상한/게이트/노이즈를 모두 무시한다.
-# 미탐 > 오경보 원칙이고, 이 거리대의 오경보(가까이 있는데 울림)는 감수 가능하다.
-# 끄려면 각각 0을 준다.
-NEAR_FLOOR_L2_M = 3.0   # 이 거리 안이면 최소 레벨 2(경고)
-NEAR_FLOOR_L1_M = 5.0   # 이 거리 안이면 최소 레벨 1(주의)
+# 미탐이 생긴다(2 m 코앞인데 "안전"). 그래서 이 거리 안에서는 TTC가 없어도
+# 최소 레벨 2를 보장한다 — 단, 2026-08-17 현준 확정 스펙대로:
+#
+#   "2.5 m 안에서 다가올 때는 울리고, 멀어지면 안 울린다.
+#    5 m쯤 떨어져 평행이면 울리지 말아야 한다."
+#
+# 그래서 (a) 거리는 2.5 m, (b) 멀어지는 중(closing < 0)이면 하한을 걸지 않는다,
+# (c) 예전 5 m 레벨-1 하한은 5 m 평행 통과를 울리게 하므로 없앴다. 정지(closing≈0)는
+# "멀어지는 중이 아님"으로 보아 하한이 걸린다 — 코앞에 서 있는 차는 미탐보다 낫다.
+# 끄려면 0을 준다.
+NEAR_FLOOR_M = 2.5
+NEAR_FLOOR_LEVEL = 2
 
 # 접근속도 데드밴드. 이 아래의 접근속도(closing_los)는 접근이 아니라 GPS 잡음으로
 # 보고 TTC를 내지 않는다(9999 → 상한에 걸려 레벨 0, 근접 거리 하한은 별도).
@@ -241,8 +247,7 @@ def assess_risk(
     floor=DCPA_FLOOR,
     floor_ttc_s=T_FLOOR_TTC_S,
     alarm_max_ttc_s=T_ALARM_MAX_TTC_S,
-    near_floor_l2_m=NEAR_FLOOR_L2_M,
-    near_floor_l1_m=NEAR_FLOOR_L1_M,
+    near_floor_m=NEAR_FLOOR_M,
     min_closing_mps=MIN_CLOSING_MPS,
 ):
     """Score one filtered-track Kinematics sample.
@@ -277,16 +282,12 @@ def assess_risk(
     else:
         level, reason = classify_risk_level(final), "table"
 
-    # 근접 거리 하한: 코앞이면 접근속도/TTC 상한·게이트와 무관하게 최소 레벨 보장.
-    # 노이즈로 튄 closing 때문에 2 m에서 레벨 0으로 떨어지는 미탐을 막는다.
-    dist = kinematics.distance_m
-    near = 0
-    if near_floor_l2_m > 0 and dist <= near_floor_l2_m:
-        near = 2
-    elif near_floor_l1_m > 0 and dist <= near_floor_l1_m:
-        near = 1
-    if near > level:
-        level, reason = near, "near_floor"
+    # 근접 거리 하한: 코앞에서 다가오거나 서 있으면(멀어지는 중이 아니면) TTC 상한·
+    # 게이트와 무관하게 최소 레벨 보장. 노이즈로 튄 closing 때문에 2 m에서 레벨 0으로
+    # 떨어지는 미탐을 막는다. 멀어지는 중이면 걸지 않는다(현준 스펙).
+    if (near_floor_m > 0 and kinematics.distance_m <= near_floor_m
+            and closing >= 0.0 and NEAR_FLOOR_LEVEL > level):
+        level, reason = NEAR_FLOOR_LEVEL, "near_floor"
 
     return RiskAssessment(
         distance_m=kinematics.distance_m,
