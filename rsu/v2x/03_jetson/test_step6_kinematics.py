@@ -560,6 +560,19 @@ class PipelineDopplerPolicyTest(unittest.TestCase):
         _, _, _, vel_n = pipeline.trackers["vehicle"].state_ahead(0.0)
         self.assertLess(abs(vel_n - (-2.0)), 0.5)
 
+    def test_slow_but_valid_vehicle_heading_is_still_fused(self):
+        """RC 차량은 대부분 0.3~1 m/s 로 움직인다(8/17: 이동 중 중앙 0.53). 펌웨어 heading
+        문턱을 0.4→0.25 로 내리면(런타임 headspeed) 그 속도에서도 heading_valid=1 이 오는데,
+        젯슨 쪽 문턱이 0.4 로 남아 있으면 그 벡터를 버린다. 노드가 보증한 값은 쓴다."""
+        pipeline = self._pipeline()
+        self._observe(pipeline, "cane", 0, 0.0, CANE_LAT, CANE_LNG, 0.0, 0.0, 0)
+        for step in range(3):
+            t = step * 0.2
+            lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, 30.0 - 0.3 * t)
+            self._observe(pipeline, "vehicle", step, t, lat, lng, 0.3, 180.0, 1)
+        _, _, _, vel_n = pipeline.trackers["vehicle"].state_ahead(0.0)
+        self.assertLess(abs(vel_n - (-0.3)), 0.15)
+
     def test_invalid_vehicle_heading_is_never_trusted(self):
         """heading_valid=0 means the heading field may be stale garbage."""
         pipeline = self._pipeline()

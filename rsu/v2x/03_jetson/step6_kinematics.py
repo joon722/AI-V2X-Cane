@@ -93,7 +93,13 @@ ZUPT_SIGMA_MPS = 0.2
 # but only while the node vouches for it (heading_valid) and moves fast enough
 # for course to mean anything. The cane's heading is IMU pointing direction,
 # not walking direction, so the cane never gets a vector observation.
-VEHICLE_DOPPLER_MIN_SPEED_MPS = 0.4
+#
+# 0.25, not 0.4: the RC vehicle moves at 0.3-1 m/s most of the time (2026-08-17
+# field: median 0.53 while moving, 37 % below 0.4), and the firmware's own
+# heading gate is being lowered to 0.25 (runtime `headspeed`). Whatever the
+# node vouches for at that speed is still better than position-only velocity,
+# and DOPPLER_SPEED_SIGMA_MPS (0.5) already discounts low-speed course jitter.
+VEHICLE_DOPPLER_MIN_SPEED_MPS = 0.25
 
 
 def measurement_time(row):
