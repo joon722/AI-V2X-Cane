@@ -1546,6 +1546,8 @@ void playTestAudio(uint8_t track) {
 // =====================
 #define CMD_UDP_PORT 4300
 #define TUNING_NVS_NAMESPACE "v2xtune"
+// 이 노드의 명령 태그. "@cane" 로 브로드캐스트된 지팡이 명령은 무시한다.
+#define NODE_CMD_TAG "car"
 
 WiFiUDP cmdUdp;
 bool cmdUdpStarted = false;
@@ -1847,7 +1849,17 @@ void handleUdpCommands() {
     for (char *token = strtok_r(buffer, "\r\n", &context);
          token != NULL;
          token = strtok_r(NULL, "\r\n", &context)) {
-      runTuningCommand(String(token));
+      char *cmd = token;
+      // "@노드 <명령>" 형식이면 태그가 이 노드와 일치할 때만 처리한다.
+      if (cmd[0] == '@') {
+        char *space = strchr(cmd, ' ');
+        if (space == NULL) continue;
+        *space = '\0';
+        bool mine = (strcmp(cmd + 1, NODE_CMD_TAG) == 0);
+        cmd = space + 1;
+        if (!mine) continue;
+      }
+      runTuningCommand(String(cmd));
     }
   }
 }
