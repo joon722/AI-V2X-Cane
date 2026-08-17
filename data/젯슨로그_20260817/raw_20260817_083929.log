@@ -1,0 +1,35 @@
+1786929138.511 RX E BOD: Brownout detector was triggered
+1786929138.514 RX ets Jul 29 2019 12:21:46
+1786929138.518 RX rst:0x3 (SW_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+1786929138.520 RX configsip: 0, SPIWP:0xee
+1786929138.527 RX clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+1786929138.529 RX mode:DIO, clock div:1
+1786929138.531 RX load:0x3fff0030,len:4876
+1786929138.533 RX ho 0 tail 12 room 4
+1786929138.535 RX load:0x40078000,len:16532
+1786929138.537 RX load:0x40080400,len:3500
+1786929138.539 RX entry 0x400805b4
+1786929139.543 RX {"type":"bridge_boot","node_id":4125657604,"channel":6,"version":3,"wdt_ms":10000}
+1786929142.810 RX E BOD: Brownout detector was triggered
+1786929142.813 RX ets Jul 29 2019 12:21:46
+1786929142.817 RX rst:0x3 (SW_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+1786929142.820 RX configsip: 0, SPIWP:0xee
+1786929142.826 RX clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+1786929142.828 RX mode:DIO, clock div:1
+1786929142.830 RX load:0x3fff0030,len:4876
+1786929142.832 RX ho 0 tail 12 room 4
+1786929142.834 RX load:0x40078000,len:16532
+1786929142.837 RX load:0x40080400,len:3500
+1786929142.838 RX entry 0x400805b4
+1786929143.796 RX {"type":"bridge_boot","node_id":4125657604,"channel":6,"version":3,"wdt_ms":10000}
+1786929200.559 RX E=: Brownout detector was triggered
+1786929200.562 RX ets Jul 29 2019 12:21:46
+1786929200.567 RX rst:0x3 (SW_RESET"����:0x13 (SPI_FAST_FLASH_BOOT)
+1786929200.569 RX configsip: 0, SPIWP:0xee
+1786929200.575 RX clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+1786929200.577 RX mode:DIO, clock div:1
+1786929200.580 RX load:0x3fff0030,len:4876
+1786929200.581 RX ho 0 tail 12 room 4
+1786929200.584 RX load:0x40078000,len:16532
+1786929200.586 RX load:0x40080400,len:3500
+1786929200.588 RX entry 0x400805b4
