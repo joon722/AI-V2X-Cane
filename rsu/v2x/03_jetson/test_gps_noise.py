@@ -133,3 +133,157 @@ def test_uneven_timesteps_are_handled():
     out = gps_noise.add_gps_noise(df.copy(), seed=11)
     err = offsets(df, out, "veh_x")
     assert np.isfinite(err).all()
+
+
+# ---------------------------------------------------------------------------
+# 스트림 수준 현장 노이즈 모델 (2026-08-17 실측 기반)
+#
+# 위 add_gps_noise 는 좌표에 Gauss-Markov 오차만 입힌다. 8/17 오후 실측에서
+# 판정을 흔든 잡음은 그 외에 네 가지가 더 있었다: 패킷 lat/lng 의 float32
+# 양자화(위도 0.42 m/경도 0.53 m 격자), 3~5 초 GPS 무효(lat=lng=0 송신) 뒤
+# 수 m~19 m 떨어진 곳에서 재획득, heading 은 speed>=0.4 m/s 일 때만 유효
+# (아니면 0 또는 stale), 5 Hz fix 를 10 Hz 패킷으로 반복 송신. 아래는 깨끗한
+# 궤적을 "RSU 가 받는 패킷" 으로 바꾸는 모델의 검증이다.
+# ---------------------------------------------------------------------------
+import math
+import struct
+
+ORIGIN = (37.4977, 126.9528)  # 캠퍼스 중심 (생성기와 같은 값)
+
+
+def clean_track(seconds=20.0, hz=5.0, speed=0.0, heading=90.0, x0=0.0, y0=10.0):
+    """(t, east, north, speed, heading) 표본. 등속 직선."""
+    n = int(seconds * hz)
+    out = []
+    for i in range(n):
+        t = i / hz
+        out.append((t, x0 + speed * t * math.sin(math.radians(heading)),
+                    y0 + speed * t * math.cos(math.radians(heading)), speed, heading))
+    return out
+
+
+def quiet_params(**overrides):
+    """잡음 전부 끄고 하나씩 켜서 보기 위한 기본."""
+    p = gps_noise.FieldNoiseParams(
+        sigma_m=0.0, quantize_float32=False, packet_loss=0.0,
+        dropout_per_min=0.0, speed_sigma_mps=0.0, heading_sigma_deg=0.0,
+        stall_period_s=None, reboot_per_min=0.0,
+    )
+    for k, v in overrides.items():
+        setattr(p, k, v)
+    return p
+
+
+def to_local(lat, lng):
+    east = (lng - ORIGIN[1]) * 111320.0 * math.cos(math.radians(ORIGIN[0]))
+    north = (lat - ORIGIN[0]) * 111320.0
+    return east, north
+
+
+def valid_positions(packets):
+    return [(p["pc_time"],) + to_local(p["lat"], p["lng"]) for p in packets if p["gps_valid"]]
+
+
+def test_packets_repeat_each_fix_at_packet_rate():
+    """5 Hz fix 를 10 Hz 로 반복 송신 - 패킷 수는 fix 의 2배, 같은 fix 는 같은 좌표."""
+    rng = np.random.default_rng(1)
+    pk = gps_noise.noisify_track(clean_track(seconds=10.0), quiet_params(), rng, ORIGIN, "vehicle")
+    assert len(pk) == 100
+    lat = [p["lat"] for p in pk]
+    assert lat[0] == lat[1] and lat[2] == lat[3]
+    assert all(b["pc_time"] > a["pc_time"] for a, b in zip(pk, pk[1:]))
+    assert [p["seq"] for p in pk] == list(range(100))
+
+
+def test_float32_quantization_puts_positions_on_the_field_grid():
+    """패킷 lat/lng 는 float32. 위도 3.8e-6도(0.42 m), 경도 7.6e-6도(0.53 m) 격자."""
+    rng = np.random.default_rng(2)
+    pk = gps_noise.noisify_track(clean_track(seconds=20.0, speed=1.0, heading=45.0),
+                                 quiet_params(quantize_float32=True), rng, ORIGIN, "vehicle")
+    # 브리지가 %.6f 로 찍으므로 값 자체는 6자리지만, 격자 간격은 float32 것이
+    # 남는다: 위도 3~4 µdeg(0.42 m), 경도 7~8 µdeg(0.53 m). 8/17 raw 실측과 동일.
+    lats = sorted({p["lat"] for p in pk})
+    lat_steps = [round((b - a) * 1e6) for a, b in zip(lats, lats[1:])]
+    assert lat_steps and all(s in (3, 4) or s >= 7 for s in lat_steps), lat_steps[:10]
+    lngs = sorted({p["lng"] for p in pk})
+    lng_steps = [round((b - a) * 1e6) for a, b in zip(lngs, lngs[1:])]
+    assert lng_steps and all(s in (7, 8) or s >= 14 for s in lng_steps), lng_steps[:10]
+    # 끄면 1 µdeg 단위로 촘촘해진다
+    fine = gps_noise.noisify_track(clean_track(seconds=20.0, speed=1.0, heading=45.0),
+                                   quiet_params(quantize_float32=False), np.random.default_rng(2), ORIGIN, "vehicle")
+    fine_lats = sorted({p["lat"] for p in fine})
+    assert min(round((b - a) * 1e6) for a, b in zip(fine_lats, fine_lats[1:])) <= 2
+
+
+def test_dropout_sends_zero_position_and_zero_motion():
+    """무효 구간: gps_valid=0, lat=lng=0, speed=0, heading=0/heading_valid=0 (펌웨어와 동일)."""
+    rng = np.random.default_rng(3)
+    p = quiet_params(dropout_per_min=30.0, dropout_s=(3.0, 3.0))
+    pk = gps_noise.noisify_track(clean_track(seconds=60.0, speed=1.0), p, rng, ORIGIN, "vehicle")
+    invalid = [q for q in pk if not q["gps_valid"]]
+    assert invalid, "no dropout happened"
+    for q in invalid:
+        assert q["lat"] == 0.0 and q["lng"] == 0.0
+        assert q["speed_mps"] == 0.0 and q["heading_deg"] == 0.0 and q["heading_valid"] == 0
+    # 무효 구간은 요청한 길이(3초 = 30패킷)의 배수로 나온다(연달아 시작하면 합쳐짐)
+    runs, run = [], 0
+    for q in pk:
+        if q["gps_valid"]:
+            if run: runs.append(run); run = 0
+        else:
+            run += 1
+    if run: runs.append(run)
+    assert all(r >= 28 and (r % 30 <= 2 or r % 30 >= 28) for r in runs), runs
+    assert 28 <= sorted(runs)[len(runs) // 2] <= 32, runs
+
+
+def test_reacquisition_lands_the_configured_distance_away():
+    """재획득 첫 fix 는 참값에서 점프 크기만큼 떨어진 곳에서 시작한다(8/17: 최대 19 m)."""
+    rng = np.random.default_rng(4)
+    p = quiet_params(dropout_per_min=6.0, dropout_s=(3.0, 3.0), reacq_jump_m=(8.0, 8.0))
+    track = clean_track(seconds=60.0)  # 정지: 참값 (0, 10)
+    pk = gps_noise.noisify_track(track, p, rng, ORIGIN, "vehicle")
+    firsts = []
+    for a, b in zip(pk, pk[1:]):
+        if not a["gps_valid"] and b["gps_valid"]:
+            e, n = to_local(b["lat"], b["lng"])
+            firsts.append(math.hypot(e - 0.0, n - 10.0))
+    assert firsts, "no re-acquisition"
+    for d in firsts:
+        assert 7.0 <= d <= 9.0, firsts
+
+
+def test_heading_is_valid_only_above_the_speed_gate():
+    rng = np.random.default_rng(5)
+    slow = gps_noise.noisify_track(clean_track(speed=0.2, heading=120.0), quiet_params(), rng, ORIGIN, "vehicle")
+    fast = gps_noise.noisify_track(clean_track(speed=1.0, heading=120.0), quiet_params(), rng, ORIGIN, "vehicle")
+    assert all(q["heading_valid"] == 0 for q in slow)
+    assert all(q["heading_deg"] == 0.0 for q in slow)  # heading_zero_prob=1 기본이 아니면 stale 허용
+    assert all(q["heading_valid"] == 1 for q in fast)
+    assert all(abs(q["heading_deg"] - 120.0) < 1e-6 for q in fast)
+
+
+def test_gauss_markov_error_has_the_requested_spread():
+    rng = np.random.default_rng(6)
+    p = quiet_params(sigma_m=2.5, tau_s=5.0)
+    pk = gps_noise.noisify_track(clean_track(seconds=600.0), p, rng, ORIGIN, "cane")
+    errs = [math.hypot(e - 0.0, n - 10.0) for _, e, n in valid_positions(pk)]
+    rms = math.sqrt(sum(x * x for x in errs) / len(errs))
+    assert 2.5 < rms < 4.5, rms  # 2축 각 sigma 2.5 -> 반경 rms ≈ 3.5
+
+
+def test_same_seed_same_stream():
+    a = gps_noise.noisify_track(clean_track(), gps_noise.FieldNoiseParams(), np.random.default_rng(7), ORIGIN, "vehicle")
+    b = gps_noise.noisify_track(clean_track(), gps_noise.FieldNoiseParams(), np.random.default_rng(7), ORIGIN, "vehicle")
+    assert a == b
+
+
+def test_randomized_params_stay_inside_the_documented_ranges():
+    for seed in range(20):
+        p = gps_noise.FieldNoiseParams.randomized(np.random.default_rng(seed))
+        assert 1.5 <= p.sigma_m <= 6.0
+        assert 0.0 <= p.dropout_per_min <= 4.0
+        assert 0.0 <= p.reacq_jump_m[0] <= p.reacq_jump_m[1] <= 20.0
+        assert 0.0 <= p.packet_loss <= 0.15
+        assert p.heading_min_speed_mps == 0.4      # 펌웨어 상수: 랜덤화 대상 아님
+        assert p.quantize_float32 is True          # 프로토콜 상수: 랜덤화 대상 아님
