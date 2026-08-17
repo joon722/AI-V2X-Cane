@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <esp_now.h>
 #include "esp_wifi.h"
+#include "esp_system.h"
 #include <Wire.h>
 #include <TinyGPSPlus.h>
 #include <ICM_20948.h>
@@ -330,6 +331,44 @@ uint8_t gpsRelocalizeAfterRejects =
   GPS_RELOCALIZE_AFTER_REJECTS_5HZ;
 bool gps5HzRecoveryRequested = false;
 uint32_t lastGps5HzRecoveryAttemptMs = 0;
+uint32_t gps5HzRecoveryCount = 0;
+uint32_t lastGps5HzRecoveryStartedMs = 0;
+
+// USB 시리얼 없이 UDP 뷰어만으로 재부팅 여부와 원인을 확인하기 위한 값.
+uint32_t caneBootCount = 0;
+esp_reset_reason_t caneResetReason = ESP_RST_UNKNOWN;
+
+const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "POWER_ON";
+    case ESP_RST_EXT: return "EXTERNAL";
+    case ESP_RST_SW: return "SOFTWARE";
+    case ESP_RST_PANIC: return "PANIC";
+    case ESP_RST_INT_WDT: return "INT_WATCHDOG";
+    case ESP_RST_TASK_WDT: return "TASK_WATCHDOG";
+    case ESP_RST_WDT: return "WATCHDOG";
+    case ESP_RST_DEEPSLEEP: return "DEEP_SLEEP";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_SDIO: return "SDIO";
+    case ESP_RST_UNKNOWN:
+    default: return "UNKNOWN";
+  }
+}
+
+void captureBootDiagnostics() {
+  caneResetReason = esp_reset_reason();
+
+  // 전원 재인가까지 포함해 누적 부팅 횟수를 남긴다.
+  Preferences bootPrefs;
+  if (bootPrefs.begin("v2xdiag", false)) {
+    caneBootCount = bootPrefs.getULong("bootcnt", 0) + 1;
+    bootPrefs.putULong("bootcnt", caneBootCount);
+    bootPrefs.end();
+  } else {
+    // NVS를 열지 못해도 이번 부팅이 화면에서 0으로 보이지 않게 한다.
+    caneBootCount = 1;
+  }
+}
 
 void updateObservedGpsRate(uint32_t now) {
   if (lastGpsMeasurementMs > 0) {
@@ -865,6 +904,8 @@ void recoverGps5HzIfNeeded() {
   }
 
   lastGps5HzRecoveryAttemptMs = now;
+  lastGps5HzRecoveryStartedMs = now;
+  gps5HzRecoveryCount++;
   Serial.printf(
     "[GPS] observed %.0fms updates -> retrying 5Hz configuration\n",
     gpsObservedUpdateIntervalMs
@@ -1754,6 +1795,10 @@ void sendUdpTelemetry() {
     sizeof(udpBuffer),
     "시각ms:%lu\n"
     "IMU시각ms:%lu\n"
+    "부팅횟수:%lu\n"
+    "리셋원인:%s\n"
+    "GPS복구횟수:%lu\n"
+    "마지막GPS복구ms:%lu\n"
     "위험:%u\n"
     "차량위험:%u\n"
     "차량위험경과ms:%ld\n"
@@ -1795,6 +1840,10 @@ void sendUdpTelemetry() {
     "차량수신:%lu\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
+    (unsigned long)caneBootCount,
+    resetReasonName(caneResetReason),
+    (unsigned long)gps5HzRecoveryCount,
+    (unsigned long)lastGps5HzRecoveryStartedMs,
     currentRisk == 255 ? 0 : currentRisk,
     vehicleRiskLevel,
     vehicleRiskAgeMs,
@@ -1974,11 +2023,16 @@ bool runDeviceCommand(const String &name, bool hasValue, float number) {
 // =====================
 #define CMD_UDP_PORT 4300
 #define TUNING_NVS_NAMESPACE "v2xtune"
+// 이 노드의 명령 태그. 맥이 형제 STA(지팡이)에게 직접 못 보내는 문제 때문에
+// 명령을 "@cane <명령>" 형태로 브로드캐스트하면 지팡이만 골라서 처리한다.
+#define NODE_CMD_TAG "cane"
 
 WiFiUDP cmdUdp;
 bool cmdUdpStarted = false;
 IPAddress cmdReplyIp;
 uint16_t cmdReplyPort = 0;
+// 지팡이는 맥에게 직접(유니캐스트) 못 보내므로 응답도 브로드캐스트로 보낸다.
+bool cmdReplyBroadcast = true;
 Preferences tuningPrefs;
 
 enum TuningValueType {
@@ -2049,7 +2103,8 @@ void cmdReply(const char *format, ...) {
                     ? (size_t)written
                     : sizeof(line) - 1;
 
-  if (cmdUdp.beginPacket(cmdReplyIp, cmdReplyPort)) {
+  IPAddress replyDst = cmdReplyBroadcast ? udpBroadcastAddress : cmdReplyIp;
+  if (cmdUdp.beginPacket(replyDst, cmdReplyPort)) {
     cmdUdp.write((const uint8_t *)line, length);
     cmdUdp.endPacket();
   }
@@ -2235,7 +2290,18 @@ void handleUdpCommands() {
     for (char *token = strtok_r(buffer, "\r\n", &context);
          token != NULL;
          token = strtok_r(NULL, "\r\n", &context)) {
-      runTuningCommand(String(token));
+      char *cmd = token;
+      // "@노드 <명령>" 형식이면 태그가 이 노드와 일치할 때만 처리한다.
+      // (형제 STA끼리 직접 못 보내 명령을 브로드캐스트로 받기 때문.)
+      if (cmd[0] == '@') {
+        char *space = strchr(cmd, ' ');
+        if (space == NULL) continue;
+        *space = '\0';
+        bool mine = (strcmp(cmd + 1, NODE_CMD_TAG) == 0);
+        cmd = space + 1;
+        if (!mine) continue;
+      }
+      runTuningCommand(String(cmd));
     }
   }
 }
@@ -2283,6 +2349,13 @@ void setup() {
   forceOutputsOff();
   Serial.begin(115200);
   delay(1000);
+
+  captureBootDiagnostics();
+  Serial.printf(
+    "[BOOT] count=%lu reset=%s\n",
+    (unsigned long)caneBootCount,
+    resetReasonName(caneResetReason)
+  );
 
   captureTuningDefaults();
   loadTuningFromFlash();
