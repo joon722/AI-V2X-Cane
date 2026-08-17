@@ -58,6 +58,7 @@
 #define MSG_RSU_REPLY 2
 #define MSG_CANE_STATUS 3
 #define MSG_RISK_ALERT 4
+#define MSG_UWB_RANGE 5
 
 #define NODE_VEHICLE 0x10
 #define NODE_CANE 0x20
@@ -239,6 +240,25 @@ typedef struct __attribute__((packed)) v2x_risk_message {
   uint16_t seq_num;
 } v2x_risk_message_t;
 
+typedef struct __attribute__((packed)) v2x_uwb_message {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t msg_type;
+  uint8_t node_type;
+  uint8_t flags;
+  uint32_t target_id;
+  uint32_t src_id;
+  float raw_distance_m;
+  float distance_m;
+  float closing_speed_mps;
+  float offset_m;
+  uint32_t timestamp_ms;
+  uint16_t seq_num;
+} v2x_uwb_message_t;
+
+static_assert(sizeof(v2x_uwb_message_t) == 38,
+              "UWB range packet must be 38 bytes");
+
 TinyGPSPlus gps;
 ICM_20948_I2C imu;
 HardwareSerial gpsSerial(2);
@@ -255,6 +275,7 @@ uint32_t lastWifiReconnectMs = 0;
 uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txStatus;
 v2x_risk_message_t rxRisk;
+v2x_uwb_message_t latestUwbRange;
 
 uint32_t caneId = 0;
 uint16_t seq = 0;
@@ -266,6 +287,10 @@ uint32_t lastBtCheckMs = 0;
 
 uint32_t vehicleRxCount = 0;
 uint32_t lastVehicleRxMs = 0;
+bool hasUwbRange = false;
+uint32_t uwbRxCount = 0;
+uint32_t lastUwbRxMs = 0;
+portMUX_TYPE uwbMux = portMUX_INITIALIZER_UNLOCKED;
 
 // 차량 -> 지팡이 ESP-NOW 수신 신호 세기 진단값.
 int8_t latestVehicleRssiDbm = -127;
@@ -1565,6 +1590,22 @@ void handleVehicleStatus(const v2x_status_message_t &vehicleMsg) {
   applyRisk(risk);
 }
 
+void handleUwbRange(const v2x_uwb_message_t &message) {
+  if (message.node_type != NODE_VEHICLE) return;
+  if (message.target_id != 0 &&
+      message.target_id != caneId &&
+      message.target_id != 0xFFFFFFFFUL) {
+    return;
+  }
+
+  portENTER_CRITICAL(&uwbMux);
+  latestUwbRange = message;
+  hasUwbRange = true;
+  uwbRxCount++;
+  lastUwbRxMs = millis();
+  portEXIT_CRITICAL(&uwbMux);
+}
+
 void onDataRecv(const esp_now_recv_info_t *info,
                 const uint8_t *data,
                 int len) {
@@ -1629,6 +1670,22 @@ void onDataRecv(const esp_now_recv_info_t *info,
 
     memcpy(&rxRisk, data, sizeof(rxRisk));
     handleRiskMessage(rxRisk);
+    return;
+  }
+
+  if (receivedMsgType == MSG_UWB_RANGE) {
+    if (len != sizeof(v2x_uwb_message_t)) {
+      Serial.printf(
+        "[CANE RX] invalid UWB packet size len=%d expected=%u\n",
+        len,
+        (unsigned int)sizeof(v2x_uwb_message_t)
+      );
+      return;
+    }
+
+    v2x_uwb_message_t uwbMessage;
+    memcpy(&uwbMessage, data, sizeof(uwbMessage));
+    handleUwbRange(uwbMessage);
     return;
   }
 
@@ -1763,13 +1820,17 @@ void setupEspNow() {
 void sendUdpTelemetry() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  char udpBuffer[1536];
+  char udpBuffer[1792];
 
   int8_t rssiRawSnapshot;
   float rssiFilteredSnapshot;
   bool rssiValidSnapshot;
   uint32_t rssiSampleCountSnapshot;
   uint32_t rssiLastMsSnapshot;
+  v2x_uwb_message_t uwbSnapshot = {};
+  bool uwbReceivedSnapshot;
+  uint32_t uwbRxCountSnapshot;
+  uint32_t uwbLastMsSnapshot;
 
   portENTER_CRITICAL(&rssiMux);
   rssiRawSnapshot = latestVehicleRssiDbm;
@@ -1778,6 +1839,13 @@ void sendUdpTelemetry() {
   rssiSampleCountSnapshot = vehicleRssiSampleCount;
   rssiLastMsSnapshot = lastVehicleRssiMs;
   portEXIT_CRITICAL(&rssiMux);
+
+  portENTER_CRITICAL(&uwbMux);
+  uwbSnapshot = latestUwbRange;
+  uwbReceivedSnapshot = hasUwbRange;
+  uwbRxCountSnapshot = uwbRxCount;
+  uwbLastMsSnapshot = lastUwbRxMs;
+  portEXIT_CRITICAL(&uwbMux);
 
   uint32_t telemetryMs = millis();
   long rssiAgeMs = rssiValidSnapshot
@@ -1789,6 +1857,11 @@ void sendUdpTelemetry() {
   long rsuRiskAgeMs = rsuRiskMs > 0
     ? (long)(telemetryMs - rsuRiskMs)
     : -1L;
+  long uwbAgeMs = uwbReceivedSnapshot
+    ? (long)(telemetryMs - uwbLastMsSnapshot)
+    : -1L;
+  bool uwbFreshSnapshot =
+    uwbReceivedSnapshot && uwbAgeMs >= 0 && uwbAgeMs <= 1000L;
 
   int written = snprintf(
     udpBuffer,
@@ -1837,7 +1910,15 @@ void sendUdpTelemetry() {
     "RSSI평활:%.1f\n"
     "RSSI샘플:%lu\n"
     "RSSI경과ms:%ld\n"
-    "차량수신:%lu\n",
+    "차량수신:%lu\n"
+    "UWB유효:%u\n"
+    "UWB보정:%u\n"
+    "UWB원시거리:%.3f\n"
+    "UWB보정거리:%.3f\n"
+    "UWB접근속도:%.3f\n"
+    "UWB오프셋:%.3f\n"
+    "UWB경과ms:%ld\n"
+    "UWB수신:%lu\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     (unsigned long)caneBootCount,
@@ -1888,7 +1969,15 @@ void sendUdpTelemetry() {
     rssiFilteredSnapshot,
     (unsigned long)rssiSampleCountSnapshot,
     rssiAgeMs,
-    (unsigned long)vehicleRxCount
+    (unsigned long)vehicleRxCount,
+    uwbFreshSnapshot && (uwbSnapshot.flags & 0x01) ? 1u : 0u,
+    (uwbSnapshot.flags & 0x02) ? 1u : 0u,
+    uwbSnapshot.raw_distance_m,
+    uwbSnapshot.distance_m,
+    uwbSnapshot.closing_speed_mps,
+    uwbSnapshot.offset_m,
+    uwbAgeMs,
+    (unsigned long)uwbRxCountSnapshot
   );
 
   if (written <= 0) return;
