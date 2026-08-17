@@ -85,7 +85,7 @@
 <body>
 <div id="app">
   <div id="stage">
-    <svg id="scene" viewBox="0 0 900 620" preserveAspectRatio="xMidYMid slice"></svg>
+    <svg id="scene" viewBox="0 0 900 620" preserveAspectRatio="xMidYMax slice"></svg>
     <div id="alertGlow"></div>
 
     <div id="topbar">
@@ -152,7 +152,7 @@ const scene=document.getElementById("scene");
 const LEVEL_COLOR=["#34D399","#FBBF24","#FB923C","#EF4444"];
 const LEVEL_NAME=["안전","주의","경고","위험"];
 const ROAD_HALF=5.4, WALK_OUT=9.0;
-const MY_CAR_Z=2.2;                      // 내 차는 화면 하단 중앙 고정
+const MY_CAR_Z=4.0;                      // 내 차는 화면 하단 중앙 고정
 const MOCK_MODE=new URLSearchParams(location.search).has("mock");
 
 function el(t,a){const n=document.createElementNS(NS,t);
@@ -174,72 +174,83 @@ function buildStatic(){
     g.appendChild(el("stop",{offset:"100%","stop-color":c,"stop-opacity":"0"}));
     defs.appendChild(g);};
   mk("mglow","#60A5FA",".26");mk("pglow","#FBBF24",".30");mk("dglow","#EF4444",".42");
+  const lg=(id,stops)=>{const g=el("linearGradient",{id:id,x1:"0",y1:"0",x2:"0",y2:"1"});
+    stops.forEach(([o,c])=>g.appendChild(el("stop",{offset:o,"stop-color":c})));defs.appendChild(g);};
+  lg("carbody",[["0%","#E7ECF2"],["52%","#CCD4DE"],["100%","#98A3B3"]]);   // 매트 은회색 차체
+  lg("carglass",[["0%","#39506B"],["100%","#161F2C"]]);                     // 뒷유리
   gStatic.appendChild(defs);
 
   gStatic.appendChild(el("rect",{x:0,y:0,width:W,height:H,fill:"url(#sky)"}));
   gStatic.appendChild(el("line",{x1:0,y1:HORIZON,x2:W,y2:HORIZON,
     stroke:"#1C2430","stroke-width":1}));
 
-  const quad=(x1,x2,fill,stroke)=>{
+  // 3차선 도로, 내 차는 가운데 차로 중앙(x=0). 내 차로 좌우 경계 = 파란 테슬라 라인.
+  const quad=(x1,x2,fill)=>{
     const a=proj(.6,x1),b=proj(160,x1),c=proj(160,x2),d=proj(.6,x2);
-    return el("path",{d:`M${a.x},${a.y} L${b.x},${b.y} L${c.x},${c.y} L${d.x},${d.y} Z`,
-      fill:fill,stroke:stroke,"stroke-width":1});
+    return el("path",{d:`M${a.x},${a.y} L${b.x},${b.y} L${c.x},${c.y} L${d.x},${d.y} Z`,fill:fill});
   };
-  gStatic.appendChild(quad(-ROAD_HALF,ROAD_HALF,"#141922","#1E2531"));
-  gStatic.appendChild(quad(-WALK_OUT,-ROAD_HALF,"#111820","#1D2530"));
-  gStatic.appendChild(quad(ROAD_HALF,WALK_OUT,"#111820","#1D2530"));
-
-  for(const cx of[-.18,.18]){
-    const a=proj(.6,cx),b=proj(160,cx);
-    gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
-      stroke:"#8A6D1F","stroke-width":2.2,opacity:".85"}));
-  }
-  for(const lx of[-2.7,2.7]){
-    for(let z=2;z<160;z+=9){
-      const a=proj(z,lx),b=proj(z+3.4,lx);
-      if(b.y<HORIZON+4)break;
-      gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
-        stroke:"#242D3A","stroke-width":Math.max(.4,a.s*1.5),"stroke-linecap":"round"}));
-    }
-  }
-  for(const ex of[-ROAD_HALF,ROAD_HALF]){
+  const LANE=3.8;                       // 차로 폭
+  gStatic.appendChild(quad(-8.5,-1.5*LANE,"#0E1219"));   // 왼쪽 갓길
+  gStatic.appendChild(quad(1.5*LANE,8.5,"#0E1219"));     // 오른쪽 갓길
+  gStatic.appendChild(quad(-1.5*LANE,1.5*LANE,"#12161D"));// 3차선 도로 바닥
+  // 도로 양끝 흰 경계선
+  for(const ex of[-1.5*LANE,1.5*LANE]){
     const a=proj(.6,ex),b=proj(160,ex);
-    gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,
-      stroke:"#3A4553","stroke-width":1.3}));
+    gStatic.appendChild(el("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,stroke:"#39434F","stroke-width":1.3}));
   }
-  for(const side of[-1,1]){
-    for(let z=8;z<130;z+=16){
-      const p=proj(z,side*(WALK_OUT+.6)),s=p.s;
-      if(s<.05)continue;
-      gStatic.appendChild(el("rect",{x:p.x-s*13,y:p.y-46*s,width:s*26,height:46*s,
-        rx:1,fill:"#161C26"}));
-      gStatic.appendChild(el("circle",{cx:p.x,cy:p.y-48*s,r:Math.max(1,3*s),fill:"#2A3444"}));
-    }
+  // 파란 차선 스트립(내 차로 좌우 경계 = 주행 경로), 소실점으로 모임
+  function laneStrip(xw){
+    const n=proj(.6,xw), f=proj(70,xw);
+    const strip=(wn,wf,col,op)=>gStatic.appendChild(el("path",{
+      d:`M${n.x-wn},${n.y} L${n.x+wn},${n.y} L${f.x+wf},${f.y} L${f.x-wf},${f.y} Z`,
+      fill:col,"fill-opacity":op}));
+    strip(18,3.4,"#3E9BFF",.13);   // 바깥 글로우
+    strip(9.5,1.7,"#4FA8FF",.34);  // 중간
+    strip(4,.8,"#A6D3FF",.94);     // 밝은 중심선
   }
+  laneStrip(-LANE/2); laneStrip(LANE/2);   // 내 차로 좌우(±1.9)
 }
 
-// 내 차 (뒤에서 본 모습) — 화면 하단 중앙
+// 내 차 (테슬라식, 뒤에서 본 모습) — 화면 하단 중앙
 function myCarShape(g,s){
-  const w=132*s,h=60*s;
-  g.appendChild(el("ellipse",{cx:0,cy:h*.54,rx:w*.92,ry:h*.32,fill:"url(#mglow)"}));
-  const body=el("path",{fill:"#E8EAED"});
+  const W=134*s, H=80*s;
+  // 바닥 그림자 + 센싱 글로우
+  g.appendChild(el("ellipse",{cx:0,cy:H*.36,rx:W*.52,ry:H*.12,fill:"#04060A","fill-opacity":".5"}));
+  g.appendChild(el("ellipse",{cx:0,cy:H*.32,rx:W*.66,ry:H*.20,fill:"url(#mglow)"}));
+  // 뒷바퀴(양쪽 하단, 살짝 바깥)
+  [-1,1].forEach(d=>{
+    g.appendChild(el("rect",{x:d*W*.45-W*.055,y:H*.05,width:W*.11,height:H*.28,rx:W*.028,fill:"#0A0D12"}));
+    g.appendChild(el("rect",{x:d*W*.45-W*.04,y:H*.11,width:W*.08,height:H*.15,rx:W*.018,fill:"#1B212A"}));
+  });
+  // 차체(넓고 낮은 자세 + 뒷펜더 볼륨)
+  const body=el("path",{fill:"url(#carbody)",stroke:"none"});
   body.setAttribute("d",
-    `M${-w*.46},${h*.30} q0,${-h*.24} ${w*.09},${-h*.28}
-     l${w*.10},${-h*.36} q${w*.02},${-h*.10} ${w*.11},${-h*.10}
-     l${w*.32},0 q${w*.09},0 ${w*.11},${h*.10}
-     l${w*.10},${h*.36} q${w*.09},${h*.04} ${w*.09},${h*.28}
-     l0,${h*.15} q0,${h*.08} ${-w*.09},${h*.08}
-     l${-w*.82},0 q${-w*.09},0 ${-w*.09},${-h*.08} Z`);
+    `M${-W*.47},${H*.18}
+     C${-W*.51},${H*.00} ${-W*.49},${-H*.12} ${-W*.44},${-H*.17}
+     C${-W*.40},${-H*.31} ${-W*.30},${-H*.43} ${-W*.20},${-H*.48}
+     Q${-W*.14},${-H*.54} ${-W*.05},${-H*.54}
+     L${W*.05},${-H*.54} Q${W*.14},${-H*.54} ${W*.20},${-H*.48}
+     C${W*.30},${-H*.43} ${W*.40},${-H*.31} ${W*.44},${-H*.17}
+     C${W*.49},${-H*.12} ${W*.51},${H*.00} ${W*.47},${H*.18}
+     Q${W*.46},${H*.30} ${W*.31},${H*.30} L${-W*.31},${H*.30}
+     Q${-W*.46},${H*.30} ${-W*.47},${H*.18} Z`);
   g.appendChild(body);
-  const glass=el("path",{fill:"#243244","fill-opacity":".95"});
-  glass.setAttribute("d",
-    `M${-w*.26},${-h*.32} l${w*.08},${-h*.26} q${w*.02},${-h*.06} ${w*.07},${-h*.06}
-     l${w*.22},0 q${w*.05},0 ${w*.07},${h*.06} l${w*.08},${h*.26} Z`);
-  g.appendChild(glass);
-  [-1,1].forEach(d=>g.appendChild(el("rect",{x:d<0?-w*.41:w*.27,y:-h*.05,
-    width:w*.14,height:h*.12,rx:h*.05,fill:"#FCA5A5",opacity:".9"})));
-  [-1,1].forEach(d=>g.appendChild(el("rect",{x:d<0?-w*.50:w*.41,y:h*.16,
-    width:w*.09,height:h*.20,rx:h*.06,fill:"#0E1117"})));
+  // 지붕 하이라이트
+  g.appendChild(el("path",{fill:"#FFFFFF","fill-opacity":".5",
+    d:`M${-W*.15},${-H*.48} Q${-W*.13},${-H*.54} ${-W*.04},${-H*.54} L${W*.04},${-H*.54} Q${W*.13},${-H*.54} ${W*.15},${-H*.48} L${W*.12},${-H*.42} L${-W*.12},${-H*.42} Z`}));
+  // 뒷유리(넓은 사다리꼴)
+  g.appendChild(el("path",{fill:"url(#carglass)",
+    d:`M${-W*.23},${-H*.20} L${-W*.155},${-H*.43} Q${-W*.125},${-H*.47} ${-W*.03},${-H*.47} L${W*.03},${-H*.47} Q${W*.125},${-H*.47} ${W*.155},${-H*.43} L${W*.23},${-H*.20} Q0,${-H*.12} ${-W*.23},${-H*.20} Z`}));
+  // 테일라이트 가로 바(은은하게)
+  g.appendChild(el("rect",{x:-W*.36,y:-H*.03,width:W*.72,height:H*.05,rx:H*.024,fill:"#5A2226","fill-opacity":".85"}));
+  g.appendChild(el("rect",{x:-W*.33,y:-H*.02,width:W*.66,height:H*.02,rx:H*.01,fill:"#D06A6A","fill-opacity":".8"}));
+  // 범퍼(하단 투톤) + 번호판
+  g.appendChild(el("path",{fill:"#A7B1C0","fill-opacity":".85",
+    d:`M${-W*.42},${H*.09} Q${-W*.44},${H*.29} ${-W*.29},${H*.30} L${W*.29},${H*.30} Q${W*.44},${H*.29} ${W*.42},${H*.09} Z`}));
+  g.appendChild(el("rect",{x:-W*.085,y:H*.13,width:W*.17,height:H*.09,rx:H*.014,fill:"#E9EDF2"}));
+  // 사이드미러
+  [-1,1].forEach(d=>g.appendChild(el("path",{fill:"#C4CCD8",
+    d:`M${d*W*.45},${-H*.24} q${d*W*.05},${-H*.008} ${d*W*.045},${H*.05} l${-d*W*.04},0 Z`})));
 }
 
 // 지팡이 사용자
