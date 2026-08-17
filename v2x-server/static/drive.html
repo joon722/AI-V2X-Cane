@@ -85,7 +85,7 @@
 <body>
 <div id="app">
   <div id="stage">
-    <svg id="scene" viewBox="0 0 900 620" preserveAspectRatio="xMidYMid slice"></svg>
+    <svg id="scene" viewBox="0 0 900 620" preserveAspectRatio="xMidYMax slice"></svg>
     <div id="alertGlow"></div>
 
     <div id="topbar">
@@ -152,7 +152,7 @@ const scene=document.getElementById("scene");
 const LEVEL_COLOR=["#34D399","#FBBF24","#FB923C","#EF4444"];
 const LEVEL_NAME=["안전","주의","경고","위험"];
 const ROAD_HALF=5.4, WALK_OUT=9.0;
-const MY_CAR_Z=2.2;                      // 내 차는 화면 하단 중앙 고정
+const MY_CAR_Z=4.0;                      // 내 차는 화면 하단 중앙 고정
 const MOCK_MODE=new URLSearchParams(location.search).has("mock");
 
 function el(t,a){const n=document.createElementNS(NS,t);
