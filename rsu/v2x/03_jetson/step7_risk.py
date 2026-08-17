@@ -205,6 +205,18 @@ T_ALARM_MAX_TTC_S = 30.0
 NEAR_FLOOR_L2_M = 3.0   # 이 거리 안이면 최소 레벨 2(경고)
 NEAR_FLOOR_L1_M = 5.0   # 이 거리 안이면 최소 레벨 1(주의)
 
+# 접근속도 데드밴드. 이 아래의 접근속도(closing_los)는 접근이 아니라 GPS 잡음으로
+# 보고 TTC를 내지 않는다(9999 → 상한에 걸려 레벨 0, 근접 거리 하한은 별도).
+#
+# 2026-08-17 오후 실측: 두 노드가 모두 서 있는데 KF 접근속도가 |중앙 0.04~0.19,
+# p90 0.22~0.7| m/s로 흔들렸다 - 패킷 좌표가 float32라 0.42/0.53 m 격자로
+# 양자화되는 데다 GPS σ가 얹힌다. 10 m 안에서는 이 잡음이 TTC 30초 경계
+# (0.33 m/s)와 8초 경계(1.25 m/s)를 넘나들며 레벨 0↔1↔2를 깜빡이게 했다.
+# 0.5는 그 잡음 p90에 가깝고, 진짜 접근(RC 1 m/s+, 실차 3 m/s+)은 통과한다.
+# 잃는 것: 0.5 m/s 미만의 느린 접근은 TTC 경보가 없다 - 5 m 안은 near_floor가
+# 거리로 지키고, 그 밖에서 0.5 m/s면 TTC 10초 이상이라 여유가 있다. 끄려면 0.
+MIN_CLOSING_MPS = 0.5
+
 
 @dataclass(frozen=True)
 class RiskAssessment:
@@ -231,6 +243,7 @@ def assess_risk(
     alarm_max_ttc_s=T_ALARM_MAX_TTC_S,
     near_floor_l2_m=NEAR_FLOOR_L2_M,
     near_floor_l1_m=NEAR_FLOOR_L1_M,
+    min_closing_mps=MIN_CLOSING_MPS,
 ):
     """Score one filtered-track Kinematics sample.
 
@@ -240,12 +253,16 @@ def assess_risk(
 
     TTC가 floor_ttc_s 아래면 점수와 게이트를 모두 건너뛰고 레벨 3을 낸다
     (reason="safety_floor"). TTC가 alarm_max_ttc_s를 넘으면 규칙 레벨을
-    0으로 누른다(reason="ttc_capped"). 분석용으로 끄려면 각각 0을 준다.
+    0으로 누른다(reason="ttc_capped"). 접근속도가 min_closing_mps 아래면
+    잡음으로 보고 접근하지 않는 것으로 채점한다(TTC 9999). 분석용으로 끄려면
+    각각 0을 준다.
     """
     closing = kinematics.closing_los
-    ttc = calculate_ttc(kinematics.distance_m, closing)
+    # 잡음 크기의 접근속도는 채점에서 0으로 - 기록(closing_los)에는 원값이 남는다.
+    scored_closing = closing if closing >= min_closing_mps else 0.0
+    ttc = calculate_ttc(kinematics.distance_m, scored_closing)
     base = calculate_risk_score(
-        kinematics.distance_m, closing, vehicle_speed_mps, ttc, zone_base_risk
+        kinematics.distance_m, scored_closing, vehicle_speed_mps, ttc, zone_base_risk
     )
     gate = dcpa_gate(kinematics.dcpa, near_m, far_m, floor)
     final = round(base * gate, 2)

@@ -28,6 +28,7 @@ class FakeStore:
                 "lng": 126.9579,
                 "speed_mps": 8.3,
                 "heading_deg": 220.0,
+                "heading_valid": 1,
                 "node_risk": 0,
                 **(vehicle or {}),
             },
@@ -134,6 +135,44 @@ class TestSnapshotContents(unittest.TestCase):
         store = FakeStore(cane={"heading_deg": ""})
         snap = updated(LiveState(), store=store).snapshot(now=1000.0)
         self.assertIsNone(snap["cane"]["heading_deg"])
+
+
+class TestVehicleHeading(unittest.TestCase):
+    """차량 heading은 GPS 이동방향이라 서 있으면 못 믿는다.
+
+    펌웨어는 speed>=0.4 m/s일 때만 heading_valid=1을 주고, 아니면 이전 값이나
+    0(정북)을 heading_deg에 실어 보낸다(2026-08-17 오후: 유효 7~21%). 그 0을
+    그대로 화면에 넘기면 차량 1인칭 화면이 정지한 차를 북향으로 돌려 그린다.
+    화면에는 마지막으로 믿을 수 있었던 방향을 유지해 내보내고, 유효 여부도
+    같이 실어 화면이 스스로 판단할 수 있게 한다.
+    """
+
+    def test_valid_heading_is_carried_with_its_flag(self):
+        snap = updated(LiveState()).snapshot(now=1000.0)
+        self.assertEqual(snap["veh"]["heading_deg"], 220.0)
+        self.assertEqual(snap["veh"]["heading_valid"], 1)
+
+    def test_invalid_heading_keeps_the_last_valid_one(self):
+        state = updated(LiveState(), now=1000.0)
+        store = FakeStore(vehicle={"heading_deg": 0.0, "heading_valid": 0, "speed_mps": 0.05})
+        updated(state, now=1000.2, store=store)
+        snap = state.snapshot(now=1000.2)
+        self.assertEqual(snap["veh"]["heading_deg"], 220.0)
+        self.assertEqual(snap["veh"]["heading_valid"], 0)
+
+    def test_no_valid_heading_yet_gives_none_not_north(self):
+        store = FakeStore(vehicle={"heading_deg": 0.0, "heading_valid": 0})
+        snap = updated(LiveState(), store=store).snapshot(now=1000.0)
+        self.assertIsNone(snap["veh"]["heading_deg"])
+        self.assertEqual(snap["veh"]["heading_valid"], 0)
+
+    def test_missing_flag_is_not_trusted(self):
+        """heading_valid 칸이 없는 옛 레코드의 heading은 화면 회전에 쓰지 않는다."""
+        store = FakeStore()
+        del store.latest["vehicle"]["heading_valid"]
+        snap = updated(LiveState(), store=store).snapshot(now=1000.0)
+        self.assertIsNone(snap["veh"]["heading_deg"])
+        self.assertEqual(snap["veh"]["heading_valid"], 0)
 
 
 class TestTtcSentinel(unittest.TestCase):

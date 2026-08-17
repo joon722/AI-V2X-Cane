@@ -291,6 +291,123 @@ class FixDedupAndResetTest(unittest.TestCase):
         tracker.observe(0.0, 5.0, 0.0, True)       # 00:00:00 next day
         self.assertAlmostEqual(tracker.last_time, 86_400.0, places=6)
 
+    def test_a_gap_over_two_seconds_restarts_the_track(self):
+        """2026-08-17 field: a vehicle silent for 3-5 s (GPS outage, node
+        stall) came back metres away; extrapolating the old velocity across
+        that gap read the jump as 5-11 m/s of approach and tripped level 3.
+        Ten missing 5 Hz fixes is an outage, so the track starts over."""
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 100.0, True)
+        tracker.observe(0.0, 5.0, 101.0, True)    # learned ~5 m/s northward
+        tracker.observe(0.0, 5.0, 103.5, True)    # 2.5 s of silence
+        vel_n = tracker.state_ahead(0.0)[3]
+        self.assertAlmostEqual(vel_n, 0.0, places=6)
+
+    def test_a_position_jump_far_beyond_the_prediction_restarts_the_track(self):
+        """2026-08-17 17:48:19: the vehicle repeated one stale fix for 3 s at
+        10 Hz (so the track never went quiet), then the next fix landed 13 m
+        away while the node reported 0.04 m/s. Fed as motion, that read as
+        10 m/s of approach and level 3. A residual that far outside what the
+        filter predicted is a GPS jump, and the track starts over there."""
+        tracker = NodeTracker()
+        for k in range(30):
+            tracker.observe(0.0, 0.0, 100.0 + 0.1 * k, False, speed_hint=0.04)
+        tracker.observe(0.0, 13.0, 103.1, False, speed_hint=0.04)
+        pos_n, vel_n = tracker.state_ahead(0.0)[1], tracker.state_ahead(0.0)[3]
+        self.assertAlmostEqual(pos_n, 13.0, places=6)
+        self.assertAlmostEqual(vel_n, 0.0, places=6)
+
+    def test_a_fast_car_is_not_mistaken_for_a_jump(self):
+        """20 m/s at 1 Hz moves 20 m per fix. The node says 20 m/s, so that
+        displacement is expected and the track must keep learning it."""
+        tracker = NodeTracker()
+        for k in range(6):
+            tracker.observe(0.0, 20.0 * k, 100.0 + 1.0 * k, False, speed_hint=20.0)
+        self.assertGreater(tracker.state_ahead(0.0)[3], 15.0)
+
+    def test_a_single_grid_hop_is_not_read_as_half_a_metre_per_second(self):
+        """Packet lat/lng are float32, so a still node hops between grid cells
+        0.42-0.53 m apart. Starting the filter with a 10 m/s speed prior let
+        one such hop at 5 Hz read as ~0.55 m/s (a phantom above the closing
+        deadband). The prior must be tight enough that a hop reads well below."""
+        tracker = NodeTracker()
+        tracker.observe(0.0, 0.0, 100.0, False)
+        tracker.observe(0.0, 0.45, 100.2, False)
+        self.assertLess(abs(tracker.state_ahead(0.0)[3]), 0.2)
+
+
+class TrackSettleGateTest(unittest.TestCase):
+    """After a track (re)starts, the first second of velocity is a guess made
+    from one or two noisy fixes. Reporting a closing speed from it fabricated
+    approaches (2026-08-17 18:09:24 / 18:27:24: the vehicle came back after a
+    10.8 s stall and level 3 fired on nothing). Until the track has settled the
+    pair reports "no closing speed"; distance and relative position stay live."""
+
+    def _observe(self, pipeline, type_, seq, now, north_m):
+        lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, north_m)
+        payload = {
+            "type": type_,
+            "node_id": 1 if type_ == "cane" else 2,
+            "seq": seq,
+            "gps_valid": 1,
+            "lat": lat if type_ == "vehicle" else CANE_LAT,
+            "lng": lng if type_ == "vehicle" else CANE_LNG,
+            "speed_mps": 0.0,
+            "heading_deg": 0.0,
+            "heading_valid": 0,
+        }
+        row = normalize_record(payload, "test", now=now)
+        pipeline.store.update(row)
+        pipeline.observe(row)
+        return pipeline.compute()
+
+    def _run(self):
+        pipeline = KinematicsPipeline(StateStore())
+        results = []
+        seq = 0
+        # 3 s of both nodes reporting at 5 Hz: tracks settle.
+        for step in range(15):
+            t = step * 0.2
+            self._observe(pipeline, "cane", seq, t, 0.0)
+            results.append((t, self._observe(pipeline, "vehicle", seq, t + 0.01, 15.0)))
+            seq += 1
+        # 3 s with only the cane: vehicle GPS outage.
+        for step in range(15, 30):
+            t = step * 0.2
+            results.append((t, self._observe(pipeline, "cane", seq, t, 0.0)))
+            seq += 1
+        # Vehicle re-acquired 5 m closer and now approaching at 1 m/s, 5 Hz, 2 s.
+        for step in range(30, 40):
+            t = step * 0.2
+            self._observe(pipeline, "cane", seq, t, 0.0)
+            north = 10.0 - 1.0 * (t - 6.0)
+            results.append((t, self._observe(pipeline, "vehicle", seq, t + 0.01, north)))
+            seq += 1
+        return results
+
+    def test_first_second_after_restart_reports_no_closing_speed(self):
+        restart_t = 30 * 0.2
+        early = [f for t, r in self._run() if r is not None
+                 and restart_t <= t < restart_t + 1.0 for _, _, f in [r]]
+        self.assertTrue(early, "no results right after the restart")
+        for filtered in early:
+            self.assertEqual(filtered.closing_los, 0.0)
+            self.assertIsNone(filtered.ttc_simple)
+            self.assertIsNone(filtered.tcpa)
+            self.assertIsNone(filtered.dcpa)
+            # The pair is still tracked: distance and bearing stay live.
+            self.assertAlmostEqual(filtered.distance_m, 10.0, delta=1.5)
+            self.assertAlmostEqual(filtered.rel_north, 10.0, delta=1.5)
+
+    def test_settled_track_reports_the_approach_again(self):
+        restart_t = 30 * 0.2
+        late = [f for t, r in self._run() if r is not None
+                and t >= restart_t + 1.2 for _, _, f in [r]]
+        self.assertTrue(late, "no results after the settle window")
+        for filtered in late:
+            self.assertGreater(filtered.closing_los, 0.5)
+            self.assertIsNotNone(filtered.ttc_simple)
+
 
 class GpsTimeAlignmentTest(unittest.TestCase):
     """Packets repeat each 1 Hz fix ten times; gps_time must deduplicate them."""
@@ -468,6 +585,59 @@ class PipelineDopplerPolicyTest(unittest.TestCase):
             self._observe(pipeline, "cane", step, t, lat, lng, 0.2, 0.0, 0)
         _, _, vel_e, vel_n = pipeline.trackers["cane"].state_ahead(0.0)
         self.assertLess(math.hypot(vel_e, vel_n), 0.6)
+
+
+class VehicleBiasTest(unittest.TestCase):
+    """Two receivers on the same spot read metres apart (2026-08-17: 6.98 m E,
+    -1.35 m N). The pipeline must subtract that systematic offset from the
+    vehicle before any relative geometry, in raw and filtered paths alike."""
+
+    BIAS_E = 6.98
+    BIAS_N = -1.35
+
+    def _run(self, vehicle_bias):
+        pipeline = KinematicsPipeline(StateStore(), vehicle_bias=vehicle_bias)
+        # Both antennas physically at the cane; the vehicle receiver reports
+        # coordinates displaced by the bias.
+        bearing = math.degrees(math.atan2(self.BIAS_E, self.BIAS_N)) % 360.0
+        veh_lat, veh_lng = offset_position(
+            CANE_LAT, CANE_LNG, bearing, math.hypot(self.BIAS_E, self.BIAS_N)
+        )
+        result = None
+        for step in range(5):
+            t = step * 0.2
+            for type_, lat, lng in (("cane", CANE_LAT, CANE_LNG),
+                                    ("vehicle", veh_lat, veh_lng)):
+                payload = {
+                    "type": type_,
+                    "node_id": 1 if type_ == "cane" else 2,
+                    "seq": step,
+                    "gps_valid": 1,
+                    "lat": lat,
+                    "lng": lng,
+                    "speed_mps": 0.0,
+                    "heading_deg": 0.0,
+                    "heading_valid": 0,
+                }
+                row = normalize_record(payload, "test", now=t)
+                pipeline.store.update(row)
+                pipeline.observe(row)
+            result = pipeline.compute()
+        self.assertIsNotNone(result)
+        return result
+
+    def test_without_bias_the_pair_reads_the_raw_offset(self):
+        _, raw, _ = self._run((0.0, 0.0))
+        self.assertAlmostEqual(
+            raw.distance_m, math.hypot(self.BIAS_E, self.BIAS_N), delta=0.05
+        )
+
+    def test_with_bias_the_pair_reads_co_located(self):
+        _, raw, filtered = self._run((self.BIAS_E, self.BIAS_N))
+        self.assertLess(raw.distance_m, 0.05)
+        self.assertLess(filtered.distance_m, 0.1)
+        self.assertLess(abs(filtered.rel_east), 0.1)
+        self.assertLess(abs(filtered.rel_north), 0.1)
 
 
 if __name__ == "__main__":

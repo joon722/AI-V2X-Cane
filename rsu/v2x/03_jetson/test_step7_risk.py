@@ -8,6 +8,7 @@ from step7_risk import (
     DCPA_FAR_M,
     DCPA_FLOOR,
     DCPA_NEAR_M,
+    MIN_CLOSING_MPS,
     T_ALARM_MAX_TTC_S,
     T_FLOOR_TTC_S,
     assess_risk,
@@ -219,6 +220,60 @@ class TtcCapTest(unittest.TestCase):
         다른 기준으로 움직인다.
         """
         self.assertEqual(T_ALARM_MAX_TTC_S, 30.0)
+
+
+class ClosingDeadbandTest(unittest.TestCase):
+    """GPS 잡음 크기의 접근속도는 접근이 아니다.
+
+    8/17 오후 실측: 두 노드가 모두 서 있는데 KF 접근속도가 |중앙 0.04~0.19,
+    p90 0.22~0.7| m/s로 흔들렸다(패킷 좌표 float32 격자 0.42/0.53 m + GPS σ).
+    10 m 안에서는 그 잡음이 TTC 30초 경계(0.33 m/s)와 8초 경계(1.25 m/s)를
+    넘나들며 레벨 0↔1↔2를 깜빡이게 했다. 0.5 m/s 아래 접근속도는 잡음이므로
+    TTC를 내지 않는다. 진짜 접근(RC 1 m/s+, 실차 3 m/s+)은 그대로 통과하고,
+    코앞(near_floor)은 거리 규칙이 따로 지킨다.
+    """
+
+    def _still_pair_with_noise_closing(self, distance_m, closing_mps):
+        # 접근속도만 잡음으로 주어진 정지 쌍.
+        return relative_kinematics(
+            cane_pos=(0.0, 0.0),
+            cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, distance_m),
+            veh_vel=(0.0, -closing_mps),
+        )
+
+    def test_noise_level_closing_speed_gives_no_ttc_and_no_alarm(self):
+        # 8 m, closing 0.3 m/s -> TTC 26.7초로 상한 안이라 레벨 1이 나던 경우.
+        kin = self._still_pair_with_noise_closing(8.0, 0.3)
+        result = assess_risk(kin, vehicle_speed_mps=0.1)
+        self.assertEqual(result.ttc, 9999.0)
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+
+    def test_the_measured_closing_speed_is_still_logged(self):
+        kin = self._still_pair_with_noise_closing(8.0, 0.3)
+        result = assess_risk(kin, vehicle_speed_mps=0.1)
+        self.assertAlmostEqual(result.closing_los, 0.3, places=6)
+
+    def test_closing_at_the_deadband_passes(self):
+        # 8 m, closing 0.5 m/s -> TTC 16초, 상한 안 -> 점수표대로 레벨 1.
+        kin = self._still_pair_with_noise_closing(8.0, MIN_CLOSING_MPS)
+        result = assess_risk(kin, vehicle_speed_mps=0.5)
+        self.assertAlmostEqual(result.ttc, 16.0, places=6)
+        self.assertEqual(result.reason, "table")
+        self.assertGreaterEqual(result.risk_level, 1)
+
+    def test_near_floor_is_unaffected_by_the_deadband(self):
+        kin = self._still_pair_with_noise_closing(2.5, 0.3)
+        result = assess_risk(kin, vehicle_speed_mps=0.1)
+        self.assertEqual(result.risk_level, 2)
+        self.assertEqual(result.reason, "near_floor")
+
+    def test_deadband_can_be_disabled_for_analysis(self):
+        kin = self._still_pair_with_noise_closing(8.0, 0.3)
+        result = assess_risk(kin, vehicle_speed_mps=0.1, min_closing_mps=0.0)
+        self.assertAlmostEqual(result.ttc, 8.0 / 0.3, places=6)
+        self.assertEqual(result.reason, "table")
 
 
 class SafetyFloorTest(unittest.TestCase):

@@ -17,7 +17,7 @@ import json
 import math
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from step3_parse_v2x import SOURCE_MODES, normalize_record, serial_lines
@@ -36,8 +36,12 @@ GPS_SIGMA_M = 2.5
 # a pedestrian so the filter never lags behind the faster of the two.
 ACCEL_SIGMA_MPS2 = 3.0
 # A new node's speed is unknown, so the filter starts wide and lets the first
-# few fixes pull it in.
-INITIAL_SPEED_SIGMA_MPS = 10.0
+# few fixes pull it in. Not too wide: packet lat/lng are float32, so a still
+# node hops between grid cells 0.42-0.53 m apart, and with a 10 m/s prior one
+# hop at 5 Hz read as ~0.55 m/s (2026-08-17 field, phantom approaches after
+# every track restart). 3 m/s keeps a hop under 0.1 m/s; a real car is still
+# learned within ~2 s from position alone, faster with Doppler.
+INITIAL_SPEED_SIGMA_MPS = 3.0
 
 # The GPS produces one fix per second while the radio repeats it every 100 ms,
 # and transport adds its own delay. The fix timestamp (gps_time_ms, UTC
@@ -47,8 +51,27 @@ GPS_TIME_INVALID_MS = 0xFFFFFFFF
 MS_PER_DAY = 86_400_000
 
 # A node silent for this long restarts its filter: extrapolating a stale
-# velocity across a gap fabricates motion that was never measured.
-MAX_TRACK_GAP_S = 10.0
+# velocity across a gap fabricates motion that was never measured. Ten
+# missing 5 Hz fixes is a GPS outage or a node stall, and 2026-08-17 field
+# data showed the node coming back metres away every time (re-acquisition
+# jump, firmware filter re-init) - so 2 s, not 10.
+MAX_TRACK_GAP_S = 2.0
+
+# A restarted track has learned its velocity from one or two fixes, which is
+# a guess. Until it has this much history the pair reports no closing speed
+# (TTC unknown); distance and relative position stay live so the distance
+# rules in step 7 still apply.
+TRACK_SETTLE_S = 1.0
+
+# A fix landing this far from where the filter predicted is not motion but a
+# GPS jump (2026-08-17 17:48:19: the vehicle repeated one stale fix for 3 s,
+# then the next landed 13 m away while the node reported 0.04 m/s; fed as
+# motion it read as 10 m/s of approach). ~3 sigma of the position noise, plus
+# what the node's own reported speed could legitimately cover in dt so a fast
+# car freshly (re)started, whose filter velocity is still zero, is not thrown
+# out. The track restarts at the new position.
+JUMP_GATE_M = 3.0 * GPS_SIGMA_M
+JUMP_GATE_SPEED_FACTOR = 1.5
 
 # The receiver measures speed from the Doppler shift of the satellite signals,
 # so it does not inherit position error and is available the moment the fix
@@ -301,6 +324,8 @@ class NodeTracker:
         self.east = KalmanCV1D(sigma_pos, sigma_accel)
         self.north = KalmanCV1D(sigma_pos, sigma_accel)
         self.last_time = None
+        # When the current track began; velocity is a guess until it has aged.
+        self.track_start = None
         self.time_is_gps = None
         self.day_offset = 0.0
 
@@ -308,17 +333,25 @@ class NodeTracker:
     def ready(self):
         return self.last_time is not None
 
+    def settled(self, min_age_s=TRACK_SETTLE_S):
+        """True once the current track carries at least min_age_s of fixes."""
+        return self.last_time is not None and self.last_time - self.track_start >= min_age_s
+
     def _reset(self):
         self.east = KalmanCV1D(self.sigma_pos, self.sigma_accel)
         self.north = KalmanCV1D(self.sigma_pos, self.sigma_accel)
         self.last_time = None
+        self.track_start = None
         self.day_offset = 0.0
 
-    def observe(self, east, north, timestamp, is_gps=False):
+    def observe(self, east, north, timestamp, is_gps=False, speed_hint=0.0):
         """Feed one fix. Returns True when it advanced the filter.
 
         The return value lets the caller attach same-instant follow-up
         measurements (Doppler velocity) only to fixes that were actually new.
+        `speed_hint` is the node's own reported speed; it widens the jump gate
+        so a fast mover whose filter velocity is still unknown is not read as
+        a GPS jump.
         """
         # Switching between the GPS clock and the arrival clock mid-track would
         # make dt meaningless, so a base change starts the track over.
@@ -340,7 +373,19 @@ class NodeTracker:
             if timestamp - self.last_time > MAX_TRACK_GAP_S:
                 self._reset()
 
+        if self.last_time is not None:
+            # Where the filter expected this fix, given its own velocity.
+            dt_pred = timestamp - self.last_time
+            pred_e, _ = self.east.predict_to(dt_pred)
+            pred_n, _ = self.north.predict_to(dt_pred)
+            residual = math.hypot(east - pred_e, north - pred_n)
+            allowed = JUMP_GATE_M + JUMP_GATE_SPEED_FACTOR * max(0.0, speed_hint) * dt_pred
+            if residual > allowed:
+                self._reset()
+
         dt = 0.0 if self.last_time is None else timestamp - self.last_time
+        if self.last_time is None:
+            self.track_start = timestamp
         self.east.observe(east, dt)
         self.north.observe(north, dt)
         self.last_time = timestamp
@@ -390,17 +435,32 @@ class _DistanceAnchor:
 class KinematicsPipeline:
     """Turns the step 4 state store into per-update relative kinematics."""
 
-    def __init__(self, store, sigma_pos=GPS_SIGMA_M, sigma_accel=ACCEL_SIGMA_MPS2):
+    def __init__(self, store, sigma_pos=GPS_SIGMA_M, sigma_accel=ACCEL_SIGMA_MPS2,
+                 vehicle_bias=(0.0, 0.0)):
         self.store = store
         self.frame = None
         self.trackers = {
             "cane": NodeTracker(sigma_pos, sigma_accel),
             "vehicle": NodeTracker(sigma_pos, sigma_accel),
         }
+        # Two receivers of this class sitting on the same spot still report
+        # positions metres apart (2026-08-17 field: +6.98 m east, -1.35 m
+        # north). Per-node smoothing cannot see that: it is a systematic
+        # offset between the two, so it is subtracted from the vehicle before
+        # any relative geometry. Measured by calibrate_bias.py, loaded by
+        # step 8, in this frame's east/north metres.
+        self.vehicle_bias = (float(vehicle_bias[0]), float(vehicle_bias[1]))
         self.anchor = None
         # Filtered (east, north, v_east, v_north) for each node as of the last
         # successful compute(). None until then.
         self.last_states = None
+
+    def _node_enu(self, node_type, lat, lng):
+        east, north = self.frame.to_enu(lat, lng)
+        if node_type == "vehicle":
+            east -= self.vehicle_bias[0]
+            north -= self.vehicle_bias[1]
+        return east, north
 
     def observe(self, row):
         if not has_position(row):
@@ -413,10 +473,11 @@ class KinematicsPipeline:
             if row["type"] != "cane":
                 return
             self.frame = LocalFrame(lat, lng)
-        east, north = self.frame.to_enu(lat, lng)
+        east, north = self._node_enu(row["type"], lat, lng)
         t_meas, is_gps = measurement_time(row)
         tracker = self.trackers[row["type"]]
-        if not tracker.observe(east, north, t_meas, is_gps):
+        if not tracker.observe(east, north, t_meas, is_gps,
+                               speed_hint=to_float(row.get("speed_mps"))):
             return
         self._observe_doppler(row, tracker)
 
@@ -475,8 +536,10 @@ class KinematicsPipeline:
         # across which the distance never actually moved.
         raw_time = min(cane_t, veh_t)
 
-        cane_pos = self.frame.to_enu(to_float(cane["lat"]), to_float(cane["lng"]))
-        veh_pos = self.frame.to_enu(to_float(vehicle["lat"]), to_float(vehicle["lng"]))
+        cane_pos = self._node_enu("cane", to_float(cane["lat"]), to_float(cane["lng"]))
+        veh_pos = self._node_enu(
+            "vehicle", to_float(vehicle["lat"]), to_float(vehicle["lng"])
+        )
         cane_vel = velocity_from_heading(
             to_float(cane["speed_mps"]), to_float(cane["heading_deg"])
         )
@@ -533,6 +596,13 @@ class KinematicsPipeline:
             (veh_e, veh_n),
             (veh_ve, veh_vn),
         )
+        # A track that just (re)started has a guessed velocity. Until both
+        # have settled, the pair has a distance and a bearing but no closing
+        # speed - saying so is better than a phantom approach at level 3.
+        if not all(tracker.settled() for tracker in self.trackers.values()):
+            filtered = replace(
+                filtered, closing_los=0.0, ttc_simple=None, tcpa=None, dcpa=None
+            )
         return now, raw, filtered
 
     def _latest_time(self):

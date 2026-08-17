@@ -35,7 +35,9 @@ _EMPTY = {
     "model_proba": None,
     "cane": {"lat": None, "lng": None, "heading_deg": None,
              "speed_mps": None, "gps_valid": None},
-    "veh": {"speed_mps": None, "heading_deg": None, "gps_valid": None},
+    # veh.heading_deg는 마지막으로 유효했던 이동방향이다(아래 update 참조).
+    "veh": {"speed_mps": None, "heading_deg": None, "heading_valid": None,
+            "gps_valid": None},
 }
 
 
@@ -59,6 +61,12 @@ class LiveState:
 
     def __init__(self):
         self._snap = None
+        # 차량의 마지막 유효 이동방향. 차량 heading은 GPS 이동방향이라 펌웨어가
+        # speed>=0.4 m/s일 때만 heading_valid=1을 주고, 아니면 이전 값이나 0
+        # (정북)을 실어 보낸다(2026-08-17 오후: 유효 7~21%). 그 0을 화면에
+        # 넘기면 차량 1인칭 화면이 정지한 차를 북향으로 돌려 그린다. 신호등에
+        # 선 내비가 화살표를 안 돌리듯, 믿을 수 있었던 마지막 방향을 유지한다.
+        self._veh_heading = None
 
     def update(self, now, store, decision, assessment, kinematics,
                gate=None, target_id=0):
@@ -70,6 +78,9 @@ class LiveState:
         """
         cane = store.latest["cane"]
         vehicle = store.latest["vehicle"]
+        veh_heading_valid = _to_float(vehicle.get("heading_valid"), 0) == 1
+        if veh_heading_valid:
+            self._veh_heading = _to_float(vehicle["heading_deg"])
         self._snap = {
             "t": now,
             "age_s": None,  # 읽는 시점에 채운다
@@ -97,7 +108,9 @@ class LiveState:
             },
             "veh": {
                 "speed_mps": _to_float(vehicle["speed_mps"]),
-                "heading_deg": _to_float(vehicle["heading_deg"]),
+                # 마지막 유효 이동방향(아직 없으면 None). 원값은 CSV에 남는다.
+                "heading_deg": self._veh_heading,
+                "heading_valid": 1 if veh_heading_valid else 0,
                 "gps_valid": _to_float(vehicle["gps_valid"], 0),
             },
         }

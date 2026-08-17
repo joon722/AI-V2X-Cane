@@ -146,6 +146,23 @@ def test_row_without_a_timestamp_is_not_a_snapshot(tmp_path):
     assert stream_live.snapshot_from_row(row, "jetson-test") is None
 
 
+def test_state_snapshot_carries_the_vehicle_heading_flag():
+    """8080 상태의 veh.heading_deg는 마지막 유효 방향(없으면 None)이고 heading_valid가
+    붙어 온다. 화면이 회전에 쓸지 판단하도록 둘 다 그대로 넘긴다."""
+    state = {
+        "t": 100.0, "level": 1, "distance_m": 8.5, "ttc_s": 3.5, "closing_mps": 1.2,
+        "level_source": "table", "rel_east_m": 6.3, "rel_north_m": 2.1,
+        "cane": {"lat": 37.496216, "lng": 126.955551, "speed_mps": 0.15,
+                 "heading_deg": 90.0, "gps_valid": 1},
+        "veh": {"speed_mps": 0.05, "heading_deg": 180.0, "heading_valid": 0, "gps_valid": 1},
+    }
+    vehicle = stream_live.snapshot_from_state(state, "jetson-test")["vehicle"]
+    assert vehicle["heading_deg"] == 180.0
+    assert vehicle["heading_valid"] is False
+    state["veh"]["heading_deg"] = None
+    assert stream_live.snapshot_from_state(state, "jetson-test")["vehicle"]["heading_deg"] is None
+
+
 # ---------- 전송 정책 ----------
 
 def _rows(tmp_path, lines):

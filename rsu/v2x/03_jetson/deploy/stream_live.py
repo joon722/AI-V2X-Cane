@@ -153,6 +153,9 @@ def snapshot_from_state(state, device_id):
     vehicle = node(veh)
     vehicle["rel_east_m"] = _to_float(state.get("rel_east_m"))
     vehicle["rel_north_m"] = _to_float(state.get("rel_north_m"))
+    # veh.heading_deg는 live_state가 유지하는 마지막 유효 이동방향(없으면 None)이고,
+    # 지금 이 순간 유효한지는 heading_valid로 따로 온다. 화면이 회전에 쓸지 판단한다.
+    vehicle["heading_valid"] = _to_float(veh.get("heading_valid")) == 1
     return {
         "device_id": device_id,
         "ts": datetime.fromtimestamp(_to_float(state.get("t")), tz=timezone.utc).isoformat(),
