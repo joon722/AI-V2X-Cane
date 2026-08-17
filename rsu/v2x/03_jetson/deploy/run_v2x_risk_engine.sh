@@ -21,6 +21,14 @@ if [ "${V2X_NO_MODEL:-0}" = "1" ]; then
   NO_MODEL="--no-model"
 fi
 
+# 같은 등급을 지팡이로 재전송하는 주기(초). 낮추면 경보가 더 촘촘히 갱신돼
+# 반응이 빨라진다(등급이 바뀔 때는 원래도 즉시 나감). 기본 1.0은 라디오 절약용.
+# 예: V2X_HEARTBEAT_S=0.2 → 초당 5회 재전송.
+HEARTBEAT_ARG=""
+if [ -n "${V2X_HEARTBEAT_S:-}" ]; then
+  HEARTBEAT_ARG="--tx-heartbeat-s ${V2X_HEARTBEAT_S}"
+fi
+
 # 부팅 직후 USB 인식이 늦을 수 있으므로 최대 2분 대기
 for i in $(seq 1 60); do
   [ -e "$PORT" ] && break
@@ -54,4 +62,5 @@ exec python3 "$DIR/step8_send_risk.py" \
   --csv "$CSV" \
   --raw-log "$RAW" \
   --source-mode "$SOURCE_MODE" \
+  $HEARTBEAT_ARG \
   $NO_MODEL
