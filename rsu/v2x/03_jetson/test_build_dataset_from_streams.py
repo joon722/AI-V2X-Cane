@@ -85,7 +85,7 @@ def test_family_mix_is_recorded_per_scenario():
     df = bds.build_from_scenario_sim(n_scenarios=6, seed=0, params=_quiet(), families=True)
     assert "family" in df.columns
     assert df.groupby("scenario_id")["family"].nunique().max() == 1
-    assert set(df["family"].unique()) <= set(bds.FAMILY_WEIGHTS)
+    assert set(df["family"].unique()) <= {k for k, w in bds.FAMILY_WEIGHTS.items() if w > 0}
 
 
 def test_scenario_sim_source_gives_labelled_rows_per_scenario():
