@@ -169,6 +169,69 @@ def build_from_streams_dir(streams_dir, base_epoch=BASE_EPOCH):
 
 
 # ---------------------------------------------------------------- 원천 (b): scenario_sim
+# 시나리오 가족. 기본 scenario_sim 은 "차가 2~20 m/s 로 접근"만 만든다. 8/17 실기 오경보의
+# 무대는 그게 아니었다: 3~15 m 에 둘 다 서 있기(격자 잡음이 접근속도로 보임), 주차 차 옆을
+# 걸어 지나가기, RC 속도(0.5~2.5 m/s)로 평행 통과. 그런 "안 위험한데 잡음 때문에 위험해
+# 보이는" 상황을 학습·평가에 넣어야 모델이 오경보를 배울 수 있고, RC 스케일 접근도 넣어야
+# 실기(오늘 4 m/s 스침이 L1)와 같은 속도대의 위험을 본다.
+FAMILY_WEIGHTS = {
+    "base": 0.55,           # scenario_sim 그대로 (2~20 m/s 접근, 정지 차 포함)
+    "still_close": 0.15,    # 둘 다 정지, 3~15 m, 40~90 s (안전)
+    "walk_by_parked": 0.10, # 차 정지, 보행자 0.8~1.4 m/s 로 1~5 m 옆을 지나감 (대부분 안전)
+    "parallel_rc": 0.10,    # 차 0.5~2.5 m/s, 2~12 m 옆으로 평행 통과 (안전~주의)
+    "rc_approach": 0.10,    # 차 0.5~2.5 m/s, 10~30 m 에서 0~4 m 로 접근 (위험)
+}
+
+
+def family_params(family, seed):
+    """가족 이름 → (ScenarioParams, duration_s|None). None 이면 scenario_sim 자동 길이."""
+    from dataclasses import replace
+    from scenario_sim import sample_params
+
+    base = sample_params(seed)
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 99]))
+    if family == "base":
+        return base, None
+    if family == "still_close":
+        p = replace(base, veh_speed_mps=0.0, ped_speed_mps=0.0, veh_accel_mps2=0.0,
+                    turn_rate_dps=0.0, ped_accel_mps2=0.0, ped_turn_rate_dps=0.0,
+                    start_distance_m=float(rng.uniform(3.0, 15.0)),
+                    miss_offset_m=float(rng.uniform(0.0, 3.0)))
+        return p, float(rng.uniform(40.0, 90.0))
+    if family == "walk_by_parked":
+        # 차는 서 있고 보행자가 그 옆(1~5 m)을 지나간다: 차를 보행자 진행선 위(approach=heading)
+        # 에 두고 miss_offset 으로 옆으로 민다.
+        heading = float(rng.uniform(0.0, 360.0))
+        p = replace(base, veh_speed_mps=0.0, veh_accel_mps2=0.0, turn_rate_dps=0.0,
+                    ped_speed_mps=float(rng.uniform(0.8, 1.4)), ped_accel_mps2=0.0,
+                    ped_turn_rate_dps=0.0, ped_heading_deg=heading, approach_deg=heading,
+                    start_distance_m=float(rng.uniform(8.0, 25.0)),
+                    miss_offset_m=float(rng.uniform(1.0, 5.0)))
+        return p, float(p.start_distance_m / p.ped_speed_mps + 8.0)
+    if family == "parallel_rc":
+        p = replace(base, veh_speed_mps=float(rng.uniform(0.5, 2.5)), veh_accel_mps2=0.0,
+                    turn_rate_dps=0.0, ped_speed_mps=float(rng.uniform(0.0, 0.5)),
+                    ped_accel_mps2=0.0, ped_turn_rate_dps=0.0,
+                    start_distance_m=float(rng.uniform(15.0, 40.0)),
+                    miss_offset_m=float(rng.uniform(2.0, 12.0)))
+        return p, float(p.start_distance_m / p.veh_speed_mps + 8.0)
+    if family == "rc_approach":
+        p = replace(base, veh_speed_mps=float(rng.uniform(0.5, 2.5)),
+                    veh_accel_mps2=float(rng.uniform(-0.5, 0.3)), turn_rate_dps=float(rng.uniform(-10.0, 10.0)),
+                    ped_speed_mps=float(rng.uniform(0.0, 1.2)),
+                    start_distance_m=float(rng.uniform(10.0, 30.0)),
+                    miss_offset_m=float(rng.uniform(0.0, 4.0)))
+        return p, float(p.start_distance_m / max(p.veh_speed_mps, 0.5) + 8.0)
+    raise ValueError(f"unknown family {family!r}")
+
+
+def pick_family(seed):
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 5]))
+    names = list(FAMILY_WEIGHTS)
+    weights = np.array([FAMILY_WEIGHTS[n] for n in names], dtype=float)
+    return str(rng.choice(names, p=weights / weights.sum()))
+
+
 def scenario_to_samples(scenario, hz=5.0):
     """ttc_study Scenario(0.1 s 격자) → 두 노드의 (t, east, north, speed, heading) 표본 + 참값 거리."""
     step = max(1, int(round((1.0 / hz) / (scenario.t[1] - scenario.t[0]))))
@@ -191,14 +254,20 @@ def scenario_to_samples(scenario, hz=5.0):
 
 
 def build_from_scenario_sim(n_scenarios, seed=0, params=None, randomize=False, hz=5.0,
-                            base_epoch=BASE_EPOCH):
+                            base_epoch=BASE_EPOCH, families=False):
+    """families=True 면 FAMILY_WEIGHTS 비율로 가족을 섞고 'family' 열을 남긴다."""
     import pandas as pd
     from scenario_sim import sample_params, simulate
 
     frames = []
     for i in range(n_scenarios):
         sid = seed + i
-        scenario = simulate(sample_params(sid), duration_s=None)
+        if families:
+            family = pick_family(sid)
+            sp, duration = family_params(family, sid)
+        else:
+            family, sp, duration = "base", sample_params(sid), None
+        scenario = simulate(sp, duration_s=duration)
         ped, veh, truth = scenario_to_samples(scenario, hz=hz)
         rng = np.random.default_rng(np.random.SeedSequence([sid, 7]))
         if params is not None:
@@ -220,6 +289,7 @@ def build_from_scenario_sim(n_scenarios, seed=0, params=None, randomize=False, h
         df = pd.DataFrame(rows)
         df["scenario_id"] = sid
         df["source"] = "scenario_sim"
+        df["family"] = family
         frames.append(df)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
@@ -279,6 +349,8 @@ def parse_args():
     ap.add_argument("--from-scenario-sim", type=int, default=0, help="scenario_sim 시나리오 수")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--randomize", action="store_true", help="환경 의존 잡음을 시나리오마다 무작위")
+    ap.add_argument("--families", action="store_true",
+                    help="시나리오 가족 섞기(정지 근접·주차 차 옆 보행·RC 평행·RC 접근) — 오경보 학습 재료")
     ap.add_argument("--out", default="training_dataset_streams.csv")
     ap.add_argument("--train", action="store_true", help="학습까지 하고 risk_model JSON 저장")
     ap.add_argument("--model", default="risk_model_streams.json")
@@ -294,7 +366,8 @@ def main():
         print(f"[streams] {len(d)} rows, {d.scenario_id.nunique() if len(d) else 0} scenarios")
         parts.append(d)
     if args.from_scenario_sim:
-        d = build_from_scenario_sim(args.from_scenario_sim, seed=args.seed, randomize=args.randomize)
+        d = build_from_scenario_sim(args.from_scenario_sim, seed=args.seed, randomize=args.randomize,
+                                    families=args.families)
         print(f"[scenario_sim] {len(d)} rows, {d.scenario_id.nunique() if len(d) else 0} scenarios")
         parts.append(d)
     if not parts:

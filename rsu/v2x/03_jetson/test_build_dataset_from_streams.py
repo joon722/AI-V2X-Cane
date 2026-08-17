@@ -63,6 +63,31 @@ def test_labels_join_by_time_with_and_without_lead():
     assert all(math.isnan(r["t_hit"]) for r in far)
 
 
+def test_scenario_families_cover_the_field_false_alarm_cases():
+    """8/17 실기 오경보의 무대: 3~15 m 정지 쌍, 주차 차 옆을 걷는 보행자, RC 속도 평행 통과.
+    기본 시뮬(2~20 m/s 접근)에는 없어서 모델이 '안 위험한데 잡음 때문에 위험해 보이는'
+    상황을 배울 재료가 없었다. 각 가족이 뜻하는 파라미터를 내야 한다."""
+    p, dur = bds.family_params("still_close", 11)
+    assert p.veh_speed_mps == 0.0 and p.ped_speed_mps == 0.0
+    assert 3.0 <= p.start_distance_m <= 15.0 and dur >= 40.0
+    p, dur = bds.family_params("walk_by_parked", 12)
+    assert p.veh_speed_mps == 0.0 and 0.8 <= p.ped_speed_mps <= 1.4
+    assert 1.0 <= p.miss_offset_m <= 5.0 and p.approach_deg == p.ped_heading_deg
+    p, dur = bds.family_params("parallel_rc", 13)
+    assert 0.5 <= p.veh_speed_mps <= 2.5 and 2.0 <= p.miss_offset_m <= 12.0
+    p, dur = bds.family_params("rc_approach", 14)
+    assert 0.5 <= p.veh_speed_mps <= 2.5 and p.miss_offset_m <= 4.0
+    base, dur = bds.family_params("base", 15)
+    assert dur is None  # 기본 가족은 scenario_sim 자동 길이
+
+
+def test_family_mix_is_recorded_per_scenario():
+    df = bds.build_from_scenario_sim(n_scenarios=6, seed=0, params=_quiet(), families=True)
+    assert "family" in df.columns
+    assert df.groupby("scenario_id")["family"].nunique().max() == 1
+    assert set(df["family"].unique()) <= set(bds.FAMILY_WEIGHTS)
+
+
 def test_scenario_sim_source_gives_labelled_rows_per_scenario():
     df = bds.build_from_scenario_sim(n_scenarios=2, seed=0, params=_quiet())
     assert set(FEATURE_COLUMNS) <= set(df.columns)
