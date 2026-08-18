@@ -15,5 +15,11 @@ import build_dataset_local as b
 b.DATA_DIR = Path(__file__).parent / "v5data"
 b.OUT_FILE = Path(__file__).parent / "training_dataset_v5base.csv"
 
+# 사용법: python build_dataset_v5.py            (깨끗한 좌표, 기존과 동일)
+#         python build_dataset_v5.py --gps-noise (GPS 오차 주입 → *_noisy.csv 로 저장)
 if __name__ == "__main__":
+    if "--gps-noise" in sys.argv:
+        b.GPS_NOISE = True
+        b.OUT_FILE = Path(__file__).parent / "training_dataset_v5base_noisy.csv"
+        print("GPS 오차 주입 켜짐 (gps_noise.add_gps_noise, sigma 2.5 m 실측값)")
     b.main()

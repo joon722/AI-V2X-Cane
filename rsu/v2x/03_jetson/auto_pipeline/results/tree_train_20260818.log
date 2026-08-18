@@ -1,0 +1,9 @@
+[load] 3,411,227 rows, 5401 scenarios, sources ['scenario_sim', 'sumo']
+  [scenario_sim] 1,775,860 rows, 4000 scenarios, y=1 0.9%, 위험 시나리오 274
+  [sumo] 1,635,367 rows, 1401 scenarios, y=1 5.3%, 위험 시나리오 1099
+  임계값 0.9018 (규칙 오경보 2.04% 기준)
+  적시경보(시나리오, T_floor 앞)  규칙 55.3% -> 모델 61.7%
+  위험시점 재현율(행)            규칙 18.6% -> 모델 23.9%
+  저장 risk_model_streams.json  sklearn 대비 최대 오차 2.50e-16
+
+[exited with code 0]

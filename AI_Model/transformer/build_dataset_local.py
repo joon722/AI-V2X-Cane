@@ -24,6 +24,25 @@ OUT_FILE = HERE / "training_dataset_v4base.csv"
 SAFE_KEEP_RATE = 0.15
 ZONE_BASE_RISK = 0.0
 
+# GPS 오차 주입 (팀 요청 2026-08-18): 좌표를 읽은 직후·거리 계산 전에
+# gps_noise.add_gps_noise(df) 를 적용해 학습 특징이 현장(잡음 좌표)과 같아지게 한다.
+# 기본은 꺼짐(기존 동작 유지). 켜려면 GPS_NOISE=True 또는 실행기에서 덮어쓴다.
+GPS_NOISE = False
+GPS_NOISE_SIGMA_M = None   # None 이면 gps_noise.DEFAULT_SIGMA_M (실측 2.5 m)
+_JETSON_PIPELINE = HERE.parent.parent / "rsu" / "v2x" / "03_jetson" / "auto_pipeline"
+
+
+def _apply_gps_noise(df, scenario_name):
+    if not GPS_NOISE:
+        return df
+    if str(_JETSON_PIPELINE) not in sys.path:
+        sys.path.insert(0, str(_JETSON_PIPELINE))
+    import gps_noise
+    kwargs = {"seed": gps_noise.scenario_seed(scenario_name)}
+    if GPS_NOISE_SIGMA_M is not None:
+        kwargs["sigma_m"] = GPS_NOISE_SIGMA_M
+    return gps_noise.add_gps_noise(df, **kwargs)
+
 FEATURE_ORDER = [
     "ped_x", "ped_y", "veh_x", "veh_y",
     "ped_speed_mps", "veh_speed_mps",
@@ -107,6 +126,8 @@ def build_scenario(scenario_dir: Path):
                             "vehicle_speed": "veh_speed_mps"})
     df = df.sort_values(["vehicle_id", "person_id",
                          "timestep_time"]).reset_index(drop=True)
+    # 좌표를 읽은 직후, distance_m 계산 전 — 여기서 잡음을 입혀야 거리/TTC/DCPA 전부 반영됨
+    df = _apply_gps_noise(df, scenario_dir.name)
     df["distance_m"] = np.sqrt((df["veh_x"] - df["ped_x"]) ** 2 +
                                (df["veh_y"] - df["ped_y"]) ** 2)
     pair_keys = [df["vehicle_id"], df["person_id"]]
