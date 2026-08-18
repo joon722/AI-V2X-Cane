@@ -336,6 +336,132 @@ class FixDedupAndResetTest(unittest.TestCase):
         self.assertLess(abs(tracker.state_ahead(0.0)[3]), 0.2)
 
 
+class FrozenFixTest(unittest.TestCase):
+    """8/18 실측: 차량 노드가 움직이면서 같은 좌표를 1~17 s 얼려 보냄(≥1 s 65회·212 s/38분,
+    1.13 m/s로 달리며 6.9 s = 7.8 m 이동이 안 보임). 패킷에 fix 시각이 없어 그 반복 좌표가
+    매 패킷 새 측정으로 KF에 들어갔고, 도플러 융합이 끊기는 <0.25 m/s 순간 KF 속도가
+    뒤집혀 1.3~1.4 m/s 유령(16:31:44·16:37:47, 도플러 기반 raw closing은 ≈0)을 만들었다.
+
+    같은 좌표의 반복은 새 위치 정보가 아니다 — 위치 갱신은 건너뛰되 트랙은 살아 있고
+    (무음이 아니라 도플러는 계속 온다), 그 사이 도플러로 속도만 갱신해 추측항법한다.
+    """
+
+    def test_an_identical_repeat_does_not_advance_the_position_filter(self):
+        tr = NodeTracker()
+        tr.observe(0.0, 0.0, 100.0, False)
+        tr.observe(0.0, 1.0, 100.2, False)
+        cov_before = tr.north.cov
+        self.assertFalse(tr.observe(0.0, 1.0, 100.4, False))   # 같은 좌표 반복
+        self.assertEqual(tr.last_time, 100.2)                   # 마지막 '새' fix
+        self.assertEqual(tr.last_seen, 100.4)                   # 마지막 패킷
+        self.assertEqual(tr.north.cov, cov_before)
+
+    def test_repeats_keep_the_track_alive_past_the_gap_limit(self):
+        # 3 s 동안 좌표가 얼어 있어도 패킷은 계속 왔다: 무음이 아니므로 리셋하지 않는다.
+        tr = NodeTracker()
+        tr.observe(0.0, 0.0, 100.0, False)
+        tr.observe(0.0, 1.0, 100.2, False)
+        for k in range(1, 16):
+            tr.observe(0.0, 1.0, 100.2 + 0.2 * k, False)
+        tr.observe(0.0, 16.0, 103.4, False, speed_hint=5.0)
+        self.assertEqual(tr.track_start, 100.0)
+
+    def test_settled_counts_the_track_age_in_packets_not_distinct_fixes(self):
+        # 서 있는 노드는 같은 좌표를 몇 초씩 보낸다 — 그래도 트랙은 익는다.
+        tr = NodeTracker()
+        tr.observe(0.0, 0.0, 100.0, False)
+        for k in range(1, 8):
+            tr.observe(0.0, 0.0, 100.0 + 0.2 * k, False)
+        self.assertTrue(tr.settled())
+
+
+class VehicleDopplerDuringFreezeTest(unittest.TestCase):
+    """좌표가 얼어 있는 동안 도플러가 하는 일: 살아 있으면 추측항법, 0이면 정지(ZUPT)."""
+
+    def _row(self, pipeline, type_, seq, now, north_m, speed, heading, heading_valid):
+        lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, north_m)
+        payload = {
+            "type": type_, "node_id": 1 if type_ == "cane" else 2, "seq": seq,
+            "gps_valid": 1,
+            "lat": lat if type_ == "vehicle" else CANE_LAT,
+            "lng": lng if type_ == "vehicle" else CANE_LNG,
+            "speed_mps": speed, "heading_deg": heading, "heading_valid": heading_valid,
+        }
+        row = normalize_record(payload, "test", now=now)
+        pipeline.store.update(row)
+        pipeline.observe(row)
+        return pipeline.compute()
+
+    def _run(self, freeze_speed, freeze_heading_valid=1, freeze_s=3.0):
+        """차량 20 m 북쪽에서 남향 1 m/s(heading_valid) 3 s → 좌표 동결 freeze_s 동안
+        도플러 freeze_speed → 마지막 판정 반환 (t, filtered, veh_state)."""
+        pipeline = KinematicsPipeline(StateStore(fresh_window_s=10.0))
+        seq = 0
+        out = []
+        for step in range(15):                       # 3 s 정상 접근
+            t = step * 0.2
+            self._row(pipeline, "cane", seq, t, 0.0, 0.02, 0.0, 0)
+            north = 20.0 - 1.0 * t
+            r = self._row(pipeline, "vehicle", seq, t + 0.01, north, 1.0, 180.0, 1)
+            out.append((t, r)); seq += 1
+        frozen_north = 20.0 - 1.0 * (14 * 0.2)     # 마지막 좌표 17.2 m
+        for step in range(15, 15 + int(freeze_s / 0.2)):
+            t = step * 0.2
+            self._row(pipeline, "cane", seq, t, 0.0, 0.02, 0.0, 0)
+            r = self._row(pipeline, "vehicle", seq, t + 0.01, frozen_north, freeze_speed, 180.0,
+                          freeze_heading_valid)
+            out.append((t, r)); seq += 1
+        return out, pipeline, frozen_north
+
+    def test_live_doppler_dead_reckons_through_a_frozen_position(self):
+        out, pipeline, frozen_north = self._run(freeze_speed=1.0)
+        t, (_, _, filtered) = out[-1]
+        veh_north = pipeline.last_states[1][1]
+        # 3 s 동결 동안 1 m/s 남하 → 마지막 좌표(17.2)보다 ≈3 m 남쪽에 있어야 한다.
+        # (동결 좌표를 계속 먹이던 이전 코드는 2 m 뒤에서 멈춘 채 평형을 이뤘다.)
+        self.assertAlmostEqual(veh_north, frozen_north - 3.0, delta=0.6)
+        self.assertAlmostEqual(filtered.closing_los, 1.0, delta=0.4)
+
+    def test_snap_back_after_a_frozen_drift_makes_no_phantom_approach(self):
+        # 현장 16:37:44~50 재현: 멀어지던 차(0.9 m/s)의 좌표가 얼고, 도플러는 0.9→0.4(헤딩 유효)
+        # →0.2→0.05(무효)로 감속. 이전 코드: 융합 중 KF 위치가 얼린 좌표에서 1~2 m 흘러가고,
+        # 융합이 끊기자 그 좌표로 되튀며 closing +0.6~1.4 유령. 이제: 얼린 좌표는 위치를 못
+        # 당기고, 도플러 <0.25면 ZUPT → 유령 없음.
+        pipeline = KinematicsPipeline(StateStore(fresh_window_s=10.0))
+        seq = 0
+        for step in range(15):                       # 8 m 북쪽에서 북향(멀어짐) 0.9 m/s 3 s
+            t = step * 0.2
+            self._row(pipeline, "cane", seq, t, 0.0, 0.02, 0.0, 0)
+            self._row(pipeline, "vehicle", seq, t + 0.01, 8.0 + 0.9 * t, 0.9, 0.0, 1)
+            seq += 1
+        frozen_north = 8.0 + 0.9 * (14 * 0.2)
+        profile = [(0.9, 1)] * 5 + [(0.7, 1)] * 4 + [(0.4, 1)] * 4 + [(0.2, 0)] * 3 + [(0.1, 0)] * 3 + [(0.05, 0)] * 10
+        worst = -9.0
+        for i, (speed, hv) in enumerate(profile):
+            t = (15 + i) * 0.2
+            self._row(pipeline, "cane", seq, t, 0.0, 0.02, 0.0, 0)
+            r = self._row(pipeline, "vehicle", seq, t + 0.01, frozen_north, speed, 0.0, hv)
+            seq += 1
+            if r is not None and hv == 0:
+                worst = max(worst, r[2].closing_los)
+        self.assertLess(worst, 0.25)
+
+    def test_a_still_vehicle_hopping_between_grid_cells_reports_no_speed(self):
+        # 정지 차량: 좌표가 0.42 m 격자 사이를 5 Hz로 오가고 도플러 0.05 → 속도 <0.2 (ZUPT).
+        pipeline = KinematicsPipeline(StateStore(fresh_window_s=10.0))
+        speeds = []
+        for step in range(30):
+            t = step * 0.2
+            self._row(pipeline, "cane", step, t, 0.0, 0.02, 0.0, 0)
+            north = 10.0 + (0.42 if step % 2 else 0.0)
+            r = self._row(pipeline, "vehicle", step, t + 0.01, north, 0.05, 0.0, 0)
+            if r is not None and t > 2.0:
+                ve, vn = pipeline.last_states[1][2], pipeline.last_states[1][3]
+                speeds.append(math.hypot(ve, vn))
+        self.assertTrue(speeds)
+        self.assertLess(max(speeds), 0.2)
+
+
 class TrackSettleGateTest(unittest.TestCase):
     """After a track (re)starts, the first second of velocity is a guess made
     from one or two noisy fixes. Reporting a closing speed from it fabricated
@@ -343,7 +469,10 @@ class TrackSettleGateTest(unittest.TestCase):
     10.8 s stall and level 3 fired on nothing). Until the track has settled the
     pair reports "no closing speed"; distance and relative position stay live."""
 
-    def _observe(self, pipeline, type_, seq, now, north_m):
+    def _observe(self, pipeline, type_, seq, now, north_m, speed=0.0):
+        # speed = the node's own Doppler. A moving vehicle reports it (heading
+        # stays invalid here so velocity is still learned from positions); a
+        # vehicle reporting 0.0 is treated as standing still (ZUPT, 8/18).
         lat, lng = offset_position(CANE_LAT, CANE_LNG, 0.0, north_m)
         payload = {
             "type": type_,
@@ -352,7 +481,7 @@ class TrackSettleGateTest(unittest.TestCase):
             "gps_valid": 1,
             "lat": lat if type_ == "vehicle" else CANE_LAT,
             "lng": lng if type_ == "vehicle" else CANE_LNG,
-            "speed_mps": 0.0,
+            "speed_mps": speed,
             "heading_deg": 0.0,
             "heading_valid": 0,
         }
@@ -381,7 +510,7 @@ class TrackSettleGateTest(unittest.TestCase):
             t = step * 0.2
             self._observe(pipeline, "cane", seq, t, 0.0)
             north = 10.0 - 1.0 * (t - 6.0)
-            results.append((t, self._observe(pipeline, "vehicle", seq, t + 0.01, north)))
+            results.append((t, self._observe(pipeline, "vehicle", seq, t + 0.01, north, speed=1.0)))
             seq += 1
         return results
 

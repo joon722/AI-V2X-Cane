@@ -101,6 +101,17 @@ ZUPT_SIGMA_MPS = 0.2
 # and DOPPLER_SPEED_SIGMA_MPS (0.5) already discounts low-speed course jitter.
 VEHICLE_DOPPLER_MIN_SPEED_MPS = 0.25
 
+# Below that speed the vehicle now gets a zero-velocity observation like the
+# cane (2026-08-18 reversal of the earlier "no clamp for the vehicle"). Field
+# 8/18: without it, a vehicle whose reported position froze while its Doppler
+# ran down (0.9 -> 0.05 m/s) had its filter drift with the last fused Doppler
+# and then snap back to the frozen coordinate at 1.3-1.4 m/s once fusion
+# stopped - a phantom approach at 3 m (16:31:44, 16:37:47). GPS Doppler at
+# 5 Hz reads 0.02-0.13 at rest and 0.3-0.5 for the slowest real RC motion, so
+# 0.25 separates the two; a real crawl below it is covered by the distance
+# rules (near_floor), and misses there cost a 2.5 m alarm, not a collision.
+VEHICLE_STILL_SPEED_MPS = VEHICLE_DOPPLER_MIN_SPEED_MPS
+
 
 def measurement_time(row):
     """(seconds, is_gps): when the row's fix was measured, not when it arrived.
@@ -329,7 +340,13 @@ class NodeTracker:
         self.sigma_accel = sigma_accel
         self.east = KalmanCV1D(sigma_pos, sigma_accel)
         self.north = KalmanCV1D(sigma_pos, sigma_accel)
+        # Time of the last fix that moved the filter (a new coordinate).
         self.last_time = None
+        # Time of the last packet seen at all, including repeats of an
+        # unchanged coordinate. The node is alive and its Doppler is current
+        # for as long as this advances, even while last_time stands still.
+        self.last_seen = None
+        self.last_fix = None
         # When the current track began; velocity is a guess until it has aged.
         self.track_start = None
         self.time_is_gps = None
@@ -340,13 +357,26 @@ class NodeTracker:
         return self.last_time is not None
 
     def settled(self, min_age_s=TRACK_SETTLE_S):
-        """True once the current track carries at least min_age_s of fixes."""
-        return self.last_time is not None and self.last_time - self.track_start >= min_age_s
+        """True once the current track has been fed for at least min_age_s.
+
+        Age is counted in packets, not distinct coordinates: a node standing
+        still can send the same coordinate for seconds, and it is no less
+        settled for it (its zero-velocity observations keep coming).
+        """
+        return self.last_seen is not None and self.last_seen - self.track_start >= min_age_s
+
+    def freeze_span(self):
+        """Seconds the node has been repeating its last coordinate (0 if none)."""
+        if self.last_time is None or self.last_seen is None:
+            return 0.0
+        return max(0.0, self.last_seen - self.last_time)
 
     def _reset(self):
         self.east = KalmanCV1D(self.sigma_pos, self.sigma_accel)
         self.north = KalmanCV1D(self.sigma_pos, self.sigma_accel)
         self.last_time = None
+        self.last_seen = None
+        self.last_fix = None
         self.track_start = None
         self.day_offset = 0.0
 
@@ -358,6 +388,13 @@ class NodeTracker:
         `speed_hint` is the node's own reported speed; it widens the jump gate
         so a fast mover whose filter velocity is still unknown is not read as
         a GPS jump.
+
+        A packet that repeats the last coordinate is not a new position
+        measurement (2026-08-18 field: the vehicle re-sent one coordinate for
+        1-17 s at a time, 65 such freezes in 38 min, while its Doppler kept
+        changing; fed as fresh fixes they pinned the filter to a stale point
+        and then made it snap back at 1.3-1.4 m/s). It only refreshes
+        last_seen, so the track stays alive and can dead-reckon on Doppler.
         """
         # Switching between the GPS clock and the arrival clock mid-track would
         # make dt meaningless, so a base change starts the track over.
@@ -376,8 +413,14 @@ class NodeTracker:
                 # carries no new information; feeding it again would only
                 # shrink the covariance without cause.
                 return False
-            if timestamp - self.last_time > MAX_TRACK_GAP_S:
+            # Silence is measured to the last packet, not the last new
+            # coordinate: a frozen coordinate with live Doppler is not an outage.
+            if timestamp - self.last_seen > MAX_TRACK_GAP_S:
                 self._reset()
+
+        if self.last_time is not None and (east, north) == self.last_fix:
+            self.last_seen = timestamp
+            return False
 
         if self.last_time is not None:
             # Where the filter expected this fix, given its own velocity.
@@ -395,6 +438,8 @@ class NodeTracker:
         self.east.observe(east, dt)
         self.north.observe(north, dt)
         self.last_time = timestamp
+        self.last_seen = timestamp
+        self.last_fix = (east, north)
         return True
 
     def observe_velocity(self, vel_east, vel_north, sigma):
@@ -460,6 +505,10 @@ class KinematicsPipeline:
         # Filtered (east, north, v_east, v_north) for each node as of the last
         # successful compute(). None until then.
         self.last_states = None
+        # Last (speed, heading, heading_valid) folded into each tracker, so a
+        # packet that repeats both coordinate and Doppler is applied once, while
+        # a frozen coordinate with a changing Doppler still updates velocity.
+        self._last_doppler = {"cane": None, "vehicle": None}
 
     def _node_enu(self, node_type, lat, lng):
         east, north = self.frame.to_enu(lat, lng)
@@ -482,10 +531,19 @@ class KinematicsPipeline:
         east, north = self._node_enu(row["type"], lat, lng)
         t_meas, is_gps = measurement_time(row)
         tracker = self.trackers[row["type"]]
-        if not tracker.observe(east, north, t_meas, is_gps,
-                               speed_hint=to_float(row.get("speed_mps"))):
+        advanced = tracker.observe(east, north, t_meas, is_gps,
+                                   speed_hint=to_float(row.get("speed_mps")))
+        if not tracker.ready:
             return
-        self._observe_doppler(row, tracker)
+        doppler = (to_float(row.get("speed_mps")),
+                   to_float(row.get("heading_deg")),
+                   to_float(row.get("heading_valid"), 0.0))
+        # A new coordinate always takes its Doppler; a repeated coordinate takes
+        # it only when it changed (a frozen position with a live receiver), never
+        # when the whole packet is a duplicate of the last one.
+        if advanced or doppler != self._last_doppler[row["type"]]:
+            self._last_doppler[row["type"]] = doppler
+            self._observe_doppler(row, tracker)
 
     def _observe_doppler(self, row, tracker):
         """Fold the node's own Doppler speed into the freshly updated filter.
@@ -497,16 +555,19 @@ class KinematicsPipeline:
         - cane: zero-velocity observation while its reported speed says it is
           standing still. Its heading is IMU pointing, not walking direction,
           so a moving cane gets no vector observation.
-        - vehicle: full velocity vector, but only while the firmware vouches
-          for the motion heading (heading_valid) and the speed is above the
-          course-jitter floor. No zero-velocity clamp for the vehicle: when
-          its GPS misreads motion as standstill, clamping would suppress a
-          real approach, and misses cost more than false alarms here.
+        - vehicle: full velocity vector while the firmware vouches for the
+          motion heading (heading_valid) and the speed is above the
+          course-jitter floor; zero-velocity observation below that floor
+          (see VEHICLE_STILL_SPEED_MPS for why the earlier "no clamp for the
+          vehicle" was reversed on 2026-08-18).
         """
         speed = to_float(row.get("speed_mps"))
         if row["type"] == "cane":
             if speed < CANE_STILL_SPEED_MPS:
                 tracker.observe_velocity(0.0, 0.0, ZUPT_SIGMA_MPS)
+            return
+        if speed < VEHICLE_STILL_SPEED_MPS:
+            tracker.observe_velocity(0.0, 0.0, ZUPT_SIGMA_MPS)
             return
         heading_valid = to_float(row.get("heading_valid"), 0.0) == 1.0
         if heading_valid and speed >= VEHICLE_DOPPLER_MIN_SPEED_MPS:
@@ -586,9 +647,15 @@ class KinematicsPipeline:
 
         # Each tracker extrapolates by how far the shared instant sits past its
         # own newest fix, so a node whose GPS clock differs from its arrival
-        # clock still projects the right amount.
-        cane_e, cane_n, cane_ve, cane_vn = self.trackers["cane"].state_ahead(now - cane_t)
-        veh_e, veh_n, veh_ve, veh_vn = self.trackers["vehicle"].state_ahead(now - veh_t)
+        # clock still projects the right amount. A node repeating a frozen
+        # coordinate has its newest packet later than its newest fix; the
+        # filter dead-reckons across that span on the velocity its Doppler
+        # keeps feeding it (or holds still if that Doppler says so).
+        cane_tr, veh_tr = self.trackers["cane"], self.trackers["vehicle"]
+        cane_e, cane_n, cane_ve, cane_vn = cane_tr.state_ahead(
+            now - cane_t + cane_tr.freeze_span())
+        veh_e, veh_n, veh_ve, veh_vn = veh_tr.state_ahead(
+            now - veh_t + veh_tr.freeze_span())
         # The model needs the same filtered states this comparison is built on.
         # Recomputing them downstream would duplicate the clock reconciliation
         # above and drift from it the moment either side changes.
