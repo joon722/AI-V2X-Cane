@@ -347,6 +347,24 @@ class DopplerBoundTest(unittest.TestCase):
         self.assertAlmostEqual(result.ttc, 6.0 / 1.2, places=6)
         self.assertEqual(result.reason, "table")
 
+    def test_receding_is_flagged_only_when_the_bounded_closing_says_so(self):
+        # 지나간 차(도플러 1.5, closing −1.5) → receding. 서 있는 쌍의 드리프트 −0.9는
+        # 도플러 상한(0.35)에 잘려 receding 이 아니다(코앞 정지 경보가 깜빡이지 않게).
+        gone = assess_risk(self._pair(6.0, -1.5), vehicle_speed_mps=1.5,
+                           doppler_speeds_mps=(1.5, 0.0))
+        self.assertTrue(gone.receding)
+        drift = assess_risk(self._pair(2.0, -0.9), vehicle_speed_mps=0.02,
+                            doppler_speeds_mps=(0.02, 0.02))
+        self.assertFalse(drift.receding)
+        coming = assess_risk(self._pair(6.0, 1.5), vehicle_speed_mps=1.5,
+                             doppler_speeds_mps=(1.5, 0.0))
+        self.assertFalse(coming.receding)
+
+    def test_receding_without_doppler_uses_the_raw_closing(self):
+        result = assess_risk(self._pair(6.0, -1.5), vehicle_speed_mps=1.5,
+                             doppler_speeds_mps=None)
+        self.assertTrue(result.receding)
+
     def test_margin_is_below_the_deadband_so_still_pairs_fall_under_it(self):
         # 정지 쌍(도플러 합 ≈0.05)의 상한이 데드밴드 0.5 아래여야 유령이 사라진다.
         self.assertEqual(CLOSING_DOPPLER_MARGIN_MPS, 0.3)

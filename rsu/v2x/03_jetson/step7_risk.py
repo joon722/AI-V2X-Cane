@@ -251,6 +251,10 @@ class RiskAssessment:
     final_score: float
     risk_level: int
     reason: str = "table"  # "table" | "safety_floor" | "ttc_capped"
+    # 도플러 상한을 적용한 접근속도가 데드밴드만큼 음수 = 확실히 멀어지는 중(지나간
+    # 차). step8 홀드가 이 경우 낮은 등급을 즉시 채택한다. 서 있는 쌍의 드리프트는
+    # 상한(도플러 합+0.3)에 잘려 여기 걸리지 않는다 — 코앞 정지 경보가 깜빡이지 않게.
+    receding: bool = False
 
 
 def assess_risk(
@@ -290,6 +294,7 @@ def assess_risk(
         veh_doppler, cane_doppler = doppler_speeds_mps
         bound = abs(veh_doppler) + abs(cane_doppler) + doppler_margin_mps
         scored_closing = max(-bound, min(bound, scored_closing))
+    receding = scored_closing <= -min_closing_mps if min_closing_mps > 0 else scored_closing < 0.0
     # 잡음 크기의 접근속도는 채점에서 0으로 - 기록(closing_los)에는 원값이 남는다.
     scored_closing = scored_closing if scored_closing >= min_closing_mps else 0.0
     ttc = calculate_ttc(kinematics.distance_m, scored_closing)
@@ -327,6 +332,7 @@ def assess_risk(
         final_score=final,
         risk_level=level,
         reason=reason,
+        receding=receding,
     )
 
 

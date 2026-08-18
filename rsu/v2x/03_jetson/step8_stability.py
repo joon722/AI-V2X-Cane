@@ -21,7 +21,11 @@ module's job - step 8 still forces 0 when the fix is untrusted, and that path
 bypasses the hold on purpose (a fake position must not keep an alarm alive).
 """
 
-HOLD_S = 2.0
+# 2.0 → 1.0 (2026-08-18): the deadband, Doppler bound, ZUPT and frozen-fix
+# handling deployed today cut boundary flapping (level changes 96 → 67 on the
+# day's log), so a shorter hold now buys the same calm; and a drop while the
+# pair is clearly receding is adopted at once (see stabilize()).
+HOLD_S = 1.0
 
 
 class LevelStabilizer:
@@ -33,7 +37,12 @@ class LevelStabilizer:
         self.lower_since = None  # when the current run of lower candidates began
         self.last_now = None     # when stabilize() was last called
 
-    def stabilize(self, candidate, now):
+    def stabilize(self, candidate, now, receding=False):
+        """receding: the pair is clearly moving apart (step 7's Doppler-bounded
+        closing at or below the deadband, i.e. a car that has passed). Then the
+        danger is over and a lower level is adopted at once - the hold exists to
+        flatten noise at a boundary, not to keep an alarm alive behind a car
+        that has gone (2026-08-18: 2 s of buzzing after every pass)."""
         # 판정이 홀드보다 오래 끊겼다 돌아오면(노드 무음·재부팅) 이전 레벨은 시효가
         # 지난 것 — 판정이 계속됐다면 그 사이 이미 내려갔을 길이다. 8/18 16:09:38:
         # 지팡이 44 s 무음 뒤 첫 판정에서 무음 직전 L2가 2 s 더 나갔다.
@@ -43,9 +52,9 @@ class LevelStabilizer:
             self.lower_since = None
         self.last_now = now
 
-        if self.level is None or candidate >= self.level:
-            # First value, a rise, or confirmation of the held level: adopt and
-            # forget any pending drop - the danger is (still) real.
+        if self.level is None or candidate >= self.level or receding:
+            # First value, a rise, confirmation of the held level, or a drop
+            # while receding: adopt and forget any pending drop.
             self.level = candidate
             self.lower_since = None
             return self.level

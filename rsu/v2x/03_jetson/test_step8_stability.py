@@ -89,5 +89,33 @@ class SilenceExpiresTheHoldTest(unittest.TestCase):
         self.assertEqual(st.stabilize(3, now=44.0), 3)
 
 
+class RecedingClearsAtOnceTest(unittest.TestCase):
+    """홀드는 경계에서 떨리는 잡음을 누르는 장치지, 지나간 차의 경보를 붙들어 두는 장치가 아니다.
+
+    8/18: 차가 지나가 멀어지는 중(도플러로 확인된 접근속도 ≤ −0.5 m/s)이면 위험이 끝난 게
+    확실하므로 낮은 등급을 즉시 채택한다. 아직 다가오는데(또는 정지·잡음) 등급만 잠깐
+    내려간 것은 지금처럼 홀드한다. 기본 홀드는 2 → 1 s (오늘 잡음을 눌러 감당 가능).
+    """
+
+    def test_a_drop_while_receding_is_adopted_immediately(self):
+        st = LevelStabilizer(hold_s=2.0)
+        st.stabilize(2, now=0.0)
+        self.assertEqual(st.stabilize(0, now=0.2, receding=True), 0)
+
+    def test_a_drop_while_still_approaching_is_held(self):
+        st = LevelStabilizer(hold_s=2.0)
+        st.stabilize(2, now=0.0)
+        self.assertEqual(st.stabilize(0, now=0.2, receding=False), 2)
+
+    def test_receding_is_the_default_off(self):
+        st = LevelStabilizer(hold_s=2.0)
+        st.stabilize(2, now=0.0)
+        self.assertEqual(st.stabilize(0, now=0.2), 2)
+
+    def test_default_hold_is_one_second(self):
+        from step8_stability import HOLD_S
+        self.assertEqual(HOLD_S, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

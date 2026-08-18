@@ -381,7 +381,8 @@ class RiskSender:
         # clears to 0 immediately inside the transmitter.
         level = gate.level
         if self.stabilizer is not None:
-            level = self.stabilizer.stabilize(level, now)
+            # 지나간 차(확실히 멀어지는 중)면 낮은 등급을 홀드 없이 즉시 채택한다.
+            level = self.stabilizer.stabilize(level, now, receding=assessment.receding)
         decision = self.transmitter.consider(level, cane_gps_valid, now)
         # 화면은 전송 여부와 무관하게 매 판정마다 갱신한다. 다운링크는 등급이
         # 바뀌거나 heartbeat일 때만 나가지만 거리와 TTC는 그 사이에도 계속
