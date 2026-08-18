@@ -49,6 +49,8 @@ def main():
     ap.add_argument("--pairs", type=int, default=2, help="시나리오당 최근접 쌍 수")
     ap.add_argument("--limit", type=int, default=0, help="처리할 시나리오 수 (0=전부)")
     ap.add_argument("--randomize", action="store_true")
+    ap.add_argument("--gps-jump", action="store_true",
+                    help="run_with_gps_jump.py 를 거쳐 실행 (8/17 실측 GPS 튐 강조 프리셋)")
     args = ap.parse_args()
 
     dirs = sorted(d for d in Path(args.root).glob("scenario_*")
@@ -65,8 +67,11 @@ def main():
             print(f"[SKIP] {sd.name}: {e}", file=sys.stderr)
             continue
         for d, v, p in pairs:
-            cmd = [sys.executable, str(HERE / "sim_to_rsu_stream.py"), str(sd),
-                   "--vehicle-id", v, "--person-id", p, "--out", str(out)]
+            if args.gps_jump:
+                cmd = [sys.executable, str(HERE / "run_with_gps_jump.py"), "stream", str(sd)]
+            else:
+                cmd = [sys.executable, str(HERE / "sim_to_rsu_stream.py"), str(sd)]
+            cmd += ["--vehicle-id", v, "--person-id", p, "--out", str(out)]
             if args.randomize:
                 cmd.append("--randomize")
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
