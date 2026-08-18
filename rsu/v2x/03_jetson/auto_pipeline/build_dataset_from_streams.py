@@ -290,7 +290,10 @@ def build_from_scenario_sim(n_scenarios, seed=0, params=None, randomize=False, h
         if not rows:
             continue
         df = pd.DataFrame(rows)
-        df["scenario_id"] = sid
+        # scenario_id를 str로 통일한다. streams(sumo)는 tag(문자열), scenario_sim은
+        # sid(정수)라, 두 원천을 --streams와 --from-scenario-sim으로 함께 쓰면
+        # split_by_scenario의 sorted(ids)가 str vs int 비교로 TypeError를 냈다.
+        df["scenario_id"] = str(sid)
         df["source"] = "scenario_sim"
         df["family"] = family
         frames.append(df)
