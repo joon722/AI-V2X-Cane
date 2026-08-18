@@ -51,6 +51,13 @@ HEARTBEAT_S = 1.0
 # 켜지는 것을 보완한다. 1.0이면 평활 없음(원값). 낮을수록 더 부드럽고 더 느리다.
 CLOSING_EMA_ALPHA = 0.2
 
+# 도플러 물리 상한(step7 CLOSING_DOPPLER_MARGIN_MPS)에 넣는 노드 속도의 창. 위치
+# 기반 접근속도(노드 GPS 필터 → KF → EMA)는 도플러보다 2~3 s 늦게 따라온다 —
+# 8/18 16:31:44·16:37:47: 차가 이미 0.1 m/s로 감속했는데 closing은 그제야 1 m/s.
+# 순간 도플러로 자르면 진짜 접근의 꼬리가 잘리므로, 최근 이 창 안의 최대 도플러를
+# 쓴다. 서 있는 노드는 창 내내 ≈0이라 유령은 그대로 잘린다.
+DOPPLER_PEAK_WINDOW_S = 3.0
+
 # calibrate_bias.py 가 저장하는 차량 GPS 상대 바이어스. 없으면 보정 없이 동작.
 VEHICLE_BIAS_FILE = Path(__file__).resolve().with_name("vehicle_bias.json")
 # 바이어스는 시간에 따라 변한다. 이보다 오래된 값이면 재보정을 권한다.
@@ -292,6 +299,21 @@ class RiskSender:
         self.model_gate = model_gate or ModelGate()
         # 접근속도 EMA 상태. None이면 아직 첫 샘플(원값 그대로).
         self.closing_ema = None
+        # 노드별 (pc_time, 도플러 속도) 최근 이력 — 유효 fix만. 도플러 상한용.
+        self._doppler_hist = {"cane": [], "vehicle": []}
+
+    def _record_doppler(self, row):
+        if row["type"] not in self._doppler_hist or not _gps_trusted(row["gps_valid"]):
+            return
+        hist = self._doppler_hist[row["type"]]
+        hist.append((to_float(row["pc_time"]), abs(to_float(row["speed_mps"]))))
+        cutoff = hist[-1][0] - DOPPLER_PEAK_WINDOW_S
+        while hist and hist[0][0] < cutoff:
+            hist.pop(0)
+
+    def _peak_doppler(self, node_type):
+        hist = self._doppler_hist[node_type]
+        return max(v for _, v in hist) if hist else None
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -314,6 +336,7 @@ class RiskSender:
         if not self.pipeline.store.update(row):
             print(f"[WARN] ignored_type type={row['type']!r}", file=sys.stderr)
             return
+        self._record_doppler(row)
 
         self.pipeline.observe(row)
         result = self.pipeline.compute()
@@ -334,9 +357,19 @@ class RiskSender:
             filtered = replace(filtered, closing_los=self.closing_ema)
         store = self.pipeline.store
         vehicle_speed = to_float(store.latest["vehicle"]["speed_mps"])
-        assessment = assess_risk(filtered, vehicle_speed, **self.gate_params)
-
         cane_gps_valid = store.latest["cane"]["gps_valid"]
+        # 도플러 물리 상한(step7): 두 노드 GPS가 모두 유효할 때만, 최근 창의 최대
+        # 도플러 쌍을 넘겨 채점 접근속도를 그 합+여유로 자른다. 무효 fix의 속도는
+        # 0이라 믿을 수 없고, 순간값은 위치 추정의 지연 때문에 진짜 접근을 자른다.
+        doppler_speeds = None
+        if (_gps_trusted(cane_gps_valid)
+                and _gps_trusted(store.latest["vehicle"]["gps_valid"])):
+            veh_peak, cane_peak = self._peak_doppler("vehicle"), self._peak_doppler("cane")
+            if veh_peak is not None and cane_peak is not None:
+                doppler_speeds = (veh_peak, cane_peak)
+        assessment = assess_risk(filtered, vehicle_speed, doppler_speeds_mps=doppler_speeds,
+                                 **self.gate_params)
+
         # 모델은 규칙 위에 얹힌다. 안전 하한(step7)이 낸 레벨 3은 모델이 낮추지
         # 못하고, 모델이 안전하다고 해도 규칙 레벨은 그대로 간다 - 검증되지 않은
         # 쪽이 검증된 쪽을 무르게 만들지 않기 위해서다.

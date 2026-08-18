@@ -31,8 +31,18 @@ class LevelStabilizer:
         self.hold_s = hold_s
         self.level = None
         self.lower_since = None  # when the current run of lower candidates began
+        self.last_now = None     # when stabilize() was last called
 
     def stabilize(self, candidate, now):
+        # 판정이 홀드보다 오래 끊겼다 돌아오면(노드 무음·재부팅) 이전 레벨은 시효가
+        # 지난 것 — 판정이 계속됐다면 그 사이 이미 내려갔을 길이다. 8/18 16:09:38:
+        # 지팡이 44 s 무음 뒤 첫 판정에서 무음 직전 L2가 2 s 더 나갔다.
+        if (self.last_now is not None and self.hold_s > 0
+                and now - self.last_now >= self.hold_s):
+            self.level = None
+            self.lower_since = None
+        self.last_now = now
+
         if self.level is None or candidate >= self.level:
             # First value, a rise, or confirmation of the held level: adopt and
             # forget any pending drop - the danger is (still) real.

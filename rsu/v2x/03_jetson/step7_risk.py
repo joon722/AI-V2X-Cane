@@ -223,6 +223,21 @@ NEAR_FLOOR_LEVEL = 2
 # 거리로 지키고, 그 밖에서 0.5 m/s면 TTC 10초 이상이라 여유가 있다. 끄려면 0.
 MIN_CLOSING_MPS = 0.5
 
+# 접근속도의 물리 상한. 두 노드가 보고한 도플러 속도(GPS 도플러, 위치 오차를 물려받지
+# 않음)의 합보다 빨리 가까워질 수는 없다: |closing| ≤ v_veh + v_cane + 여유.
+#
+# 2026-08-18 실측: 차가 0.01~0.1 m/s로 서 있는데 KF 접근속도가 0.5~3 m/s(위치
+# 드리프트, 무음 재개 직후) → 6~16 m에서 주의/경고 유령. 그날 점수표 경보 356행 중
+# 105행이 이 상한 밖이었고 그 99행이 둘 다 정지, 반대로 실제 접근(차 ≥1 m/s)
+# 154행 중 걸린 건 1행(그것도 상한까지만 낮아져 경보 유지). 여유 0.3은 정지 시
+# 도플러 잡음(0.02~0.3)을 덮고, 정지 쌍의 상한(≈0.35)이 데드밴드 0.5 아래라 유령이
+# TTC 없음으로 떨어진다. 채점용 접근속도만 자르고 기록(closing_los)은 원값. 둘 중
+# 하나라도 GPS 무효면 도플러를 믿을 수 없으니 호출자가 doppler_speeds_mps=None을
+# 줘 자르지 않는다. 위치 기반 접근속도(KF·EMA)는 도플러보다 2~3 s 늦게 따라오므로
+# (8/18 16:31:44·16:37:47: 차가 이미 0.1 m/s로 감속했는데 closing은 그제야 1 m/s)
+# 호출자는 순간값이 아니라 최근 몇 초의 최대 도플러를 넘긴다(step8).
+CLOSING_DOPPLER_MARGIN_MPS = 0.3
+
 
 @dataclass(frozen=True)
 class RiskAssessment:
@@ -249,6 +264,8 @@ def assess_risk(
     alarm_max_ttc_s=T_ALARM_MAX_TTC_S,
     near_floor_m=NEAR_FLOOR_M,
     min_closing_mps=MIN_CLOSING_MPS,
+    doppler_speeds_mps=None,
+    doppler_margin_mps=CLOSING_DOPPLER_MARGIN_MPS,
 ):
     """Score one filtered-track Kinematics sample.
 
@@ -259,12 +276,22 @@ def assess_risk(
     TTC가 floor_ttc_s 아래면 점수와 게이트를 모두 건너뛰고 레벨 3을 낸다
     (reason="safety_floor"). TTC가 alarm_max_ttc_s를 넘으면 규칙 레벨을
     0으로 누른다(reason="ttc_capped"). 접근속도가 min_closing_mps 아래면
-    잡음으로 보고 접근하지 않는 것으로 채점한다(TTC 9999). 분석용으로 끄려면
-    각각 0을 준다.
+    잡음으로 보고 접근하지 않는 것으로 채점한다(TTC 9999). doppler_speeds_mps=
+    (차량, 지팡이) 도플러 속도를 주면(두 노드 GPS 모두 유효) 채점 접근속도를
+    그 합+doppler_margin_mps로 자른다 — 서 있는 두 노드 사이에 KF가 만든
+    접근속도는 물리적으로 불가능하다. 표의 차량속도(vehicle_speed_mps)와 별개인
+    이유는 호출자가 지연을 감안한 최근 최대값을 넘기기 때문. 분석용으로 끄려면
+    각각 0을(클램프는 doppler_speeds_mps=None을) 준다.
     """
     closing = kinematics.closing_los
+    # 도플러 상한: 기록(closing_los)은 원값, 채점만 자른다.
+    scored_closing = closing
+    if doppler_speeds_mps is not None:
+        veh_doppler, cane_doppler = doppler_speeds_mps
+        bound = abs(veh_doppler) + abs(cane_doppler) + doppler_margin_mps
+        scored_closing = max(-bound, min(bound, scored_closing))
     # 잡음 크기의 접근속도는 채점에서 0으로 - 기록(closing_los)에는 원값이 남는다.
-    scored_closing = closing if closing >= min_closing_mps else 0.0
+    scored_closing = scored_closing if scored_closing >= min_closing_mps else 0.0
     ttc = calculate_ttc(kinematics.distance_m, scored_closing)
     base = calculate_risk_score(
         kinematics.distance_m, scored_closing, vehicle_speed_mps, ttc, zone_base_risk

@@ -5,6 +5,7 @@ import unittest
 
 from step6_kinematics import relative_kinematics
 from step7_risk import (
+    CLOSING_DOPPLER_MARGIN_MPS,
     DCPA_FAR_M,
     DCPA_FLOOR,
     DCPA_NEAR_M,
@@ -275,6 +276,81 @@ class ClosingDeadbandTest(unittest.TestCase):
         result = assess_risk(kin, vehicle_speed_mps=0.1, min_closing_mps=0.0)
         self.assertAlmostEqual(result.ttc, 8.0 / 0.3, places=6)
         self.assertEqual(result.reason, "table")
+
+
+class DopplerBoundTest(unittest.TestCase):
+    """접근속도의 물리 상한 — 두 노드가 보고한 도플러 속도의 합보다 빨리 가까워질 수 없다.
+
+    8/18 실측: 차가 0.01~0.1 m/s로 서 있는데 KF 접근속도가 0.5~3 m/s(위치 드리프트)
+    → 6~16 m에서 주의/경고 유령. 그날 점수표 경보 356행 중 105행이
+    closing > 차속+지팡이속+0.3 이었고 그 99행이 둘 다 정지, 반대로 실제 접근
+    (차 ≥1 m/s) 154행 중 걸린 건 1행. 채점용 접근속도만 |closing| ≤ 도플러 합+여유로
+    자르고(그 뒤 데드밴드), 기록(closing_los)은 원값. 도플러 쌍이 None이면(둘 중
+    하나라도 GPS 무효) 도플러를 믿을 수 없으니 자르지 않는다. 호출자(step8)는 위치
+    추정이 도플러보다 2~3 s 늦는 것을 감안해 최근 몇 초의 최대 도플러를 넘긴다.
+    """
+
+    def _pair(self, distance_m, closing_mps):
+        return relative_kinematics(
+            cane_pos=(0.0, 0.0), cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, distance_m), veh_vel=(0.0, -closing_mps),
+        )
+
+    def test_still_pair_with_drifting_closing_is_silent(self):
+        # 16:44:15 실측: d 6.9, closing 0.91, 차 0.01, 지팡이 0.03 → 경고 2 s 유령.
+        result = assess_risk(self._pair(6.9, 0.91), vehicle_speed_mps=0.01,
+                             doppler_speeds_mps=(0.01, 0.03))
+        self.assertEqual(result.ttc, 9999.0)
+        self.assertEqual(result.risk_level, 0)
+        self.assertEqual(result.reason, "ttc_capped")
+
+    def test_the_measured_closing_speed_is_still_logged(self):
+        result = assess_risk(self._pair(6.9, 0.91), vehicle_speed_mps=0.01,
+                             doppler_speeds_mps=(0.01, 0.03))
+        self.assertAlmostEqual(result.closing_los, 0.91, places=6)
+
+    def test_real_approach_is_not_clamped(self):
+        # 16:18:43 실측: d 6.2, closing 1.63, 차 1.66 → 경고(TTC 3.8)가 그대로여야 한다.
+        result = assess_risk(self._pair(6.2, 1.63), vehicle_speed_mps=1.66,
+                             doppler_speeds_mps=(1.66, 0.02))
+        self.assertAlmostEqual(result.ttc, 6.2 / 1.63, places=6)
+        self.assertEqual(result.reason, "table")
+        self.assertEqual(result.risk_level, 2)
+
+    def test_clamp_only_lowers_to_the_bound_and_a_fast_approach_still_alarms(self):
+        # 차 0.9 + 지팡이 0 + 여유 0.3 = 1.2 상한. closing 1.5 → 1.2로 채점, 5 m면 TTC 4.2 → 경고.
+        result = assess_risk(self._pair(5.0, 1.5), vehicle_speed_mps=0.9,
+                             doppler_speeds_mps=(0.9, 0.0))
+        self.assertAlmostEqual(result.ttc, 5.0 / (0.9 + 0.0 + CLOSING_DOPPLER_MARGIN_MPS), places=6)
+        self.assertEqual(result.risk_level, 2)
+
+    def test_no_doppler_speeds_means_no_clamp(self):
+        # 둘 중 하나라도 GPS 무효면 호출자가 None을 준다 → 이전 동작 그대로.
+        result = assess_risk(self._pair(6.9, 0.91), vehicle_speed_mps=0.01,
+                             doppler_speeds_mps=None)
+        self.assertAlmostEqual(result.ttc, 6.9 / 0.91, places=6)
+        self.assertEqual(result.reason, "table")
+
+    def test_still_pair_inside_the_floor_gets_near_floor_not_safety_floor(self):
+        # 서 있는 차 1.5 m 옆에서 closing 1.2가 튀면 어제는 TTC 1.25 → 위험(L3) 유령.
+        # 이제는 채점 접근속도가 잘려 TTC가 없고, 코앞 규칙(경고)만 남는다.
+        result = assess_risk(self._pair(1.5, 1.2), vehicle_speed_mps=0.02,
+                             doppler_speeds_mps=(0.02, 0.02))
+        self.assertEqual(result.risk_level, 2)
+        self.assertEqual(result.reason, "near_floor")
+
+    def test_the_bound_uses_the_given_speeds_not_the_table_vehicle_speed(self):
+        # 호출자는 지연을 감안한 최근 최대 도플러를 줄 수 있다: 표용 차속 0.1이라도
+        # 도플러 쌍 (1.0, 0.0)이면 상한 1.3 → closing 1.2가 그대로 채점된다.
+        result = assess_risk(self._pair(6.0, 1.2), vehicle_speed_mps=0.1,
+                             doppler_speeds_mps=(1.0, 0.0))
+        self.assertAlmostEqual(result.ttc, 6.0 / 1.2, places=6)
+        self.assertEqual(result.reason, "table")
+
+    def test_margin_is_below_the_deadband_so_still_pairs_fall_under_it(self):
+        # 정지 쌍(도플러 합 ≈0.05)의 상한이 데드밴드 0.5 아래여야 유령이 사라진다.
+        self.assertEqual(CLOSING_DOPPLER_MARGIN_MPS, 0.3)
+        self.assertLess(CLOSING_DOPPLER_MARGIN_MPS + 0.1, MIN_CLOSING_MPS)
 
 
 class NearFloorTest(unittest.TestCase):
