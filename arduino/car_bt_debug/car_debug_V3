@@ -20,8 +20,9 @@
 //   GPS RX  -> GPIO17 (ESP32 TX2, 없어도 수신 가능)
 //   IMU SDA -> GPIO21
 //   IMU SCL -> GPIO22
-//   DF Pro TX -> GPIO26 (ESP32 RX1)
 //   DF Pro RX <- GPIO27 (ESP32 TX1)
+//   DWM3001CDK J10 UART TX -> GPIO32 (ESP32 RX1)
+//   DWM3001CDK를 별도 USB/보조배터리로 켜면 ESP32와 GND는 반드시 공통
 //   스피커 한 개: DF Pro L+/L- 또는 R+/R-, 모든 모듈 GND 공통
 
 
@@ -42,6 +43,7 @@
 #define USE_GPS 1
 #define USE_IMU 1
 #define USE_DFPLAYER 1
+#define USE_UWB 1
 
 // GPS가 안 잡히는 실내에서도 테스트할 때 1.
 // 실제 도로 주행에서는 반드시 0 권장.
@@ -89,10 +91,19 @@ uint32_t lastUdpTelemetryMs = 0;
 // ICM-20948 ADR/AD0가 HIGH면 1, LOW면 0
 #define IMU_AD0_VAL 1
 
-#define DFPLAYER_RX 26  // ESP32 RX1 <- DFPlayer TX
+#define UWB_RX 32       // ESP32 RX1 <- DWM3001CDK J10 UART TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
 #define DFPLAYER_BAUD 115200
 #define DFPLAYER_VOLUME 15  // 0~30
+
+// DFPlayer Pro는 TX(GPIO27)만 사용하고 같은 UART1의 RX(GPIO32)로
+// DWM3001CDK CLI ranging 출력을 받는다. 두 장치 모두 115200bps.
+#define UWB_BAUD 115200
+#define UWB_FRESH_TIMEOUT_MS 750UL
+#define UWB_CAL_REQUIRED_SAMPLES 100U
+#define UWB_CAL_TIMEOUT_MS 30000UL
+#define UWB_MIN_DISTANCE_M 0.05f
+#define UWB_MAX_DISTANCE_M 100.0f
 
 // =====================
 // 동작 설정
@@ -263,6 +274,7 @@ const char *V2X_AP_PASSWORD = "12345678";
 #define MSG_RSU_REPLY 2
 #define MSG_CANE_STATUS 3
 #define MSG_RISK_ALERT 4
+#define MSG_UWB_RANGE 5
 
 #define NODE_VEHICLE 0x10
 #define NODE_CANE 0x20
@@ -346,6 +358,11 @@ float cfgRssiAlpha = CANE_RSSI_FILTER_ALPHA;
 float cfgImpactThreshold = IMPACT_THRESHOLD_MPS2;
 uint32_t cfgDfplayerVolume = DFPLAYER_VOLUME;
 uint32_t cfgTelemetryIntervalMs = UDP_TELEMETRY_INTERVAL_MS;
+float cfgUwbOffsetM = 0.0f;
+float cfgUwbFilterAlpha = 0.35f;
+uint32_t cfgUwbTimeoutMs = UWB_FRESH_TIMEOUT_MS;
+// 실물 검증 전에 기존 경고를 망치지 않도록 기본 0.
+uint32_t cfgUwbRiskEnabled = 0;
 
 #if USE_WEB_VIEWER
 // =====================
@@ -357,8 +374,8 @@ WebServer webServer(WEB_VIEWER_PORT);
 WiFiUDP caneLogUdp;   // 지팡이 텔레메트리(4210) 수신
 WiFiUDP caneCmdUdp;   // 지팡이로 명령 전달 및 응답 수신
 
-char webCarTelemetry[1500] = "";
-char webCaneTelemetry[1300] = "";
+char webCarTelemetry[2300] = "";
+char webCaneTelemetry[1900] = "";
 char webReplyBuffer[700] = "";
 uint32_t webCarUpdatedMs = 0;
 uint32_t webCaneUpdatedMs = 0;
@@ -728,6 +745,27 @@ typedef struct __attribute__((packed)) v2x_risk_message {
 static_assert(sizeof(v2x_risk_message_t) == 35,
               "risk alert packet must be 35 bytes");
 
+// UWB 거리는 기존 36/35바이트 패킷을 변경하지 않고 별도로 보낸다.
+// 기존 RSU가 이 패킷을 모르더라도 상태/위험 패킷은 그대로 호환된다.
+typedef struct __attribute__((packed)) v2x_uwb_message {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t msg_type;
+  uint8_t node_type;
+  uint8_t flags;       // bit0=유효, bit1=오프셋 보정 완료
+  uint32_t target_id;  // 0은 방송/대상 미지정
+  uint32_t src_id;
+  float raw_distance_m;
+  float distance_m;
+  float closing_speed_mps;
+  float offset_m;
+  uint32_t timestamp_ms;
+  uint16_t seq_num;
+} v2x_uwb_message_t;
+
+static_assert(sizeof(v2x_uwb_message_t) == 38,
+              "UWB range packet must be 38 bytes");
+
 HardwareSerial gpsSerial(2);
 HardwareSerial dfSerial(1);
 TinyGPSPlus gps;
@@ -742,6 +780,7 @@ uint8_t broadcastMAC[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 v2x_status_message_t txVehicleStatus;
 v2x_status_message_t latestCaneStatus;
 v2x_risk_message_t txRiskAlert;
+v2x_uwb_message_t txUwbRange;
 
 uint8_t latestCaneMAC[6] = {0};
 bool hasCaneMAC = false;
@@ -751,6 +790,7 @@ volatile bool newCanePacket = false;
 uint32_t vehicleId = 0;
 uint16_t vehicleSeq = 0;
 uint16_t riskSeq = 0;
+uint16_t uwbSeq = 0;
 uint32_t sendCount = 0;
 uint32_t caneRxCount = 0;
 uint32_t riskSendCount = 0;
@@ -763,6 +803,35 @@ uint32_t lastCaneRxMs = 0;
 volatile uint32_t lastRsuRiskRxMs = 0;
 volatile uint32_t rsuRiskRxCount = 0;
 uint32_t lastSensorLogMs = 0;
+
+typedef struct {
+  bool valid;
+  bool calibrated;
+  bool calibrating;
+  float rawDistanceM;
+  float filteredDistanceM;
+  float closingSpeedMps;
+  float lastRssiDbm;
+  uint32_t lastSampleMs;
+  uint32_t sampleCount;
+  uint32_t failureCount;
+  float medianWindow[5];
+  uint8_t medianCount;
+  uint8_t medianIndex;
+  float previousFilteredM;
+  uint32_t previousFilteredMs;
+  float calibrationKnownM;
+  double calibrationRawSumM;
+  uint16_t calibrationSamples;
+  uint32_t calibrationStartedMs;
+} UwbRangeState;
+
+UwbRangeState uwbRange = {};
+uint32_t uwbSendCount = 0;
+uint32_t uwbParseOverflowCount = 0;
+bool uwbUartReady = false;
+
+void sendUwbRangePacket();
 
 // 지팡이 -> 차량 ESP-NOW 수신 신호 세기 진단값.
 // 실제 거리 보정 전에는 거리값으로 단정하지 않고 dBm 원시/평활값을 모두 기록한다.
@@ -1627,6 +1696,14 @@ TuningParam tuningParams[] = {
    "충격 감지 임계값"},
   {"vol", &cfgDfplayerVolume, TUNING_UINT32, 0.0f, 30.0f, "",
    "스피커 음량 (즉시 반영)"},
+  {"uwboffset", &cfgUwbOffsetM, TUNING_FLOAT, -5.0f, 5.0f, "m",
+   "UWB 거리 보정 오프셋"},
+  {"uwbalpha", &cfgUwbFilterAlpha, TUNING_FLOAT, 0.05f, 1.0f, "",
+   "UWB 거리 평활 계수"},
+  {"uwbtimeout", &cfgUwbTimeoutMs, TUNING_UINT32, 200.0f, 5000.0f, "ms",
+   "UWB 최신값 유효 시간"},
+  {"uwbrisk", &cfgUwbRiskEnabled, TUNING_UINT32, 0.0f, 1.0f, "",
+   "실물 검증 후 UWB 직접 위험계산 사용(0/1)"},
   {"rate", &cfgTelemetryIntervalMs, TUNING_UINT32, 20.0f, 5000.0f, "ms",
    "뷰어 로그 전송 주기"},
 };
@@ -1665,6 +1742,171 @@ void cmdReply(const char *format, ...) {
     cmdUdp.write((const uint8_t *)line, length);
     cmdUdp.endPacket();
   }
+}
+
+bool uwbIsFresh(uint32_t now) {
+  return uwbRange.valid &&
+         uwbRange.lastSampleMs > 0 &&
+         now - uwbRange.lastSampleMs <= cfgUwbTimeoutMs;
+}
+
+float medianUwbWindow() {
+  float values[5];
+  uint8_t count = uwbRange.medianCount;
+  for (uint8_t i = 0; i < count; i++) values[i] = uwbRange.medianWindow[i];
+
+  for (uint8_t i = 1; i < count; i++) {
+    float value = values[i];
+    int8_t j = (int8_t)i - 1;
+    while (j >= 0 && values[j] > value) {
+      values[j + 1] = values[j];
+      j--;
+    }
+    values[j + 1] = value;
+  }
+  return count > 0 ? values[count / 2] : -1.0f;
+}
+
+void persistUwbOffset() {
+  if (!tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+    cmdReply("UWB 보정값 저장 실패");
+    return;
+  }
+  tuningPrefs.putFloat("uwboffset", cfgUwbOffsetM);
+  tuningPrefs.putBool("uwbcal", true);
+  tuningPrefs.end();
+}
+
+void finishUwbCalibration() {
+  if (!uwbRange.calibrating || uwbRange.calibrationSamples == 0) return;
+
+  float meanRawM = (float)(uwbRange.calibrationRawSumM /
+                           uwbRange.calibrationSamples);
+  cfgUwbOffsetM = uwbRange.calibrationKnownM - meanRawM;
+  uwbRange.calibrated = true;
+  uwbRange.calibrating = false;
+  uwbRange.medianCount = 0;
+  uwbRange.medianIndex = 0;
+  uwbRange.previousFilteredMs = 0;
+  persistUwbOffset();
+  cmdReply("UWB 보정 완료: %u회 평균=%.3fm 기준=%.3fm 오프셋=%+.3fm (자동저장)",
+           (unsigned)uwbRange.calibrationSamples,
+           meanRawM,
+           uwbRange.calibrationKnownM,
+           cfgUwbOffsetM);
+}
+
+void acceptUwbMeasurement(float rawDistanceM, float rssiDbm) {
+  if (!isfinite(rawDistanceM) ||
+      rawDistanceM < UWB_MIN_DISTANCE_M ||
+      rawDistanceM > UWB_MAX_DISTANCE_M) {
+    uwbRange.failureCount++;
+    return;
+  }
+
+  uint32_t now = millis();
+  uwbRange.valid = true;
+  uwbRange.rawDistanceM = rawDistanceM;
+  uwbRange.lastRssiDbm = rssiDbm;
+  uwbRange.lastSampleMs = now;
+  uwbRange.sampleCount++;
+
+  if (uwbRange.calibrating) {
+    uwbRange.calibrationRawSumM += rawDistanceM;
+    uwbRange.calibrationSamples++;
+    if (uwbRange.calibrationSamples >= UWB_CAL_REQUIRED_SAMPLES) {
+      finishUwbCalibration();
+    }
+  }
+
+  float correctedM = rawDistanceM + cfgUwbOffsetM;
+  correctedM = constrain(correctedM, UWB_MIN_DISTANCE_M, UWB_MAX_DISTANCE_M);
+  uwbRange.medianWindow[uwbRange.medianIndex] = correctedM;
+  uwbRange.medianIndex = (uwbRange.medianIndex + 1) % 5;
+  if (uwbRange.medianCount < 5) uwbRange.medianCount++;
+
+  float medianM = medianUwbWindow();
+  float previousM = uwbRange.filteredDistanceM;
+  uint32_t previousMs = uwbRange.previousFilteredMs;
+  if (previousMs == 0) {
+    uwbRange.filteredDistanceM = medianM;
+  } else {
+    uwbRange.filteredDistanceM =
+      cfgUwbFilterAlpha * medianM +
+      (1.0f - cfgUwbFilterAlpha) * uwbRange.filteredDistanceM;
+  }
+
+  if (previousMs > 0 && now > previousMs) {
+    float dt = (now - previousMs) / 1000.0f;
+    if (dt >= 0.03f && dt <= 2.0f) {
+      float instantClosingMps = (previousM - uwbRange.filteredDistanceM) / dt;
+      instantClosingMps = constrain(instantClosingMps, -15.0f, 15.0f);
+      uwbRange.closingSpeedMps =
+        0.30f * instantClosingMps +
+        0.70f * uwbRange.closingSpeedMps;
+    }
+  }
+  uwbRange.previousFilteredM = uwbRange.filteredDistanceM;
+  uwbRange.previousFilteredMs = now;
+
+  sendUwbRangePacket();
+}
+
+void parseUwbLine(char *line) {
+  char *distanceField = strstr(line, "distance[cm]=");
+  if (distanceField != nullptr &&
+      (strstr(line, "status=\"SUCCESS\"") != nullptr ||
+       strstr(line, "status=SUCCESS") != nullptr)) {
+    distanceField += strlen("distance[cm]=");
+    float distanceCm = strtof(distanceField, nullptr);
+
+    float rssiDbm = NAN;
+    char *rssiField = strstr(line, "RSSI[dBm]=");
+    if (rssiField != nullptr) {
+      rssiDbm = strtof(rssiField + strlen("RSSI[dBm]="), nullptr);
+    }
+    acceptUwbMeasurement(distanceCm / 100.0f, rssiDbm);
+    return;
+  }
+
+  if (strstr(line, "status=\"") != nullptr &&
+      strstr(line, "SUCCESS") == nullptr) {
+    uwbRange.failureCount++;
+  }
+}
+
+void updateUwb() {
+#if USE_UWB
+  static char line[256];
+  static size_t length = 0;
+
+  while (uwbUartReady && dfSerial.available() > 0) {
+    char c = (char)dfSerial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      if (length > 0) {
+        line[length] = '\0';
+        parseUwbLine(line);
+        length = 0;
+      }
+      continue;
+    }
+    if (length < sizeof(line) - 1) {
+      line[length++] = c;
+    } else {
+      length = 0;
+      uwbParseOverflowCount++;
+    }
+  }
+
+  if (uwbRange.calibrating &&
+      millis() - uwbRange.calibrationStartedMs > UWB_CAL_TIMEOUT_MS) {
+    uwbRange.calibrating = false;
+    cmdReply("UWB 보정 시간초과: %u/%u회 수신 (배선/CDK ranging 상태 확인)",
+             (unsigned)uwbRange.calibrationSamples,
+             (unsigned)UWB_CAL_REQUIRED_SAMPLES);
+  }
+#endif
 }
 
 float readTuningValue(size_t index) {
@@ -1710,6 +1952,7 @@ void loadTuningFromFlash() {
     writeTuningValue(i, saved);
     restored++;
   }
+  uwbRange.calibrated = tuningPrefs.getBool("uwbcal", false);
   tuningPrefs.end();
 
   if (restored > 0) {
@@ -1726,6 +1969,7 @@ void saveTuningToFlash() {
   for (size_t i = 0; i < tuningParamCount; i++) {
     tuningPrefs.putFloat(tuningParams[i].name, readTuningValue(i));
   }
+  tuningPrefs.putBool("uwbcal", uwbRange.calibrated);
   tuningPrefs.end();
   cmdReply("현재 설정 %u개를 플래시에 저장 (전원 껐다 켜도 유지)",
            (unsigned)tuningParamCount);
@@ -1739,6 +1983,8 @@ void restoreTuningDefaults() {
     tuningPrefs.clear();
     tuningPrefs.end();
   }
+  uwbRange.calibrated = false;
+  uwbRange.calibrating = false;
   cmdReply("코드에 적힌 기본값으로 되돌리고 플래시 저장분도 삭제");
 }
 
@@ -1773,6 +2019,89 @@ void reportTuningHelp() {
   cmdReply("play <1-4>  음성 테스트 "
            "(1주의 2경고 3위험 4충격)");
   cmdReply("cal         GPS 상대좌표 영점 보정 시작");
+  cmdReply("uwb status  UWB 수신/보정 상태 확인");
+  cmdReply("uwb cal <m> 알고 있는 거리에서 100회 자동보정");
+  cmdReply("uwb stop    진행 중인 UWB 보정 취소");
+  cmdReply("uwb reset   UWB 오프셋/보정 저장값 삭제");
+}
+
+bool runUwbCommand(String line) {
+  String lower = line;
+  lower.toLowerCase();
+  if (lower != "uwb" && !lower.startsWith("uwb ")) return false;
+
+  String args = line.substring(3);
+  args.trim();
+  String sub = args;
+  String value = "";
+  int space = args.indexOf(' ');
+  if (space > 0) {
+    sub = args.substring(0, space);
+    value = args.substring(space + 1);
+    value.trim();
+  }
+  sub.toLowerCase();
+
+  if (sub.length() == 0 || sub == "status") {
+    long ageMs = uwbRange.lastSampleMs > 0
+      ? (long)(millis() - uwbRange.lastSampleMs) : -1L;
+    cmdReply("UWB fresh=%u raw=%.3fm filtered=%.3fm closing=%.3fm/s age=%ldms samples=%lu fail=%lu",
+             uwbIsFresh(millis()) ? 1u : 0u,
+             uwbRange.rawDistanceM,
+             uwbRange.filteredDistanceM,
+             uwbRange.closingSpeedMps,
+             ageMs,
+             (unsigned long)uwbRange.sampleCount,
+             (unsigned long)uwbRange.failureCount);
+    cmdReply("UWB calibrated=%u calibrating=%u progress=%u/%u offset=%+.3fm risk=%lu",
+             uwbRange.calibrated ? 1u : 0u,
+             uwbRange.calibrating ? 1u : 0u,
+             (unsigned)uwbRange.calibrationSamples,
+             (unsigned)UWB_CAL_REQUIRED_SAMPLES,
+             cfgUwbOffsetM,
+             (unsigned long)cfgUwbRiskEnabled);
+    return true;
+  }
+
+  if (sub == "cal") {
+    float knownM = value.toFloat();
+    if (value.length() == 0 || knownM < 0.20f || knownM > 50.0f) {
+      cmdReply("사용법: uwb cal <실제거리m>  예) uwb cal 3");
+      return true;
+    }
+    uwbRange.calibrating = true;
+    uwbRange.calibrationKnownM = knownM;
+    uwbRange.calibrationRawSumM = 0.0;
+    uwbRange.calibrationSamples = 0;
+    uwbRange.calibrationStartedMs = millis();
+    cmdReply("UWB %.3fm 자동보정 시작: 두 장치를 움직이지 말 것 (%u회 수집)",
+             knownM, (unsigned)UWB_CAL_REQUIRED_SAMPLES);
+    return true;
+  }
+
+  if (sub == "stop") {
+    uwbRange.calibrating = false;
+    cmdReply("UWB 보정 취소");
+    return true;
+  }
+
+  if (sub == "reset") {
+    cfgUwbOffsetM = 0.0f;
+    uwbRange.calibrated = false;
+    uwbRange.calibrating = false;
+    uwbRange.medianCount = 0;
+    uwbRange.previousFilteredMs = 0;
+    if (tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+      tuningPrefs.remove("uwboffset");
+      tuningPrefs.remove("uwbcal");
+      tuningPrefs.end();
+    }
+    cmdReply("UWB 보정값 삭제, offset=0");
+    return true;
+  }
+
+  cmdReply("알 수 없는 UWB 명령: %s", sub.c_str());
+  return true;
 }
 
 void runTuningCommand(String line) {
@@ -1780,6 +2109,8 @@ void runTuningCommand(String line) {
   if (line.length() == 0) return;
   // 다른 노드의 응답이 되돌아온 경우는 명령으로 해석하지 않는다.
   if (line.startsWith("[CMD]") || line.startsWith(">")) return;
+
+  if (runUwbCommand(line)) return;
 
   String name = line;
   String value = "";
@@ -1921,13 +2252,24 @@ void sendDfPlayerAtCommand(const char *command) {
 }
 
 void setupDfPlayer() {
+#if USE_DFPLAYER || USE_UWB
+  // ESP32는 하드웨어 UART가 3개뿐이므로 UART1의 방향을 나눠 쓴다.
+  // RX=UWB 거리 출력, TX=DFPlayer Pro 음성 명령.
+  dfSerial.begin(DFPLAYER_BAUD, SERIAL_8N1,
+                 USE_UWB ? UWB_RX : -1,
+                 USE_DFPLAYER ? DFPLAYER_TX : -1);
+  uwbUartReady = USE_UWB;
 #if USE_DFPLAYER
-  dfSerial.begin(DFPLAYER_BAUD, SERIAL_8N1, DFPLAYER_RX, DFPLAYER_TX);
   delay(1000);  // DFPlayer Pro 전원 안정화
   dfPlayerReady = true;
   sendDfPlayerAtCommand("AT");
-  Serial.printf("[DFPLAYER PRO] UART ready, baud=%lu\n",
-                (unsigned long)DFPLAYER_BAUD);
+  Serial.printf("[DFPLAYER PRO] TX-only ready GPIO=%d baud=%lu\n",
+                DFPLAYER_TX, (unsigned long)DFPLAYER_BAUD);
+#endif
+#if USE_UWB
+  Serial.printf("[UWB] DWM3001CDK CLI RX ready GPIO=%d baud=%lu\n",
+                UWB_RX, (unsigned long)UWB_BAUD);
+#endif
 #endif
 }
 
@@ -1994,33 +2336,6 @@ void announceRisk(uint8_t risk) {
   }
 
   lastAnnouncedRisk = risk;
-}
-
-void updateDfPlayer() {
-#if USE_DFPLAYER
-  static char response[96];
-  static size_t responseLength = 0;
-
-  while (dfPlayerReady && dfSerial.available() > 0) {
-    char c = (char)dfSerial.read();
-    if (c == '\r') continue;
-
-    if (c == '\n') {
-      if (responseLength > 0) {
-        response[responseLength] = '\0';
-        Serial.printf("[DFPLAYER PRO RX] %s\n", response);
-        responseLength = 0;
-      }
-      continue;
-    }
-
-    if (responseLength < sizeof(response) - 1) {
-      response[responseLength++] = c;
-    } else {
-      responseLength = 0;
-    }
-  }
-#endif
 }
 
 // =====================
@@ -2906,14 +3221,23 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   *outHeadingError = 0.0f;
   *outInVehiclePath = false;
 
+  bool useUwbRange =
+    cfgUwbRiskEnabled != 0 &&
+    uwbRange.calibrated &&
+    uwbIsFresh(millis()) &&
+    isfinite(uwbRange.filteredDistanceM) &&
+    uwbRange.filteredDistanceM >= UWB_MIN_DISTANCE_M;
+
   // 보정 전 GPS 좌표만으로는 20~50m 상대 바이어스가 생겼으므로
-  // BOOT 영점보정과 최신 RSSI 근접 확인이 모두 있어야 CPA를 계산한다.
+  // BOOT 영점보정은 GPS 방향을 위해 계속 필요하다.
+  // UWB가 검증/활성화되면 RSSI 근접 게이트 대신 UWB 거리를 쓴다.
   if (!relativeGpsCalibration.valid ||
       relativeGpsCalibration.active ||
-      !caneRssiIsFresh() ||
-      rssiProximityZone == RSSI_ZONE_UNKNOWN ||
-      rssiProximityZone == RSSI_ZONE_FAR ||
-      rssiEstimatedDistanceM <= 0.0f) {
+      (!useUwbRange &&
+       (!caneRssiIsFresh() ||
+        rssiProximityZone == RSSI_ZONE_UNKNOWN ||
+        rssiProximityZone == RSSI_ZONE_FAR ||
+        rssiEstimatedDistanceM <= 0.0f))) {
     return RISK_SAFE;
   }
 
@@ -2933,6 +3257,12 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   }
 
   float distanceM = correctedGpsDistanceM;
+  if (useUwbRange) {
+    float scale = uwbRange.filteredDistanceM / correctedGpsDistanceM;
+    rx *= scale;
+    ry *= scale;
+    distanceM = uwbRange.filteredDistanceM;
+  }
   float bearing = normalizeHeading(
     atan2f(rx, ry) * RAD_TO_DEG
   );
@@ -2946,7 +3276,7 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   // 먼 거리 RSSI에서는 독립 GPS 두 대의 순간 상대오차만으로 경보하지 않는다.
   // 05-2 평행 로그의 GPS가 실제 약 4m를 0.9m로 오인했지만 RSSI는
   // -72dBm보다 약했으므로 이 게이트에서 제거된다.
-  if (filteredCaneRssiDbm < cfgRssiGateDbm) {
+  if (!useUwbRange && filteredCaneRssiDbm < cfgRssiGateDbm) {
     return RISK_SAFE;
   }
 
@@ -2996,6 +3326,10 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   float closingSpeed = -dot / fmaxf(distanceM, 0.1f);
   float tCpa = -dot / relativeSpeedSq;
 
+  if (useUwbRange && isfinite(uwbRange.closingSpeedMps)) {
+    closingSpeed = uwbRange.closingSpeedMps;
+  }
+
   *outClosingSpeed = closingSpeed;
 
   if (closingSpeed < cfgMinClosingSpeed ||
@@ -3008,21 +3342,26 @@ uint8_t calculateRiskFromCane(const v2x_status_message_t &cane,
   float closestY = ry + rvy * tCpa;
   float dCpa = sqrtf(closestX * closestX + closestY * closestY);
 
-  *outTtc = tCpa;
+  float riskTtc = tCpa;
+  if (useUwbRange && closingSpeed > cfgMinClosingSpeed) {
+    riskTtc = distanceM / closingSpeed;
+  }
+
+  *outTtc = riskTtc;
   *outInVehiclePath = dCpa <= cfgCpaCautionM;
 
   if (dCpa <= cfgCpaDangerM &&
-      tCpa <= RISK_DANGER_TTC_S) {
+      riskTtc <= RISK_DANGER_TTC_S) {
     return RISK_DANGER;
   }
 
   if (dCpa <= cfgCpaWarningM &&
-      tCpa <= RISK_WARNING_TTC_S) {
+      riskTtc <= RISK_WARNING_TTC_S) {
     return RISK_WARNING;
   }
 
   if (dCpa <= cfgCpaCautionM &&
-      tCpa <= RISK_CAUTION_TTC_S) {
+      riskTtc <= RISK_CAUTION_TTC_S) {
     return RISK_CAUTION;
   }
 
@@ -3071,6 +3410,34 @@ void sendVehicleStatus() {
     txVehicleStatus.risk_level,
     result == ESP_OK ? "OK" : "ERR"
   );
+}
+
+void sendUwbRangePacket() {
+#if USE_UWB
+  if (!uwbIsFresh(millis())) return;
+
+  memset(&txUwbRange, 0, sizeof(txUwbRange));
+  txUwbRange.magic = V2X_MAGIC;
+  txUwbRange.version = V2X_VERSION;
+  txUwbRange.msg_type = MSG_UWB_RANGE;
+  txUwbRange.node_type = NODE_VEHICLE;
+  txUwbRange.flags = 0x01 | (uwbRange.calibrated ? 0x02 : 0x00);
+  // 지팽이 ID를 아직 못 받은 시점에도 진단값은 보낼 수 있게 방송한다.
+  txUwbRange.target_id = 0;
+  txUwbRange.src_id = vehicleId;
+  txUwbRange.raw_distance_m = uwbRange.rawDistanceM;
+  txUwbRange.distance_m = uwbRange.filteredDistanceM;
+  txUwbRange.closing_speed_mps = uwbRange.closingSpeedMps;
+  txUwbRange.offset_m = cfgUwbOffsetM;
+  txUwbRange.timestamp_ms = millis();
+  txUwbRange.seq_num = uwbSeq++;
+
+  if (esp_now_send(broadcastMAC,
+                   (uint8_t *)&txUwbRange,
+                   sizeof(txUwbRange)) == ESP_OK) {
+    uwbSendCount++;
+  }
+#endif
 }
 
 void sendRiskAlertToCane(uint8_t risk,
@@ -3459,7 +3826,7 @@ void logSensors() {
 
 // 차량 상태를 UDP 4211로 전송한다.
 void sendUdpTelemetry() {
-  char udpBuffer[2048];
+  char udpBuffer[2560];
 
   float impactPeakSnapshot = impactPeakSinceTelemetry;
   impactPeakSinceTelemetry = 0.0f;
@@ -3482,6 +3849,9 @@ void sendUdpTelemetry() {
   
   long rssiAgeMs = rssiValidSnapshot
     ? (long)(telemetryMs - rssiLastMsSnapshot)
+    : -1L;
+  long uwbAgeMs = uwbRange.lastSampleMs > 0
+    ? (long)(telemetryMs - uwbRange.lastSampleMs)
     : -1L;
 
   int written = snprintf(
@@ -3547,6 +3917,21 @@ void sendUdpTelemetry() {
     "상대보정중:%u\n"
     "보정동쪽:%.2f\n"
     "보정북쪽:%.2f\n"
+    "UWB유효:%u\n"
+    "UWB원시거리:%.3f\n"
+    "UWB보정거리:%.3f\n"
+    "UWB접근속도:%.3f\n"
+    "UWB_RSSI:%.1f\n"
+    "UWB경과ms:%ld\n"
+    "UWB샘플:%lu\n"
+    "UWB실패:%lu\n"
+    "UWB보정:%u\n"
+    "UWB보정중:%u\n"
+    "UWB보정샘플:%u\n"
+    "UWB보정기준:%.3f\n"
+    "UWB오프셋:%.3f\n"
+    "UWB위험사용:%lu\n"
+    "UWB전송:%lu\n"
     "위험송신:%lu\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
@@ -3614,6 +3999,21 @@ void sendUdpTelemetry() {
     relativeGpsCalibration.active ? 1u : 0u,
     relativeGpsCalibration.biasEastM,
     relativeGpsCalibration.biasNorthM,
+    uwbIsFresh(telemetryMs) ? 1u : 0u,
+    uwbRange.rawDistanceM,
+    uwbRange.filteredDistanceM,
+    uwbRange.closingSpeedMps,
+    uwbRange.lastRssiDbm,
+    uwbAgeMs,
+    (unsigned long)uwbRange.sampleCount,
+    (unsigned long)uwbRange.failureCount,
+    uwbRange.calibrated ? 1u : 0u,
+    uwbRange.calibrating ? 1u : 0u,
+    (unsigned)uwbRange.calibrationSamples,
+    uwbRange.calibrationKnownM,
+    cfgUwbOffsetM,
+    (unsigned long)cfgUwbRiskEnabled,
+    (unsigned long)uwbSendCount,
     (unsigned long)riskSendCount
   );
 
@@ -3849,7 +4249,7 @@ void loop() {
   recoverGps5HzIfNeeded();
   readImu();
   updateVehiclePathHeading();
-  updateDfPlayer();
+  updateUwb();
   processLatestCanePacket();
   resetStaleCaneRisk();
   resetStaleRsuRisk();
