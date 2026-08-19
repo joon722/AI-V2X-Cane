@@ -29,6 +29,9 @@ CSV_FIELDS = (
     "recv_count",
     "lost_count",
     "rssi",
+    # 차량이 지팡이 신호를 직접 들은 RSSI로 추정한 거리(m). 프로토콜 v4에서 상태
+    # 패킷에 추가되면 브리지가 실어 보낸다. 구 펌웨어면 빈 값 → 방향 융합 자동 OFF.
+    "rssi_dist",
     "src_mac",
     "source_mode",
 )

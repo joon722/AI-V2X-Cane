@@ -64,6 +64,15 @@ DOPPLER_PEAK_WINDOW_S = 3.0
 # 놓친 저속 접근(거리 4초에 1.5~2.9 m 감소)과 정지 잡음(p90 1.2 m)을 가르는 값.
 DIST_TREND_WINDOW_S = 4.0
 
+# RSSI 방향 융합. GPS 거리추세만으로 저속 접근을 잡으면 GPS 점프가 만든 가짜 접근으로
+# 오탐 51%(8/19 재생). 그래서 차량이 지팡이를 직접 들은 RSSI(rssi_dist)도 "다가오는
+# 중"일 때만 GPS 추세를 인정한다 — 둘은 독립이라 GPS 점프가 RSSI를 같이 안 흔든다.
+# 버킷 08-08 무지향성 안테나: RSSI거리 vs GPS거리 상관 −0.95. rssi_dist가 패킷에
+# 없으면(구 펌웨어) 융합은 자동 OFF → 기존 동작.
+RSSI_TREND_WINDOW_S = 4.0     # RSSI 거리추세 창
+RSSI_RANGE_M = 12.0          # RSSI 추정거리 유효범위(0.8~12 m). 밖은 포화라 융합 안 함
+RSSI_APPROACH_MIN_M = 1.0    # 창 동안 RSSI 거리가 이만큼 줄면 "다가오는 중"
+
 # calibrate_bias.py 가 저장하는 차량 GPS 상대 바이어스. 없으면 보정 없이 동작.
 VEHICLE_BIAS_FILE = Path(__file__).resolve().with_name("vehicle_bias.json")
 # 바이어스는 시간에 따라 변한다. 이보다 오래된 값이면 재보정을 권한다.
@@ -291,7 +300,7 @@ class RiskSender:
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
                  stabilizer=None, raw_log=None, model_gate=None, live_state=None,
-                 dist_trend_min_mps=0.0):
+                 dist_trend_min_mps=TREND_MIN_MPS):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
@@ -308,14 +317,14 @@ class RiskSender:
         self.closing_ema = None
         # 노드별 (pc_time, 도플러 속도) 최근 이력 — 유효 fix만. 도플러 상한용.
         self._doppler_hist = {"cane": [], "vehicle": []}
-        # 거리추세: 순간 접근속도가 데드밴드에 눌린 저속 실접근을 (pc_time, 거리) 이력으로
-        # 잡는다. 0이면 비활성 = 기본. 8/19 실기 재생: 켜면 놓친 저속 접근 4/5를 잡지만
-        # 정지 오탐이 3배(76→318행)로 늘고 "양쪽 반 감소" 가드로도 7%만 준다 — 손 걷기
-        # 속도(0.5~0.7 m/s)와 GPS 드리프트(σ 2 m/4 s)가 같은 크기라 원리적으로 구분이
-        # 안 되기 때문. 실제 차량(≥1.4 m/s)은 이미 데드밴드로 잡히니 실전엔 불필요.
-        # 저속 접근 테스트/논문용으로만 켠다(0.62 등).
+        # 거리추세 융합 켜기/끄기. 기본 켜짐(TREND_MIN_MPS)이지만 실제 발동은 RSSI
+        # 이중확인(rssi_dist "다가옴" + 12 m 안)이 있어야 한다 — GPS 추세만으론 점프
+        # 가짜접근으로 오탐 51%(8/19)라서. rssi_dist 없으면(구 펌웨어) 자동 OFF = 기존
+        # 동작. 0을 주면 융합 자체를 끈다(클램프/도플러만 검증할 때).
         self.dist_trend_min_mps = dist_trend_min_mps
-        self._dist_hist = []  # (pc_time, filtered distance_m)
+        self._dist_hist = []  # (pc_time, raw distance_m)
+        # RSSI 방향 융합용 (pc_time, rssi_dist) — 차량 rssi_dist 유효 패킷만.
+        self._rssi_hist = []
 
     def _record_doppler(self, row):
         if row["type"] not in self._doppler_hist or not _gps_trusted(row["gps_valid"]):
@@ -331,17 +340,16 @@ class RiskSender:
         return max(v for _, v in hist) if hist else None
 
     def _trend_closing(self, now, distance_m):
-        """최근 DIST_TREND_WINDOW_S 동안 거리가 준 속도(m/s). 비활성이면 0.
+        """최근 DIST_TREND_WINDOW_S 동안 거리가 준 속도(m/s). 이력이 짧으면 0.
 
         (pc_time, 거리)를 쌓고, 창 시작 시점의 거리와 지금 거리의 차를 창 길이로
         나눈다. 정지 잡음은 몇 초 꾸준히 줄지 않아 값이 작고, 느린 실접근은 크다.
+        사용 여부(RSSI 이중확인·범위)는 호출자가 정한다.
         """
         self._dist_hist.append((now, distance_m))
         cutoff = now - DIST_TREND_WINDOW_S - 1.0
         while self._dist_hist and self._dist_hist[0][0] < cutoff:
             self._dist_hist.pop(0)
-        if self.dist_trend_min_mps <= 0:
-            return 0.0
         target = now - DIST_TREND_WINDOW_S
         old = None
         for t, d in self._dist_hist:
@@ -352,6 +360,39 @@ class RiskSender:
         if old is None:
             return 0.0
         return (old - distance_m) / DIST_TREND_WINDOW_S
+
+    def _record_rssi(self, row):
+        """차량 패킷의 rssi_dist(RSSI 추정거리)를 이력에 쌓는다. 유효값(>0)만."""
+        if row["type"] != "vehicle":
+            return
+        rd = row.get("rssi_dist")
+        try:
+            rd = float(rd)
+        except (TypeError, ValueError):
+            return
+        if rd <= 0:
+            return
+        now = to_float(row["pc_time"])
+        self._rssi_hist.append((now, rd))
+        cutoff = now - RSSI_TREND_WINDOW_S - 1.0
+        while self._rssi_hist and self._rssi_hist[0][0] < cutoff:
+            self._rssi_hist.pop(0)
+
+    def _rssi_approaching(self, now):
+        """RSSI 추정거리가 최근 창 동안 줄었나. True(다가옴)/False(멀어짐·정지)/None(데이터 없음).
+
+        rssi_dist가 패킷에 없으면(구 펌웨어) 이력이 비어 None → 융합 자동 OFF.
+        """
+        target = now - RSSI_TREND_WINDOW_S
+        old = None
+        for t, d in self._rssi_hist:
+            if t <= target:
+                old = d
+            else:
+                break
+        if old is None or not self._rssi_hist:
+            return None
+        return (old - self._rssi_hist[-1][1]) >= RSSI_APPROACH_MIN_M
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -375,6 +416,7 @@ class RiskSender:
             print(f"[WARN] ignored_type type={row['type']!r}", file=sys.stderr)
             return
         self._record_doppler(row)
+        self._record_rssi(row)
 
         self.pipeline.observe(row)
         result = self.pipeline.compute()
@@ -409,6 +451,14 @@ class RiskSender:
         # 필터 거리는 차량 ZUPT 로 강하게 눌려 뒤처지므로, 두 노드의 실제 좌표로 잰
         # raw 거리로 추세를 계산한다(4 s 창이 그 잡음을 평균한다).
         trend_closing = self._trend_closing(now, raw.distance_m)
+        # RSSI 이중확인: GPS 추세만으론 점프가 만든 가짜 접근으로 오탐 51%(8/19). 융합이
+        # 켜져 있고(dist_trend_min_mps>0), 차량이 지팡이를 직접 들은 RSSI 거리도 "다가오는
+        # 중"이며, RSSI 유효범위(12 m) 안일 때만 추세를 인정한다. rssi_dist 없으면
+        # rssi_approaching=None → 추세 무효 → 기존 동작(안전).
+        if not (self.dist_trend_min_mps > 0
+                and self._rssi_approaching(now) is True
+                and raw.distance_m <= RSSI_RANGE_M):
+            trend_closing = 0.0
         assessment = assess_risk(filtered, vehicle_speed, doppler_speeds_mps=doppler_speeds,
                                  trend_closing_mps=trend_closing, **self.gate_params)
 
