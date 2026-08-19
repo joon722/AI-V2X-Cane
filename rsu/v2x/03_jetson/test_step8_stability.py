@@ -89,32 +89,58 @@ class SilenceExpiresTheHoldTest(unittest.TestCase):
         self.assertEqual(st.stabilize(3, now=44.0), 3)
 
 
-class RecedingClearsAtOnceTest(unittest.TestCase):
-    """홀드는 경계에서 떨리는 잡음을 누르는 장치지, 지나간 차의 경보를 붙들어 두는 장치가 아니다.
+class RecedingClearsAfterShortHoldTest(unittest.TestCase):
+    """멀어지는 중(지나간 차)이라도 즉시 끄지 않고 짧게(receding_hold_s, 0.6 s) 유지한다.
 
-    8/18: 차가 지나가 멀어지는 중(도플러로 확인된 접근속도 ≤ −0.5 m/s)이면 위험이 끝난 게
-    확실하므로 낮은 등급을 즉시 채택한다. 아직 다가오는데(또는 정지·잡음) 등급만 잠깐
-    내려간 것은 지금처럼 홀드한다. 기본 홀드는 2 → 1 s (오늘 잡음을 눌러 감당 가능).
+    2026-08-19 실기: 사용자가 차를 손에 들고 지팡이로 걸어갔는데, GPS 점프가 거리를
+    6.6→12.8 m로 튕겨 한두 샘플 "멀어짐"으로 보였다(09:11). 즉시 해제하면 그 순간
+    경보가 꺼진다. 0.6 s 유지하면 그 사이 fix가 다시 잡혀 "아직 다가온다"가 확인될 수
+    있어 오클리어를 막는다. 진짜 지나간 차면 0.6 s 더 울릴 뿐(옛 2 s 홀드·3 s 잔상보다
+    훨씬 짧다). 아직 다가오는데 등급만 잠깐 내려간 것(잡음)은 전체 홀드(1 s)로 누른다.
     """
 
-    def test_a_drop_while_receding_is_adopted_immediately(self):
-        st = LevelStabilizer(hold_s=2.0)
+    def test_a_receding_drop_is_held_for_the_receding_window_then_clears(self):
+        # 멀어짐 시작(0.1)부터 receding_hold_s(0.6) 뒤에 해제.
+        st = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
         st.stabilize(2, now=0.0)
-        self.assertEqual(st.stabilize(0, now=0.2, receding=True), 0)
+        self.assertEqual(st.stabilize(0, now=0.1, receding=True), 2)   # 유지 시작
+        self.assertEqual(st.stabilize(0, now=0.5, receding=True), 2)   # 0.4 s, 아직 유지
+        self.assertEqual(st.stabilize(0, now=0.8, receding=True), 0)   # 0.7 s ≥ 0.6, 해제
 
-    def test_a_drop_while_still_approaching_is_held(self):
-        st = LevelStabilizer(hold_s=2.0)
+    def test_a_reapproach_within_the_receding_window_keeps_the_alarm(self):
+        # 점프였고 그 사이 다시 다가옴이 확인되면 경보가 살아있어야 한다.
+        st = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
         st.stabilize(2, now=0.0)
-        self.assertEqual(st.stabilize(0, now=0.2, receding=False), 2)
+        self.assertEqual(st.stabilize(0, now=0.1, receding=True), 2)   # 멀어짐 잠깐
+        self.assertEqual(st.stabilize(2, now=0.3, receding=False), 2)  # 다시 다가옴 → 시계 리셋
+        self.assertEqual(st.stabilize(0, now=0.5, receding=True), 2)   # 새 멀어짐, 다시 유지
+        self.assertEqual(st.stabilize(0, now=1.2, receding=True), 0)   # 0.5부터 0.7 s 뒤 해제
 
-    def test_receding_is_the_default_off(self):
-        st = LevelStabilizer(hold_s=2.0)
+    def test_a_receding_drop_is_not_cleared_instantly(self):
+        st = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
         st.stabilize(2, now=0.0)
-        self.assertEqual(st.stabilize(0, now=0.2), 2)
+        self.assertEqual(st.stabilize(0, now=0.1, receding=True), 2)   # 즉시 해제 아님
 
-    def test_default_hold_is_one_second(self):
-        from step8_stability import HOLD_S
+    def test_a_drop_while_still_approaching_holds_the_full_hold(self):
+        st = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
+        st.stabilize(2, now=0.0)
+        self.assertEqual(st.stabilize(0, now=0.1, receding=False), 2)  # 드롭 시작
+        self.assertEqual(st.stabilize(0, now=0.9, receding=False), 2)  # 0.8 s < 1.0, 유지
+        self.assertEqual(st.stabilize(0, now=1.2, receding=False), 0)  # 1.1 s ≥ 1.0, 해제
+
+    def test_receding_clears_faster_than_an_approaching_flicker(self):
+        rec = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
+        rec.stabilize(2, now=0.0); rec.stabilize(0, now=0.1, receding=True)
+        app = LevelStabilizer(hold_s=1.0, receding_hold_s=0.6)
+        app.stabilize(2, now=0.0); app.stabilize(0, now=0.1, receding=False)
+        # 드롭 0.1 시작 → t=0.8: 멀어짐(0.7≥0.6) 꺼지고, 접근 잡음(0.7<1.0) 유지
+        self.assertEqual(rec.stabilize(0, now=0.8, receding=True), 0)
+        self.assertEqual(app.stabilize(0, now=0.8, receding=False), 2)
+
+    def test_defaults(self):
+        from step8_stability import HOLD_S, RECEDING_HOLD_S
         self.assertEqual(HOLD_S, 1.0)
+        self.assertEqual(RECEDING_HOLD_S, 0.6)
 
 
 if __name__ == "__main__":
