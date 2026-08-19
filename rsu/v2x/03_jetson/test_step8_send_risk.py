@@ -272,6 +272,9 @@ class DopplerBoundWiringTest(unittest.TestCase):
                 gate_params={"near_m": DCPA_NEAR_M, "far_m": DCPA_FAR_M,
                              "floor": DCPA_FLOOR, "floor_ttc_s": T_FLOOR_TTC_S},
                 stabilizer=LevelStabilizer(hold_s=2.0),
+                # 이 클래스는 클램프/ZUPT 를 격리 검증한다. 거리추세는 '위치가 꾸준히
+                # 준다'를 접근으로 보므로 켜면 이 합성 드리프트를 잡아 반대로 작동한다.
+                dist_trend_min_mps=0.0,
             )
             cane_lat, cane_lng = 37.496330, 126.958313
             deg_per_m = 1.0 / 111320.0
@@ -352,6 +355,70 @@ class DopplerBoundWiringTest(unittest.TestCase):
         self.assertTrue(all(int(r["effective_level"]) == 0 for r in late),
                         [(r["distance_m"], r["closing_mps"], r["effective_level"]) for r in late
                          if int(r["effective_level"]) > 0][:6])
+
+
+class DistanceTrendWiringTest(unittest.TestCase):
+    """저속 실접근(순간 접근속도는 데드밴드 아래)을 거리추세로 잡는지 — 실제 파이프라인.
+
+    8/19 실기: 차를 손에 들고 ~0.4 m/s로 걸어가 다가갔는데 도플러가 0이라 데드밴드에
+    걸려 미탐. 거리는 꾸준히 줄었으므로 거리추세(기본 켜짐)가 잡아야 한다. 끄면(0) 옛
+    동작(미탐) 그대로여야 한다.
+    """
+
+    def _run(self, dist_trend_min_mps):
+        import step8_send_risk as s8
+        from step3_parse_v2x import normalize_record
+        from step4_state_store import FRESH_WINDOW_S, StateStore
+        from step6_kinematics import KinematicsPipeline
+        from step7_risk import DCPA_FAR_M, DCPA_FLOOR, DCPA_NEAR_M, T_FLOOR_TTC_S
+        from step8_stability import LevelStabilizer
+        import json
+        rows = []
+        clock = {"now": 1000.0}
+        orig_norm, orig_append = s8.normalize_record, s8.append_row
+        s8.normalize_record = lambda p, m: normalize_record(p, m, now=clock["now"])
+        s8.append_row = lambda path, row: rows.append(row)
+        try:
+            store = StateStore(fresh_window_s=FRESH_WINDOW_S)
+            sender = s8.RiskSender(
+                KinematicsPipeline(store),
+                RiskTransmitter(target_id=0, heartbeat_s=0.2),
+                transport=lambda cmd: None, csv_path=None,
+                gate_params={"near_m": DCPA_NEAR_M, "far_m": DCPA_FAR_M,
+                             "floor": DCPA_FLOOR, "floor_ttc_s": T_FLOOR_TTC_S},
+                stabilizer=LevelStabilizer(),
+                dist_trend_min_mps=dist_trend_min_mps,
+            )
+            cane_lat, cane_lng = 37.496330, 126.958313
+            deg_per_m = 1.0 / 111320.0
+            # 손에 든 차가 14 m 북쪽에서 0.7 m/s(0.14 m/step, 임계 0.62 위)로 남하.
+            # 도플러는 0.03(정지로 보고)라 데드밴드에 눌림 → 거리추세로만 잡힌다.
+            for i in range(80):
+                clock["now"] = 1000.0 + i * 0.2
+                dist = max(3.0, 14.0 - i * 0.14)   # 0.14 m / 0.2 s = 0.7 m/s
+                sender.process_line(json.dumps({
+                    "type": "cane", "node_id": 1, "seq": i, "gps_valid": 1, "heading_valid": 0,
+                    "lat": cane_lat, "lng": cane_lng, "speed_mps": 0.02, "heading_deg": 0.0,
+                    "node_risk": 0}), "real")
+                clock["now"] += 0.05
+                sender.process_line(json.dumps({
+                    "type": "vehicle", "node_id": 2, "seq": i, "gps_valid": 1, "heading_valid": 0,
+                    "lat": cane_lat + dist * deg_per_m, "lng": cane_lng,
+                    "speed_mps": 0.03, "heading_deg": 180.0, "node_risk": 0}), "real")
+        finally:
+            s8.normalize_record, s8.append_row = orig_norm, orig_append
+        return rows
+
+    def test_a_slow_walk_in_approach_alarms_when_the_trend_is_on(self):
+        rows = self._run(dist_trend_min_mps=0.62)
+        self.assertTrue(any(int(r["effective_level"]) >= 1 for r in rows),
+                        "0.7 m/s 저속 접근이 거리추세로도 안 잡힘 "
+                        + str([(r["distance_m"], r["ttc_s"]) for r in rows[-6:]]))
+
+    def test_the_same_slow_approach_is_missed_when_the_trend_is_off(self):
+        rows = self._run(dist_trend_min_mps=0.0)
+        self.assertTrue(all(int(r["effective_level"]) == 0 for r in rows
+                            if float(r["distance_m"]) > 2.5))
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ from step7_risk import (
     DCPA_FLOOR,
     DCPA_NEAR_M,
     T_FLOOR_TTC_S,
+    TREND_MIN_MPS,
     assess_risk,
 )
 from step8_stability import HOLD_S, LevelStabilizer
@@ -57,6 +58,11 @@ CLOSING_EMA_ALPHA = 0.2
 # 순간 도플러로 자르면 진짜 접근의 꼬리가 잘리므로, 최근 이 창 안의 최대 도플러를
 # 쓴다. 서 있는 노드는 창 내내 ≈0이라 유령은 그대로 잘린다.
 DOPPLER_PEAK_WINDOW_S = 3.0
+
+# 거리추세를 재는 창(초). 이 시간 동안의 거리 감소를 속도로 환산해 저속 실접근을
+# 잡는다. 길수록 잡음에 강하지만 반응이 느리고, 짧으면 반대. 4 s는 8/19 실기의
+# 놓친 저속 접근(거리 4초에 1.5~2.9 m 감소)과 정지 잡음(p90 1.2 m)을 가르는 값.
+DIST_TREND_WINDOW_S = 4.0
 
 # calibrate_bias.py 가 저장하는 차량 GPS 상대 바이어스. 없으면 보정 없이 동작.
 VEHICLE_BIAS_FILE = Path(__file__).resolve().with_name("vehicle_bias.json")
@@ -284,7 +290,8 @@ class RiskSender:
     """Scores each record and pushes the resulting level through the transmitter."""
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
-                 stabilizer=None, raw_log=None, model_gate=None, live_state=None):
+                 stabilizer=None, raw_log=None, model_gate=None, live_state=None,
+                 dist_trend_min_mps=0.0):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
@@ -301,6 +308,14 @@ class RiskSender:
         self.closing_ema = None
         # 노드별 (pc_time, 도플러 속도) 최근 이력 — 유효 fix만. 도플러 상한용.
         self._doppler_hist = {"cane": [], "vehicle": []}
+        # 거리추세: 순간 접근속도가 데드밴드에 눌린 저속 실접근을 (pc_time, 거리) 이력으로
+        # 잡는다. 0이면 비활성 = 기본. 8/19 실기 재생: 켜면 놓친 저속 접근 4/5를 잡지만
+        # 정지 오탐이 3배(76→318행)로 늘고 "양쪽 반 감소" 가드로도 7%만 준다 — 손 걷기
+        # 속도(0.5~0.7 m/s)와 GPS 드리프트(σ 2 m/4 s)가 같은 크기라 원리적으로 구분이
+        # 안 되기 때문. 실제 차량(≥1.4 m/s)은 이미 데드밴드로 잡히니 실전엔 불필요.
+        # 저속 접근 테스트/논문용으로만 켠다(0.62 등).
+        self.dist_trend_min_mps = dist_trend_min_mps
+        self._dist_hist = []  # (pc_time, filtered distance_m)
 
     def _record_doppler(self, row):
         if row["type"] not in self._doppler_hist or not _gps_trusted(row["gps_valid"]):
@@ -314,6 +329,29 @@ class RiskSender:
     def _peak_doppler(self, node_type):
         hist = self._doppler_hist[node_type]
         return max(v for _, v in hist) if hist else None
+
+    def _trend_closing(self, now, distance_m):
+        """최근 DIST_TREND_WINDOW_S 동안 거리가 준 속도(m/s). 비활성이면 0.
+
+        (pc_time, 거리)를 쌓고, 창 시작 시점의 거리와 지금 거리의 차를 창 길이로
+        나눈다. 정지 잡음은 몇 초 꾸준히 줄지 않아 값이 작고, 느린 실접근은 크다.
+        """
+        self._dist_hist.append((now, distance_m))
+        cutoff = now - DIST_TREND_WINDOW_S - 1.0
+        while self._dist_hist and self._dist_hist[0][0] < cutoff:
+            self._dist_hist.pop(0)
+        if self.dist_trend_min_mps <= 0:
+            return 0.0
+        target = now - DIST_TREND_WINDOW_S
+        old = None
+        for t, d in self._dist_hist:
+            if t <= target:
+                old = d
+            else:
+                break
+        if old is None:
+            return 0.0
+        return (old - distance_m) / DIST_TREND_WINDOW_S
 
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
@@ -343,7 +381,7 @@ class RiskSender:
         if result is None:
             return
 
-        now, _raw, filtered = result
+        now, raw, filtered = result
         # 접근속도 평활(EMA): 노이즈로 튀는 closing_los를 부드럽게 해 TTC를 안정화.
         # 첫 샘플은 원값 그대로라 기존 동작과 동일하게 시작한다.
         if CLOSING_EMA_ALPHA < 1.0:
@@ -367,8 +405,12 @@ class RiskSender:
             veh_peak, cane_peak = self._peak_doppler("vehicle"), self._peak_doppler("cane")
             if veh_peak is not None and cane_peak is not None:
                 doppler_speeds = (veh_peak, cane_peak)
+        # 거리추세: 저속 실접근(순간 접근속도가 데드밴드 아래)을 거리 감소로 잡는다.
+        # 필터 거리는 차량 ZUPT 로 강하게 눌려 뒤처지므로, 두 노드의 실제 좌표로 잰
+        # raw 거리로 추세를 계산한다(4 s 창이 그 잡음을 평균한다).
+        trend_closing = self._trend_closing(now, raw.distance_m)
         assessment = assess_risk(filtered, vehicle_speed, doppler_speeds_mps=doppler_speeds,
-                                 **self.gate_params)
+                                 trend_closing_mps=trend_closing, **self.gate_params)
 
         # 모델은 규칙 위에 얹힌다. 안전 하한(step7)이 낸 레벨 3은 모델이 낮추지
         # 못하고, 모델이 안전하다고 해도 규칙 레벨은 그대로 간다 - 검증되지 않은

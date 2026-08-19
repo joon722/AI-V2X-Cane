@@ -13,6 +13,7 @@ from step7_risk import (
     NEAR_FLOOR_M,
     T_ALARM_MAX_TTC_S,
     T_FLOOR_TTC_S,
+    TREND_MIN_MPS,
     assess_risk,
     calculate_risk_score,
     calculate_ttc,
@@ -369,6 +370,62 @@ class DopplerBoundTest(unittest.TestCase):
         # 정지 쌍(도플러 합 ≈0.05)의 상한이 데드밴드 0.5 아래여야 유령이 사라진다.
         self.assertEqual(CLOSING_DOPPLER_MARGIN_MPS, 0.3)
         self.assertLess(CLOSING_DOPPLER_MARGIN_MPS + 0.1, MIN_CLOSING_MPS)
+
+
+class DistanceTrendTest(unittest.TestCase):
+    """느린 실접근 — 순간 접근속도는 데드밴드에 걸려도 거리가 꾸준히 줄면 잡는다.
+
+    2026-08-19 실기: 사용자가 차를 손에 들고 ~0.3 m/s로 걸어가 다가갔는데, 그 저속에서
+    KF 접근속도가 데드밴드(0.5) 아래라 미탐(놓친 5건). 거리는 확실히 줄었으므로, 최근
+    거리감소 추세가 TREND_MIN_MPS(0.62) 이상이면 그 값을 채점 접근속도로 쓴다. 실제
+    차량(≥1.4 m/s)은 이미 데드밴드를 넘어 이 경로가 필요 없다.
+    """
+
+    def _pair(self, distance_m, closing_mps):
+        return relative_kinematics(
+            cane_pos=(0.0, 0.0), cane_vel=(0.0, 0.0),
+            veh_pos=(0.0, distance_m), veh_vel=(0.0, -closing_mps),
+        )
+
+    def test_slow_sustained_approach_uses_the_trend_speed(self):
+        # 8 m, 순간 closing 0.1(데드밴드 아래) 인데 거리추세 0.7 m/s → TTC 8/0.7 ≈ 11.4
+        result = assess_risk(self._pair(8.0, 0.1), vehicle_speed_mps=0.1,
+                             trend_closing_mps=0.7)
+        self.assertAlmostEqual(result.ttc, 8.0 / 0.7, places=6)
+        self.assertEqual(result.reason, "table")
+        self.assertGreaterEqual(result.risk_level, 1)
+
+    def test_trend_below_threshold_is_ignored(self):
+        # 추세 0.4 < 0.62 → 잡음으로 보고 안 씀 (기존 데드밴드 동작)
+        result = assess_risk(self._pair(8.0, 0.1), vehicle_speed_mps=0.1,
+                             trend_closing_mps=0.4)
+        self.assertEqual(result.ttc, 9999.0)
+        self.assertEqual(result.risk_level, 0)
+
+    def test_trend_does_not_lower_a_real_fast_closing(self):
+        # 순간 접근 2.0(진짜 빠름)이면 추세 0.7이 그걸 깎지 않는다
+        result = assess_risk(self._pair(10.0, 2.0), vehicle_speed_mps=2.0,
+                             trend_closing_mps=0.7, doppler_speeds_mps=(2.0, 0.0))
+        self.assertAlmostEqual(result.ttc, 10.0 / 2.0, places=6)
+
+    def test_trend_default_off_keeps_old_behaviour(self):
+        # trend_closing_mps 안 주면(0) 기존 데드밴드 그대로
+        result = assess_risk(self._pair(8.0, 0.1), vehicle_speed_mps=0.1)
+        self.assertEqual(result.ttc, 9999.0)
+
+    def test_trend_can_be_disabled(self):
+        result = assess_risk(self._pair(8.0, 0.1), vehicle_speed_mps=0.1,
+                             trend_closing_mps=0.7, trend_min_mps=0.0)
+        self.assertEqual(result.ttc, 9999.0)
+
+    def test_a_positive_trend_overrides_a_momentary_receding(self):
+        # 순간 closing 음수(-0.6, GPS 잡음)라도 거리추세가 다가옴이면 receding 아님
+        result = assess_risk(self._pair(6.0, -0.6), vehicle_speed_mps=0.1,
+                             trend_closing_mps=0.7, doppler_speeds_mps=(0.1, 0.05))
+        self.assertFalse(result.receding)
+
+    def test_threshold_value(self):
+        self.assertEqual(TREND_MIN_MPS, 0.62)
 
 
 class NearFloorTest(unittest.TestCase):

@@ -223,6 +223,17 @@ NEAR_FLOOR_LEVEL = 2
 # 거리로 지키고, 그 밖에서 0.5 m/s면 TTC 10초 이상이라 여유가 있다. 끄려면 0.
 MIN_CLOSING_MPS = 0.5
 
+# 거리추세 접근속도의 하한. 순간 접근속도(closing_los)가 데드밴드에 걸려 0이 됐어도,
+# 최근 몇 초 거리가 이만큼(0.62 m/s ≈ 2.5 m/4 s ≈ 2.2 km/h)의 속도로 꾸준히 줄었으면
+# 느린 실접근으로 보고 그 추세 속도를 채점에 쓴다. 손에 들고 걷는 저속 접근(0.3~0.6
+# m/s)이 데드밴드 아래로 빠져 미탐되던 것을 잡는다(2026-08-19 실기: 놓친 5건 중 3건).
+#
+# 실제 차량(보차혼용도로 5~60 km/h = 1.4~16.7 m/s)은 이미 데드밴드(0.5=1.8 km/h)를
+# 훌쩍 넘어 다 잡히므로 이 경로가 필요 없다. 오직 1.8 km/h 미만 서행에만 관여한다.
+# 대가: 정지 중 GPS 드리프트가 우연히 이 추세를 넘으면 오경보(실측 0.5% 행). 그래서
+# 끌 수 있게 둔다(호출자가 trend_min_mps=0 또는 trend_closing_mps=0을 주면 비활성).
+TREND_MIN_MPS = 0.62
+
 # 접근속도의 물리 상한. 두 노드가 보고한 도플러 속도(GPS 도플러, 위치 오차를 물려받지
 # 않음)의 합보다 빨리 가까워질 수는 없다: |closing| ≤ v_veh + v_cane + 여유.
 #
@@ -270,6 +281,8 @@ def assess_risk(
     min_closing_mps=MIN_CLOSING_MPS,
     doppler_speeds_mps=None,
     doppler_margin_mps=CLOSING_DOPPLER_MARGIN_MPS,
+    trend_closing_mps=0.0,
+    trend_min_mps=TREND_MIN_MPS,
 ):
     """Score one filtered-track Kinematics sample.
 
@@ -297,6 +310,12 @@ def assess_risk(
     receding = scored_closing <= -min_closing_mps if min_closing_mps > 0 else scored_closing < 0.0
     # 잡음 크기의 접근속도는 채점에서 0으로 - 기록(closing_los)에는 원값이 남는다.
     scored_closing = scored_closing if scored_closing >= min_closing_mps else 0.0
+    # 거리추세: 순간 접근속도가 데드밴드에 눌렸어도 최근 거리가 꾸준히 줄었으면(느린
+    # 실접근) 그 추세 속도를 쓴다. 정지 잡음은 몇 초 꾸준히 줄지 않아 임계값을 잘 못
+    # 넘는다. 추세가 다가옴이면 순간 음수(잡음)로 인한 receding 판정도 무른다.
+    if trend_min_mps > 0 and trend_closing_mps >= trend_min_mps and trend_closing_mps > scored_closing:
+        scored_closing = trend_closing_mps
+        receding = False
     ttc = calculate_ttc(kinematics.distance_m, scored_closing)
     base = calculate_risk_score(
         kinematics.distance_m, scored_closing, vehicle_speed_mps, ttc, zone_base_risk
