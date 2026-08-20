@@ -26,8 +26,9 @@ from field_check import MOVING_MPS, field_features, read_raw_log, resample_pair
 from safety_floor import T_FLOOR_S, safety_floor_s
 
 # 실험을 판정할 기준은 "연구가 권고한 하한"이 아니라 "그날 젯슨에 실제로 올라가
-# 있던 하한"이다. 둘은 갈라진다 - safety_floor.T_FLOOR_S는 GPS 5Hz를 전제한
-# 2.0초이고, 배포본은 실측 1Hz를 반영한 2.8초다(step7_risk.GPS_PERIOD_S).
+# 있던 하한"이다. 지금은 둘 다 2.0초로 같지만(GPS 5Hz 확정, 2026-08-12), 전원
+# 문제가 재발해 step7_risk.GPS_PERIOD_S가 1.0(1Hz)으로 되돌아가면 배포본 하한만
+# 2.8초로 갈라진다.
 # 값을 복사해 두면 한쪽만 바뀔 때 조용히 어긋나므로 배포본에서 직접 읽는다.
 try:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
