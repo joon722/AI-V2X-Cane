@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Tests for step 8 risk downlink policy: trust gating + on-change/heartbeat."""
 
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from step8_send_risk import (
     CSV_FIELDS,
@@ -13,6 +15,7 @@ from step8_send_risk import (
     csv_row,
     format_tx,
     load_vehicle_bias,
+    parse_args,
     vehicle_bias_messages,
     _run,
 )
@@ -431,6 +434,20 @@ class DistanceTrendRssiFusionTest(unittest.TestCase):
         rows = self._run(rssi_mode="flat")
         self.assertTrue(all(int(r["effective_level"]) == 0 for r in rows
                             if float(r["distance_m"]) > 2.5))
+
+
+class NoFusionFlagTest(unittest.TestCase):
+    """--no-fusion 플래그로 RSSI 거리추세 융합을 끌 수 있어야 한다(검증 전 안전 배포용)."""
+
+    def test_fusion_on_by_default(self):
+        with mock.patch.object(sys, "argv", ["step8"]):
+            args = parse_args()
+        self.assertFalse(args.no_fusion)
+
+    def test_no_fusion_flag_is_parsed(self):
+        with mock.patch.object(sys, "argv", ["step8", "--no-fusion"]):
+            args = parse_args()
+        self.assertTrue(args.no_fusion)
 
 
 if __name__ == "__main__":

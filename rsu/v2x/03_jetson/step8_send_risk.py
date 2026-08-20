@@ -45,6 +45,13 @@ from step8_stability import HOLD_S, LevelStabilizer
 
 HEARTBEAT_S = 1.0
 
+# 차량 GPS가 근접 통과 순간 잠깐 무효가 되면(8/19 코너: ~3.9 s) 차량 위치가 stale
+# 되어 compute()가 None을 낸다. 그 사이 다운링크가 끊기면 노드가 RSU 타임아웃(3 s)으로
+# 아직 유효한 경보를 조기 해제한다(1차 코너: 위험이 SAFE 도착이 아니라 통신 끊김
+# 타임아웃으로 풀림). 공백 동안 마지막 레벨을 하트비트로 계속 유지하되, 이 상한을
+# 넘도록 공백이 이어지면(진짜 GPS 사망) SAFE로 정리한다. 0이면 유지를 끈다(예전 동작).
+GAP_HOLD_CAP_S = 3.0
+
 # 접근속도(closing_los) 평활 계수. 저속·GPS 노이즈로 접근속도가 프레임마다
 # 0↔음수로 튀고, TTC=거리/접근속도라 그 노이즈가 TTC를 심하게 출렁이게 한다.
 # 짧은 EMA로 접근속도를 평활하면 TTC·레벨이 안정된다(≈0.3~0.5s 지연, 근접
@@ -300,7 +307,7 @@ class RiskSender:
 
     def __init__(self, pipeline, transmitter, transport, csv_path, gate_params,
                  stabilizer=None, raw_log=None, model_gate=None, live_state=None,
-                 dist_trend_min_mps=TREND_MIN_MPS):
+                 dist_trend_min_mps=TREND_MIN_MPS, gap_hold_cap_s=GAP_HOLD_CAP_S):
         self.pipeline = pipeline
         self.transmitter = transmitter
         self.transport = transport
@@ -325,6 +332,9 @@ class RiskSender:
         self._dist_hist = []  # (pc_time, raw distance_m)
         # RSSI 방향 융합용 (pc_time, rssi_dist) — 차량 rssi_dist 유효 패킷만.
         self._rssi_hist = []
+        # 차량 GPS 공백(compute None) 동안 마지막 레벨을 하트비트로 유지하기 위한 상태.
+        self.gap_hold_cap_s = gap_hold_cap_s
+        self._last_compute_ok = None
 
     def _record_doppler(self, row):
         if row["type"] not in self._doppler_hist or not _gps_trusted(row["gps_valid"]):
@@ -394,6 +404,38 @@ class RiskSender:
             return None
         return (old - self._rssi_hist[-1][1]) >= RSSI_APPROACH_MIN_M
 
+    def _heartbeat_through_gap(self, row):
+        """compute()가 None인 동안(차량 GPS 순간 무효 등) 다운링크를 유지한다.
+
+        판정이 비면 새 등급을 계산할 수 없지만, 마지막으로 보낸 등급을 하트비트로
+        계속 내보내 노드가 RSU 타임아웃으로 아직 유효한 경보를 조기 해제하지 않게
+        한다. 공백이 gap_hold_cap_s를 넘도록 이어지면(진짜 GPS 사망) 0을 명시적으로
+        보내 깔끔하게 해제한다. gap_hold_cap_s=0 이면 유지를 끈다(예전 동작=즉시 무음).
+        """
+        if self.gap_hold_cap_s <= 0 or self.transmitter.last_level is None:
+            return
+        now = to_float(row["pc_time"])
+        if self._last_compute_ok is None:
+            self._last_compute_ok = now
+        within_cap = now - self._last_compute_ok <= self.gap_hold_cap_s
+        hold_level = self.transmitter.last_level if within_cap else 0
+        cane = self.pipeline.store.latest["cane"]
+        decision = self.transmitter.consider(hold_level, cane["gps_valid"], now)
+        if not decision.should_send:
+            return
+        command = self.transmitter.command(decision.effective_level)
+        if self.raw_log is not None:
+            self.raw_log.write("TX", command)
+        self.transport(command)
+        print(
+            format_tx(
+                decision,
+                cane["node_risk"],
+                self.pipeline.store.latest["vehicle"]["node_risk"],
+            ),
+            flush=True,
+        )
+
     def process_line(self, raw_line, source_mode):
         line = raw_line.strip()
         if not line:
@@ -421,9 +463,13 @@ class RiskSender:
         self.pipeline.observe(row)
         result = self.pipeline.compute()
         if result is None:
+            # 차량 GPS 순간 무효 등으로 판정이 빈다. 다운링크를 끊지 않고 마지막 레벨을
+            # 하트비트로 유지해(상한 넘으면 SAFE) 노드의 타임아웃 조기 해제를 막는다.
+            self._heartbeat_through_gap(row)
             return
 
         now, raw, filtered = result
+        self._last_compute_ok = now
         # 접근속도 평활(EMA): 노이즈로 튀는 closing_los를 부드럽게 해 TTC를 안정화.
         # 첫 샘플은 원값 그대로라 기존 동작과 동일하게 시작한다.
         if CLOSING_EMA_ALPHA < 1.0:
@@ -583,6 +629,11 @@ def parse_args():
         help="모델을 쓰지 않고 규칙만으로 동작한다",
     )
     parser.add_argument(
+        "--no-fusion",
+        action="store_true",
+        help="RSSI 거리추세 융합을 끈다(dist_trend_min_mps=0). 검증 전 안전 배포용",
+    )
+    parser.add_argument(
         "--tx-heartbeat-s",
         type=float,
         default=HEARTBEAT_S,
@@ -599,6 +650,14 @@ def parse_args():
         default=HOLD_S,
         help=f"a lower level must persist this long before the alarm drops; "
         f"0 disables the hysteresis (default: {HOLD_S})",
+    )
+    parser.add_argument(
+        "--gap-hold-cap-s",
+        type=float,
+        default=GAP_HOLD_CAP_S,
+        help=f"차량 GPS 순간 무효로 판정이 빌 때 마지막 레벨을 하트비트로 유지할 "
+        f"최대 시간(초). 이만큼 지나면 SAFE로 해제. 0이면 유지를 끈다(예전 동작) "
+        f"(기본: {GAP_HOLD_CAP_S})",
     )
     parser.add_argument(
         "--live-port",
@@ -648,6 +707,7 @@ def main():
         f"[INFO] source_mode={args.source_mode} csv={args.csv} target_id={args.target_id} "
         f"heartbeat_s={args.tx_heartbeat_s} tx_untrusted={args.tx_untrusted} "
         f"level_hold_s={args.level_hold_s} floor_ttc_s={args.floor_ttc_s} "
+        f"gap_hold_cap_s={args.gap_hold_cap_s} "
         f"raw_log={args.raw_log} live_port={args.live_port}",
         file=sys.stderr,
     )
@@ -684,6 +744,8 @@ def main():
             pipeline, transmitter, stdout_transport, args.csv, gate_params,
             stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
             live_state=live_state,
+            dist_trend_min_mps=0.0 if args.no_fusion else TREND_MIN_MPS,
+            gap_hold_cap_s=args.gap_hold_cap_s,
         )
         _run(sender, sys.stdin, args.source_mode, vehicle)
         if raw_log is not None:
@@ -702,6 +764,8 @@ def main():
             pipeline, transmitter, serial_transport(connection), args.csv, gate_params,
             stabilizer=stabilizer, raw_log=raw_log, model_gate=model_gate,
             live_state=live_state,
+            dist_trend_min_mps=0.0 if args.no_fusion else TREND_MIN_MPS,
+            gap_hold_cap_s=args.gap_hold_cap_s,
         )
         _run(sender, _serial_lines(connection), args.source_mode, vehicle)
 

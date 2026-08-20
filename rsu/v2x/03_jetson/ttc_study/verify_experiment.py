@@ -17,12 +17,23 @@ raw 로그 하나를 받아 네 가지를 확인한다. 실험이 목적을 달�
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
 from field_check import MOVING_MPS, field_features, read_raw_log, resample_pair
 from safety_floor import T_FLOOR_S, safety_floor_s
+
+# 실험을 판정할 기준은 "연구가 권고한 하한"이 아니라 "그날 젯슨에 실제로 올라가
+# 있던 하한"이다. 둘은 갈라진다 - safety_floor.T_FLOOR_S는 GPS 5Hz를 전제한
+# 2.0초이고, 배포본은 실측 1Hz를 반영한 2.8초다(step7_risk.GPS_PERIOD_S).
+# 값을 복사해 두면 한쪽만 바뀔 때 조용히 어긋나므로 배포본에서 직접 읽는다.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from step7_risk import T_FLOOR_TTC_S as DEPLOYED_FLOOR_S
+except ImportError:  # 03_jetson 밖에서 로그만 볼 때
+    DEPLOYED_FLOOR_S = T_FLOOR_S
 
 # 이 아래로 벌어지면 실제 접촉 위험으로 본다 (oracle.D_CRIT_M과 같은 값).
 D_CRIT_M = 2.0
@@ -53,6 +64,7 @@ def check_gps(rows):
     print("1. GPS 갱신 주기")
     rates = gps_rate(rows)
     ok = True
+    slowest = None
     for kind, period in rates.items():
         if period is None:
             print(f"   {kind:8s} 표본 부족")
@@ -60,14 +72,28 @@ def check_gps(rows):
         hz = 1.0 / period
         verdict = "5Hz 계열" if hz >= 3.5 else ("1Hz 계열" if hz < 2.0 else "중간")
         print(f"   {kind:8s} {period*1000:6.0f} ms  ->  {hz:4.1f} Hz  ({verdict})")
+        # 판정은 두 노드의 위치를 함께 쓰므로 느린 쪽이 지배한다.
+        slowest = period if slowest is None else max(slowest, period)
         if hz < 3.5:
             ok = False
-    if ok:
-        print(f"   판정: 5Hz 확인. T_floor {T_FLOOR_S:.1f}초의 전제가 충족된다.")
+
+    if slowest is None:
+        print("   판정: 주기를 재지 못했다. 정지 상태면 좌표가 안 변해 측정이 안 된다 -")
+        print("         이동 구간에서 다시 잴 것.")
+        return ok
+
+    need = safety_floor_s(gps_period_s=slowest)
+    print(f"   느린 쪽 {slowest*1000:.0f} ms 기준 필요한 하한 {need:.1f}초 "
+          f"/ 배포된 하한 {DEPLOYED_FLOOR_S:.1f}초")
+    if need > DEPLOYED_FLOOR_S + 0.05:
+        print(f"   판정: {need - DEPLOYED_FLOOR_S:.1f}초 모자란다. 이 주기에서는 하한을 "
+              f"{need:.1f}초로 올려야 반응이 가능하다.")
+    elif need < DEPLOYED_FLOOR_S - 0.05:
+        print(f"   판정: 전제 충족. {DEPLOYED_FLOOR_S - need:.1f}초 여유가 있다 - "
+              f"step7_risk.GPS_PERIOD_S를 {slowest:.1f}로 내리면")
+        print(f"         하한이 {need:.1f}초가 되어 인도 오경보가 준다.")
     else:
-        need = safety_floor_s(gps_period_s=1.0)
-        print(f"   판정: 5Hz가 아니다. 이 조건에서 필요한 하한은 {need:.1f}초이고,")
-        print(f"         배포된 {T_FLOOR_S:.1f}초는 {need - T_FLOOR_S:.1f}초 모자란다.")
+        print("   판정: 배포된 하한이 측정된 주기와 맞는다.")
     return ok
 
 
@@ -95,7 +121,7 @@ def check_safety_floor(log_path):
     level3 = sum(1 for _, r in tx if r == 3)
     print(f"   TX {len(tx)}건 중 레벨 3: {level3}건 ({level3/len(tx)*100:.1f}%)")
     print("   정확한 하한 발동 판정은 step8 CSV에서:")
-    print("     ttc_s <= 2.0 이면서 risk_level == 3 인 행")
+    print(f"     ttc_s <= {DEPLOYED_FLOOR_S} 이면서 risk_level == 3 인 행")
 
 
 def check_sample_size(field):
