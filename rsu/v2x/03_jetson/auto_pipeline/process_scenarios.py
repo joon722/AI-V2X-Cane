@@ -36,6 +36,7 @@ from risk_inference_onnx import (  # noqa: E402
     softmax,
 )
 from step7_risk import calculate_risk_score, calculate_ttc  # noqa: E402
+from retention import cleanup_old_scenarios, purged_exclude_args  # noqa: E402
 
 # ---------------------------------------------------------
 # 설정
@@ -71,6 +72,8 @@ def sync_from_server() -> bool:
     INCOMING_DIR.mkdir(exist_ok=True)
     cmd = [
         "rsync", "-a", "-e", "ssh " + " ".join(SSH_OPTS),
+        # 보존 정리로 삭제한 시나리오는 다시 받지 않는다 (include보다 먼저 와야 함)
+        *purged_exclude_args(INCOMING_DIR),
         "--include=scenario_*/",
         "--include=scenario_*/feature.csv",
         "--include=scenario_*/pedestrian.csv",
@@ -326,6 +329,9 @@ def main():
             sync_from_server()
         if not args.no_upload:
             retry_uploads()
+
+        # 백로그 추론에 앞서 업로드 완료된 옛 시나리오부터 정리해 디스크를 확보한다
+        cleanup_old_scenarios(INCOMING_DIR, RESULT_DIR, log=log)
 
         for scenario_dir in pending_scenarios():
             try:
