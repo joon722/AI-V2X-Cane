@@ -1,0 +1,2 @@
+pc_time,cane_seq,computed_level,effective_level,cane_node_risk,veh_node_risk,trusted,reason,target_id,distance_m,closing_mps,ttc_s,risk_score,rule_level,rule_reason,model_proba,level_source,cane_gps_valid,cane_lat,cane_lng,cane_speed_mps,cane_heading_deg,veh_gps_valid,veh_lat,veh_lng,veh_speed_mps,veh_heading_deg,rel_east_m,rel_north_m
+1787209110.717,489,0,0,0,0,1,change,0,3.68,0.0,9999.0,30.0,0,ttc_capped,,table,1,37.49638,126.958237,0.098,0.0,1,37.496357,126.958267,0.016,77.66,2.65,-2.56
