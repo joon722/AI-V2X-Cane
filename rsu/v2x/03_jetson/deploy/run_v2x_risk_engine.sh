@@ -21,6 +21,22 @@ if [ "${V2X_NO_MODEL:-0}" = "1" ]; then
   NO_MODEL="--no-model"
 fi
 
+# V2X_NO_FUSION=1 이면 RSSI 거리추세 융합을 끈다. 융합은 v4 펌웨어의 rssi_dist가
+# 있어야 발동하지만(구 펌웨어면 자동 OFF), 실기 검증 전까지 실시간 판정에 넣지 않으려면
+# 이 변수를 준다. 변수를 빼면 기본값(융합 ON)으로 돈다.
+NO_FUSION=""
+if [ "${V2X_NO_FUSION:-0}" = "1" ]; then
+  NO_FUSION="--no-fusion"
+fi
+
+# V2X_NO_UWB=1 이면 UWB 거리 융합·실내 UWB 단독 판정을 끈다. UWB는 브리지 v5의
+# type="uwb" 행이 있어야 발동하므로(행이 없으면 자동 무동작) 평소엔 변수가 필요
+# 없다 - 비상 차단용이다. 변수를 빼면 기본값(UWB ON)으로 돈다.
+NO_UWB=""
+if [ "${V2X_NO_UWB:-0}" = "1" ]; then
+  NO_UWB="--no-uwb"
+fi
+
 # 같은 등급을 지팡이로 재전송하는 주기(초). 낮추면 경보가 더 촘촘히 갱신돼
 # 반응이 빨라진다(등급이 바뀔 때는 원래도 즉시 나감). 기본 1.0은 라디오 절약용.
 # 예: V2X_HEARTBEAT_S=0.2 → 초당 5회 재전송.
@@ -63,4 +79,6 @@ exec python3 "$DIR/step8_send_risk.py" \
   --raw-log "$RAW" \
   --source-mode "$SOURCE_MODE" \
   $HEARTBEAT_ARG \
-  $NO_MODEL
+  $NO_MODEL \
+  $NO_FUSION \
+  $NO_UWB

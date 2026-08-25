@@ -19,6 +19,10 @@
 //    "lat":...,"lng":...,"speed_mps":...,"heading_deg":...,"node_risk":...,
 //    "tx_ms":...,"rx_ms":...,"recv_count":...,"lost_count":...,"rssi":...,
 //    "src_mac":"AA:BB:CC:DD:EE:FF"}
+//
+// v5 추가: 차량의 MSG_UWB_RANGE(38B)를 받아 아래 JSON으로 전달 (flags bit0==0이면 미전달):
+//   {"type":"uwb","node_id":...,"seq":...,"uwb_dist":...,"uwb_raw":...,"uwb_closing":...,
+//    "uwb_calib":...,"gps_valid":0,"tx_ms":...,"rx_ms":...,"rssi":...,"src_mac":"..."}
 
 #include <WiFi.h>
 #include <esp_now.h>
@@ -55,6 +59,7 @@
 #define MSG_RSU_REPLY 2
 #define MSG_CANE_STATUS 3
 #define MSG_RISK_ALERT 4
+#define MSG_UWB_RANGE 5  // v5: UWB 측거 패킷 (38B, 차량이 브로드캐스트)
 
 #define NODE_VEHICLE 0x10
 #define NODE_CANE 0x20
@@ -78,11 +83,33 @@ typedef struct __attribute__((packed)) v2x_status_message {
   float heading_deg;
   uint32_t timestamp_ms;
   uint16_t seq_num;
+  float rssi_distance_m;   // v4: 차량이 지팡이 직접 들은 RSSI 추정거리(m), 지팡이는 -1
 } v2x_status_message_t;
 
 // 노드 펌웨어와 같은 크기여야 한다. 어긋나면 컴파일 단계에서 잡는다.
-static_assert(sizeof(v2x_status_message_t) == 36,
-              "vehicle/cane status packet must be 36 bytes");
+static_assert(sizeof(v2x_status_message_t) == 40,
+              "vehicle/cane status packet must be 40 bytes (v4: +rssi_distance_m)");
+
+// v5: UWB 측거 패킷. 세 .ino(cane/car/bridge)의 필드 순서·타입이 완전히 같아야 한다.
+// flags: bit0=측정 유효, bit1=오프셋 보정 완료
+typedef struct __attribute__((packed)) v2x_uwb_message {
+  uint32_t magic;
+  uint8_t version;
+  uint8_t msg_type;        // MSG_UWB_RANGE
+  uint8_t node_type;
+  uint8_t flags;
+  uint32_t target_id;
+  uint32_t src_id;
+  float raw_distance_m;
+  float distance_m;
+  float closing_speed_mps;
+  float offset_m;
+  uint32_t timestamp_ms;
+  uint16_t seq_num;
+} v2x_uwb_message_t;
+
+static_assert(sizeof(v2x_uwb_message_t) == 38,
+              "uwb range packet must be 38 bytes");
 
 // =====================
 // 수신 큐: 콜백(WiFi 태스크)에서는 넣기만, loop에서 꺼내 처리
@@ -90,7 +117,10 @@ static_assert(sizeof(v2x_status_message_t) == 36,
 #define RX_QUEUE_SIZE 16
 
 typedef struct {
-  v2x_status_message_t msg;
+  // v5: 40B status와 38B uwb를 한 큐로 받는다 (40 >= 38 이라 버퍼 재사용).
+  // len으로 종류를 구분하고, 40B 경로는 v2x_status_message_t* 캐스팅으로 기존과 동일 동작.
+  uint8_t raw[sizeof(v2x_status_message_t)];
+  uint8_t len;
   uint8_t mac[6];
   int8_t rssi;
   uint32_t rx_ms;
@@ -164,14 +194,20 @@ static node_stats_t *getNodeStats(uint32_t nodeId, uint32_t now) {
 static void onDataRecv(const esp_now_recv_info_t *info,
                        const uint8_t *data,
                        int len) {
-  if (len != (int)sizeof(v2x_status_message_t)) return;
+  // v5: 40B(status) 또는 38B(uwb)만 수용
+  if (len != (int)sizeof(v2x_status_message_t) &&
+      len != (int)sizeof(v2x_uwb_message_t)) return;
 
   uint32_t magic = 0;
   memcpy(&magic, data, sizeof(magic));
   if (magic != V2X_MAGIC || data[4] != V2X_VERSION) return;
 
   uint8_t msgType = data[5];
-  if (msgType != MSG_CANE_STATUS && msgType != MSG_VEHICLE_STATUS) return;
+  if (len == (int)sizeof(v2x_status_message_t)) {
+    if (msgType != MSG_CANE_STATUS && msgType != MSG_VEHICLE_STATUS) return;
+  } else {
+    if (msgType != MSG_UWB_RANGE) return;
+  }
 
   uint8_t nextHead = (rxHead + 1) % RX_QUEUE_SIZE;
   if (nextHead == rxTail) {  // 큐 가득 -> 버리고 카운트만 (블로킹 금지)
@@ -180,7 +216,8 @@ static void onDataRecv(const esp_now_recv_info_t *info,
   }
 
   rx_item_t *slot = &rxQueue[rxHead];
-  memcpy(&slot->msg, data, sizeof(v2x_status_message_t));
+  memcpy(slot->raw, data, len);
+  slot->len = (uint8_t)len;
   memcpy(slot->mac, info->src_addr, 6);
   slot->rssi = info->rx_ctrl ? info->rx_ctrl->rssi : 0;
   slot->rx_ms = millis();
@@ -197,7 +234,39 @@ static void forwardQueuedPackets() {
     memcpy(&item, &rxQueue[rxTail], sizeof(item));
     rxTail = (rxTail + 1) % RX_QUEUE_SIZE;
 
-    const v2x_status_message_t *m = &item.msg;
+    // v5: 38B UWB 패킷은 전용 JSON으로 전달 (노드 통계는 status 전용 유지)
+    if (item.len == (uint8_t)sizeof(v2x_uwb_message_t)) {
+      const v2x_uwb_message_t *u = (const v2x_uwb_message_t *)item.raw;
+      if ((u->flags & 0x01) == 0) continue;  // bit0(측정 유효)==0 이면 미전달
+
+      char json[384];
+      int written = snprintf(
+        json, sizeof(json),
+        "{\"type\":\"uwb\",\"node_id\":%lu,\"seq\":%u,"
+        "\"uwb_dist\":%.3f,\"uwb_raw\":%.3f,\"uwb_closing\":%.3f,"
+        "\"uwb_calib\":%u,\"gps_valid\":0,"
+        "\"tx_ms\":%lu,\"rx_ms\":%lu,\"rssi\":%d,"
+        "\"src_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
+        (unsigned long)u->src_id,
+        u->seq_num,
+        u->distance_m,
+        u->raw_distance_m,
+        u->closing_speed_mps,
+        (u->flags & 0x02) ? 1u : 0u,
+        (unsigned long)u->timestamp_ms,
+        (unsigned long)item.rx_ms,
+        (int)item.rssi,
+        item.mac[0], item.mac[1], item.mac[2],
+        item.mac[3], item.mac[4], item.mac[5]
+      );
+
+      if (written > 0 && written < (int)sizeof(json)) {
+        Serial.println(json);
+      }
+      continue;
+    }
+
+    const v2x_status_message_t *m = (const v2x_status_message_t *)item.raw;
     const char *typeName =
       m->msg_type == MSG_CANE_STATUS ? "cane" : "vehicle";
 
@@ -211,14 +280,14 @@ static void forwardQueuedPackets() {
     stats->last_seq = m->seq_num;
     stats->last_rx_ms = item.rx_ms;
 
-    char json[352];
+    char json[384];
     int written = snprintf(
       json, sizeof(json),
       "{\"type\":\"%s\",\"node_id\":%lu,\"seq\":%u,"
       "\"gps_valid\":%u,\"heading_valid\":%u,\"lat\":%.6f,\"lng\":%.6f,"
       "\"speed_mps\":%.3f,\"heading_deg\":%.2f,\"node_risk\":%u,"
       "\"tx_ms\":%lu,\"rx_ms\":%lu,"
-      "\"recv_count\":%lu,\"lost_count\":%lu,\"rssi\":%d,"
+      "\"recv_count\":%lu,\"lost_count\":%lu,\"rssi\":%d,\"rssi_dist\":%.2f,"
       "\"src_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
       typeName,
       (unsigned long)m->node_id,
@@ -235,6 +304,7 @@ static void forwardQueuedPackets() {
       (unsigned long)stats->recv_count,
       (unsigned long)stats->lost_count,
       (int)item.rssi,
+      m->rssi_distance_m,
       item.mac[0], item.mac[1], item.mac[2],
       item.mac[3], item.mac[4], item.mac[5]
     );

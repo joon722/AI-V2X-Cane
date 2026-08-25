@@ -32,6 +32,13 @@ CSV_FIELDS = (
     # 차량이 지팡이 신호를 직접 들은 RSSI로 추정한 거리(m). 프로토콜 v4에서 상태
     # 패킷에 추가되면 브리지가 실어 보낸다. 구 펌웨어면 빈 값 → 방향 융합 자동 OFF.
     "rssi_dist",
+    # DWM3001 UWB 측거. 차량이 MSG_UWB_RANGE(38B)로 브로드캐스트한 것을 브리지가
+    # type="uwb" 행으로 전달한다. rssi_dist와 채널을 분리한 이유: RSSI 융합 게이트는
+    # RSSI 튜닝이라 UWB가 같은 필드로 오면 출처 구분이 안 된다. cane/vehicle 행에선 빈 값.
+    "uwb_dist",
+    "uwb_raw",
+    "uwb_closing",
+    "uwb_calib",
     "src_mac",
     "source_mode",
 )
