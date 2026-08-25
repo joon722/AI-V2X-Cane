@@ -89,6 +89,18 @@ Linear(11 → 64) → TransformerEncoder(2 layers, d_model 64, 4 heads, FFN 128)
 
 ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9-axis IMU · vibration motor + buzzer · DFPlayer Mini · **NVIDIA Jetson Orin Nano Super**
 
+<img src="docs/images/field-test-rig.jpg" alt="Field-test rig: vehicle node on an RC car, cane node, and the Jetson RSU" width="640"/>
+
+*Field-test rig — the vehicle node rides on an RC car (a speed-scaled stand-in for a real vehicle), the cane node sits on the white cane, and the Jetson RSU runs in the background.*
+
+## Field demo
+
+| AI risk map (3 s-ahead prediction) | Live risk monitor during an approach test |
+| --- | --- |
+| ![AI risk map around the campus](docs/images/risk-map.jpg) | ![Live monitor escalating LV0 to LV3](docs/images/live-risk-monitor.jpg) |
+
+*Left: per-road risk levels predicted 3 seconds ahead, rendered by the risk-map server (Leaflet). Right: the Jetson's live monitor during a field run — safe (LV0) escalates through caution (LV1) and warning (LV2) to danger (LV3) as the vehicle closes in, then clears once it passes.*
+
 ## Getting started
 
 Firmware upload order, Wi-Fi configuration, and pin maps: [docs/SETUP.ko.md](docs/SETUP.ko.md) (Korean).

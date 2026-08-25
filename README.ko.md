@@ -89,6 +89,18 @@ Linear(11 → 64) → TransformerEncoder(2층, d_model 64, head 4, FFN 128)
 
 ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9축 IMU · 진동모터 + 부저 · DFPlayer Mini · **NVIDIA Jetson Orin Nano Super**
 
+<img src="docs/images/field-test-rig.jpg" alt="야외 실험 장비: RC카 위 차량 노드, 지팡이 노드, 젯슨 RSU" width="640"/>
+
+*야외 실험 장비 — 차량 노드는 RC카에 싣고(실차의 속도 스케일 대역), 지팡이 노드는 흰지팡이에 장착, 뒤편에서 젯슨 RSU가 실시간 판정을 돌린다.*
+
+## 현장 데모
+
+| AI 위험맵 (3초 선행 예측) | 접근 실험 중 실시간 판정 모니터 |
+| --- | --- |
+| ![캠퍼스 주변 AI 위험맵](docs/images/risk-map.jpg) | ![LV0에서 LV3까지 상승하는 실시간 모니터](docs/images/live-risk-monitor.jpg) |
+
+*왼쪽: 위험맵 서버(Leaflet)가 도로별 위험 등급을 3초 앞서 예측해 그린 화면. 오른쪽: 야외 접근 실험 중 젯슨 실시간 모니터 — 차량이 다가오며 안전(LV0)에서 주의(LV1)·경고(LV2)·위험(LV3)까지 오르고, 지나가면 다시 해제된다.*
+
 ## 설치 및 실행
 
 펌웨어 업로드 순서, Wi-Fi 설정, 핀맵: [docs/SETUP.ko.md](docs/SETUP.ko.md)
