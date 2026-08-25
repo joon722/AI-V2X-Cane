@@ -206,6 +206,7 @@ class Progress:
         self.inside = False       # 직전에 2m 안에 있었는지 (중복 계수 방지)
         self.floor_hits = 0       # 하한이 발동했을 상황의 TX 횟수
         self.seen_tx = 0
+        self.backup_dist = None   # GPS 무효 시 표시할 RSSI/UWB 거리(차량 rssi_dist)
 
     def feed(self, now, nodes, tx):
         for kind in ("cane", "vehicle"):
@@ -225,6 +226,13 @@ class Progress:
 
         cane = nodes["cane"][-1] if nodes["cane"] else None
         veh = nodes["vehicle"][-1] if nodes["vehicle"] else None
+
+        # GPS가 안 잡혀도 차량이 보내는 rssi_dist(UWB 보정 시 UWB 거리, 아니면 RSSI
+        # 추정, 없으면 -1)로 근접 거리를 보여준다. GPS 상대거리와 달리 방향은 없다.
+        if veh is not None:
+            backup = _to_float(veh.get("rssi_dist"))
+            self.backup_dist = backup if (backup is not None and backup >= 0) else None
+
         if not (cane and veh and str(cane.get("gps_valid")) == "1"
                 and str(veh.get("gps_valid")) == "1"):
             return
@@ -308,6 +316,9 @@ def progress_line(progress):
             near += " TTC  >30s"
         else:
             near += f" TTC {ttc:4.1f}s"
+    elif progress.backup_dist is not None:
+        # GPS 상대거리가 없을 때: 차량 RSSI/UWB 근접거리. 방향·접근속도·TTC는 못 낸다.
+        near = f"거리 {progress.backup_dist:5.1f}m(RSSI/UWB)"
     else:
         near = "거리    --"
 
