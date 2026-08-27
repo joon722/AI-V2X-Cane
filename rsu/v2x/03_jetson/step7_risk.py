@@ -120,7 +120,9 @@ def classify_risk_level(risk_score):
 # suppressed; only a miss clearly outside the noise (>3 sigma) is pulled down,
 # and never to zero, because dcpa is itself an estimate that can be wrong.
 DCPA_NEAR_M = GPS_SIGMA_M          # 2.5 m, ~1 sigma: no suppression inside this
-DCPA_FAR_M = 3.0 * GPS_SIGMA_M     # 7.5 m, ~3 sigma: full suppression beyond
+DCPA_FAR_M = 1.8 * GPS_SIGMA_M     # 4.5 m, ~1.8 sigma: full suppression beyond
+                                   # 2026-08-26 인도-도로 간격 실측(3~10m) 기반 하향(7.5→4.5).
+                                   # 실접근 검출 -1/54(무시), 유휴 오경보 -20%. 평행 도로차 억제.
 DCPA_FLOOR = 0.2                   # a clear miss still keeps a fifth of the score
 
 # 안전 하한. TTC가 이 값 아래면 점수표도 DCPA 게이트도 무시하고 최고 레벨을 낸다.
