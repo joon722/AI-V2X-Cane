@@ -628,7 +628,18 @@ class RiskSender:
         uwb = self._uwb_fresh(to_float(row["pc_time"]))
         distance_source = "gps"
         if uwb is not None:
-            filtered = replace(filtered, distance_m=uwb[0], closing_los=uwb[1])
+            # 거리축을 UWB 실측으로 교체. 위치(rel)도 UWB 거리에 맞춰 크기만 스케일해
+            # 화면(drive.html)이 지팡이를 실제 거리에 찍게 한다(2026-08-27). 방향(각도)은
+            # GPS 유지 — UWB엔 방위가 없다. 위험 판정은 dcpa/distance/closing만 쓰므로
+            # rel 스케일에 영향받지 않는다(방향 게이트도 rel 각도라 크기 무관).
+            gps_dist = (filtered.rel_east ** 2 + filtered.rel_north ** 2) ** 0.5
+            if gps_dist > 0.1:
+                s = uwb[0] / gps_dist
+                filtered = replace(filtered, distance_m=uwb[0], closing_los=uwb[1],
+                                   rel_east=filtered.rel_east * s,
+                                   rel_north=filtered.rel_north * s)
+            else:
+                filtered = replace(filtered, distance_m=uwb[0], closing_los=uwb[1])
             doppler_speeds = None   # UWB 접근속도는 직접 측정값 — 도플러 클램프 불요
             trend_closing = 0.0     # GPS 거리추세 보조도 불요(잡음 우회용이었다)
             distance_source = "uwb"
