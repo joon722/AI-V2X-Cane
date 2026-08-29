@@ -57,7 +57,7 @@ def make_hero():
     def Y(d):
         return py0 + (1 - min(d, dmax) / dmax) * (py1 - py0)
 
-    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" font-family="{FONT}">',
+    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" font-family="{FONT}">',
          f'<rect width="{W}" height="{H}" rx="14" fill="#ffffff"/>',
          f'<rect width="{W}" height="{H}" rx="14" fill="none" stroke="#e2e8f0"/>',
          f'<text x="{PL}" y="34" font-size="21" font-weight="700" fill="#0f172a">실제 접근 테스트 · 위험도 실시간 판정</text>',
@@ -164,7 +164,7 @@ def make_summary():
     PL, PR, PT, bar_h, gap = 118, 150, 96, 34, 14
     x0, x1 = PL, W - PR
     barw = x1 - x0
-    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" font-family="{FONT}">',
+    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" font-family="{FONT}">',
          f'<rect width="{W}" height="{H}" rx="14" fill="#ffffff"/>',
          f'<rect width="{W}" height="{H}" rx="14" fill="none" stroke="#e2e8f0"/>',
          f'<text x="{PL}" y="34" font-size="21" font-weight="700" fill="#0f172a">거리별 위험등급 분포 · 실도로 {total:,}건</text>',
