@@ -12,7 +12,7 @@
 
 The cane and nearby vehicles each broadcast their GPS position over ESP-NOW at 10 Hz. A roadside unit (RSU) relays every packet to an NVIDIA Jetson, which estimates collision risk (distance, TTC, DCPA via Kalman filtering) and sends a risk level (0–3) back to the cane. The cane alerts the user through distinct vibration and buzzer patterns — no smartphone or network connection required on the user's side.
 
-Built by a 3-person team for the **Hanium ICT Mentoring program**.
+Built by a 4-person team for the **Hanium ICT Mentoring program**.
 
 ## System architecture
 
@@ -128,4 +128,5 @@ Firmware upload order, Wi-Fi configuration, and pin maps: [docs/SETUP.ko.md](doc
 | --- | --- |
 | **강현준** ([@joon722](https://github.com/joon722)) | **Communications & system integration — ESP-NOW, Jetson UART, `lux/` real-time pipeline** |
 | 최민서 | AI & data — SUMO simulation, labeling, Transformer training, risk map |
+| 박채린 | Web & cloud — website (live vehicle view `drive.html`), cloud server integration (Cloud Run) |
 | 박중선 | Hardware — sensor/actuator circuits, power, enclosure |
