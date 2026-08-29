@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 452" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Malgun Gothic,Apple SD Gothic Neo,sans-serif">
+<rect width="940" height="452" rx="14" fill="#ffffff"/>
+<rect width="940" height="452" rx="14" fill="none" stroke="#e2e8f0"/>
+<text x="118" y="34" font-size="21" font-weight="700" fill="#0f172a">거리별 위험등급 분포 · 실도로 104,511건</text>
+<text x="118" y="58" font-size="13" fill="#64748b">47개 세션 · 7일(2026-08-12~25) · GPS 유효 판정만 · 가까울수록 높은 등급이 실제로 발생 (가공 없음)</text>
+<text x="104" y="118" font-size="13" font-weight="600" fill="#334155" text-anchor="end">0–2 m</text>
+<rect x="118.00" y="96" width="175.53" height="34" fill="#16a34a"/>
+<text x="205.8" y="117" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">26%</text>
+<rect x="293.53" y="96" width="35.22" height="34" fill="#d9a406"/>
+<text x="311.1" y="117" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">5%</text>
+<rect x="328.75" y="96" width="344.24" height="34" fill="#ea580c"/>
+<text x="500.9" y="117" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">51%</text>
+<rect x="672.98" y="96" width="117.02" height="34" fill="#dc2626"/>
+<text x="731.5" y="117" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">17%</text>
+<text x="802" y="111" font-size="12" fill="#475569">1,183건</text>
+<text x="802" y="126" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 74%</text>
+<text x="104" y="166" font-size="13" font-weight="600" fill="#334155" text-anchor="end">2–4 m</text>
+<rect x="118.00" y="144" width="479.07" height="34" fill="#16a34a"/>
+<text x="357.5" y="165" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">71%</text>
+<rect x="597.07" y="144" width="54.32" height="34" fill="#d9a406"/>
+<text x="624.2" y="165" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">8%</text>
+<rect x="651.39" y="144" width="117.24" height="34" fill="#ea580c"/>
+<text x="710.0" y="165" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">17%</text>
+<rect x="768.63" y="144" width="21.37" height="34" fill="#dc2626"/>
+<text x="802" y="159" font-size="12" fill="#475569">6,322건</text>
+<text x="802" y="174" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 29%</text>
+<text x="104" y="214" font-size="13" font-weight="600" fill="#334155" text-anchor="end">4–6 m</text>
+<rect x="118.00" y="192" width="546.75" height="34" fill="#16a34a"/>
+<text x="391.4" y="213" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">81%</text>
+<rect x="664.75" y="192" width="78.60" height="34" fill="#d9a406"/>
+<text x="704.0" y="213" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">12%</text>
+<rect x="743.35" y="192" width="43.07" height="34" fill="#ea580c"/>
+<text x="764.9" y="213" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">6%</text>
+<rect x="786.42" y="192" width="3.58" height="34" fill="#dc2626"/>
+<text x="802" y="207" font-size="12" fill="#475569">10,875건</text>
+<text x="802" y="222" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 19%</text>
+<text x="104" y="262" font-size="13" font-weight="600" fill="#334155" text-anchor="end">6–10 m</text>
+<rect x="118.00" y="240" width="579.40" height="34" fill="#16a34a"/>
+<text x="407.7" y="261" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">86%</text>
+<rect x="697.40" y="240" width="70.01" height="34" fill="#d9a406"/>
+<text x="732.4" y="261" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">10%</text>
+<rect x="767.42" y="240" width="19.93" height="34" fill="#ea580c"/>
+<rect x="787.35" y="240" width="2.65" height="34" fill="#dc2626"/>
+<text x="802" y="255" font-size="12" fill="#475569">22,287건</text>
+<text x="802" y="270" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 14%</text>
+<text x="104" y="310" font-size="13" font-weight="600" fill="#334155" text-anchor="end">10–15 m</text>
+<rect x="118.00" y="288" width="620.04" height="34" fill="#16a34a"/>
+<text x="428.0" y="309" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">92%</text>
+<rect x="738.04" y="288" width="43.30" height="34" fill="#d9a406"/>
+<text x="759.7" y="309" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">6%</text>
+<rect x="781.33" y="288" width="7.71" height="34" fill="#ea580c"/>
+<rect x="789.05" y="288" width="0.95" height="34" fill="#dc2626"/>
+<text x="802" y="303" font-size="12" fill="#475569">21,171건</text>
+<text x="802" y="318" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 8%</text>
+<text x="104" y="358" font-size="13" font-weight="600" fill="#334155" text-anchor="end">15–30 m</text>
+<rect x="118.00" y="336" width="636.99" height="34" fill="#16a34a"/>
+<text x="436.5" y="357" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">95%</text>
+<rect x="754.99" y="336" width="23.46" height="34" fill="#d9a406"/>
+<rect x="778.45" y="336" width="11.34" height="34" fill="#ea580c"/>
+<rect x="789.79" y="336" width="0.21" height="34" fill="#dc2626"/>
+<text x="802" y="351" font-size="12" fill="#475569">25,893건</text>
+<text x="802" y="366" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 5%</text>
+<text x="104" y="406" font-size="13" font-weight="600" fill="#334155" text-anchor="end">30+ m</text>
+<rect x="118.00" y="384" width="662.31" height="34" fill="#16a34a"/>
+<text x="449.2" y="405" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">99%</text>
+<rect x="780.31" y="384" width="4.53" height="34" fill="#d9a406"/>
+<rect x="784.83" y="384" width="5.09" height="34" fill="#ea580c"/>
+<rect x="789.92" y="384" width="0.08" height="34" fill="#dc2626"/>
+<text x="802" y="399" font-size="12" fill="#475569">16,780건</text>
+<text x="802" y="414" font-size="11.5" font-weight="700" fill="#b91c1c">경고↑ 1%</text>
+<text x="118" y="450" font-size="12" fill="#64748b">등급:</text>
+<rect x="160" y="439" width="13" height="13" rx="3" fill="#16a34a"/>
+<text x="178" y="450" font-size="12" fill="#334155">0 안전</text>
+<rect x="260" y="439" width="13" height="13" rx="3" fill="#d9a406"/>
+<text x="278" y="450" font-size="12" fill="#334155">1 주의</text>
+<rect x="360" y="439" width="13" height="13" rx="3" fill="#ea580c"/>
+<text x="378" y="450" font-size="12" fill="#334155">2 경고</text>
+<rect x="460" y="439" width="13" height="13" rx="3" fill="#dc2626"/>
+<text x="478" y="450" font-size="12" fill="#334155">3 위험</text>
+</svg>

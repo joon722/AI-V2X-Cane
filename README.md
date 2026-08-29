@@ -101,6 +101,16 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9-axis IMU · vibration
 
 *Left: per-road risk levels predicted 3 seconds ahead, rendered by the risk-map server (Leaflet). Right: the Jetson's live monitor during a field run — safe (LV0) escalates through caution (LV1) and warning (LV2) to danger (LV3) as the vehicle closes in, then clears once it passes.*
 
+## Field results (real data)
+
+Not lab numbers — verified on **real road logs.** Below is one approach from 2026-08-17: a vehicle closes from 32 m and the risk level climbs and clears on its own (no hand-editing). The log shows the safety-floor rule forcing Danger (LV3) the instant time-to-collision drops below 2 s.
+
+![Real approach test timeline](docs/images/approach-timeline.svg)
+
+Aggregate **104,511** decisions from 7 days / 47 sessions, and the warning rate rises as the vehicle gets closer.
+
+**→ Distance breakdown, field fixes, and reproduction: [full field results](docs/field-results.md)**
+
 ## Getting started
 
 Firmware upload order, Wi-Fi configuration, and pin maps: [docs/SETUP.ko.md](docs/SETUP.ko.md) (Korean).
