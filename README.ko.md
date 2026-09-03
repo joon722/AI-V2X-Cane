@@ -127,6 +127,6 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9축 IMU · 진동모�
 | 팀원 | 역할 |
 | --- | --- |
 | **강현준** ([@joon722](https://github.com/joon722)) | **통신·시스템 통합 — ESP-NOW, Jetson UART, `lux/` 실시간 파이프라인** |
-| 최민서 | AI·데이터 — SUMO 시뮬레이션, 라벨링, Transformer 학습, 위험지도, 클라우드 서버 연동(Cloud Run)  |
-| 박채린 | 웹·클라우드 — 홈페이지(실시간 차량뷰 `drive.html`)|
+| 최민서 | AI·데이터·클라우드 — SUMO 시뮬레이션, 라벨링, Transformer 학습, 위험지도, 클라우드 서버 연동(Cloud Run)  |
+| 박채린 | 웹 — 홈페이지(실시간 차량뷰 `drive.html`)|
 | 박중선 | 하드웨어 — 센서/액추에이터 회로, 전원, 기구 |
