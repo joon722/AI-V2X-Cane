@@ -1,0 +1,12 @@
+1786533578.093 RX {"type":"cane","node_id":4125577512,"seq":892,"gps_valid":1,"heading_valid":0,"lat":37.496456,"lng":126.957611,"speed_mps":0.096,"heading_deg":0.00,"node_risk":0,"tx_ms":98039,"rx_ms":4500,"recv_count":37,"lost_count":0,"rssi":-54,"src_mac":"30:76:F5:E7:51:28"}
+1786533578.151 RX {"type":"vehicle","node_id":2882630492,"seq":1135,"gps_valid":1,"heading_valid":0,"lat":37.496498,"lng":126.957603,"speed_mps":0.057,"heading_deg":101.25,"node_risk":0,"tx_ms":123940,"rx_ms":4557,"recv_count":36,"lost_count":1,"rssi":-74,"src_mac":"1C:C3:AB:D1:73:5C"}
+1786533578.155 TX {"target_id":0,"risk":2}
+1786533578.196 RX {"type":"cane","node_id":4125577512,"seq":893,"gps_valid":1,"heading_valid":0,"lat":37.496456,"lng":126.957611,"speed_mps":0.141,"heading_deg":0.00,"node_risk":0,"tx_ms":98143,"rx_ms":4604,"recv_count":38,"lost_count":0,"rssi":-54,"src_mac":"30:76:F5:E7:51:28"}
+1786533578.252 RX {"type":"vehicle","node_id":2882630492,"seq":1136,"gps_valid":1,"heading_valid":0,"lat":37.496498,"lng":126.957603,"speed_mps":0.051,"heading_deg":101.25,"node_risk":0,"tx_ms":124045,"rx_ms":4660,"recv_count":37,"lost_count":1,"rssi":-78,"src_mac":"1C:C3:AB:D1:73:5C"}
+1786533578.302 RX {"type":"cane","node_id":4125577512,"seq":894,"gps_valid":1,"heading_valid":0,"lat":37.496456,"lng":126.957611,"speed_mps":0.141,"heading_deg":0.00,"node_risk":0,"tx_ms":98248,"rx_ms":4709,"recv_count":39,"lost_count":0,"rssi":-57,"src_mac":"30:76:F5:E7:51:28"}
+1786533578.358 RX {"type":"vehicle","node_id":2882630492,"seq":1137,"gps_valid":1,"heading_valid":0,"lat":37.496498,"lng":126.957603,"speed_mps":0.051,"heading_deg":101.25,"node_risk":0,"tx_ms":124151,"rx_ms":4766,"recv_count":38,os�5�չ"1,"rssi":-75,"src_mac":"1C:C3:AB:D1:73:5C"}
+1786533578.367 RX BOD: Brownout detector was triggered
+1786533578.370 RX ets Jul 29 2019 12:21:46
+1786533578.374 RX rst:0x3 (SW_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+1786533578.377 RX configsip: 0, SPIWP:0xee
+1786533578.383 RX clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
