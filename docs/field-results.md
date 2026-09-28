@@ -18,14 +18,14 @@ Not lab numbers — **logs recorded on a real road.** Every figure below is gene
 
 | Time | Distance | TTC | Level | Why |
 | ---: | ---: | ---: | :--- | :--- |
-| 0.0 s | 32.6 m | 10.8 s | **0 Safe** | far, approaching |
-| ~8–12 s | ~16 m | — | **0 Safe** | brief stop (closing ≈ 0) → DCPA gate suppresses |
+| 0.0 s | 32.6 m | 10.8 s | **0 No alert** | far, approaching |
+| ~8–12 s | ~16 m | — | **0 No alert** | brief stop (closing ≈ 0) → DCPA gate suppresses |
 | 14.6 s | 13.5 m | 7.9 s | **1 Caution** | closing again, score reaches 20 |
 | 17.3 s | 6.6 m | 4.3 s | **2 Warning** | score reaches 45 |
 | 21.0 s | 2.2 m | **1.97 s** | **3 Danger** | **safety floor**: TTC drops below 2 s → top level regardless of score |
-| 24.4 s | 1.3 m | — | **0 Safe** | vehicle stops (closing ≈ 0) → auto-clears |
+| 24.4 s | 1.3 m | — | **0 No alert** | vehicle stops (closing ≈ 0) → auto-clears |
 
-The key moment is **21.0 s**. The rule score was only 63 (still the Warning band), but **as time-to-collision fell to 1.97 s the "safety-floor" rule forced the level straight to Danger.** The system does not just trust the score table — when the clock runs out it always issues the top warning. That fail-safe is right there in the log.
+The key moment is **21.0 s**. The rule score was only 63 (still the Warning band), but **as time-to-collision fell to 1.97 s the "safety-floor" rule forced the level straight to Danger.** This records the safety floor operating under the inputs and decision conditions of that example; it does not guarantee an alert under every sensor state or scenario.
 
 ---
 
@@ -55,8 +55,10 @@ The warning rate rises **monotonically** as the vehicle gets closer — 100k rea
 
 - **Tightened the DCPA gate (7.5 m → 4.5 m).** Backed by measured sidewalk–road gaps (3–10 m, 3 m at the narrowest). Replay held real-approach detection (−1) while cutting idle false alarms ~20 %.
 - **UWB as a GPS-gap safety net (first outdoor success, 8/25).** In a session where the cane GPS never locked, UWB ranging carried 100 % of the decisions (LV1–LV3). A GPS-only system would have been blind.
-- **The AI is honestly kept off.** The on-device Transformer beat rules in simulation (+8.9 pp) but only matched them on real-road replay. **Until a clear real-road gain is verified, the model is disabled** in demos and operation; rules + zones complete the safety function. Safety over a headline number.
-- **Triple fail-safe.** The system takes the **maximum** of rule score, static danger zones, and AI — if one path fails, the warning survives.
+- **AI operating status updated (reviewed September 28, 2026).** AI-off settings in some earlier trials do not describe all later operation. In the September 19 public TX log, 39 of 11,951 valid records have `level_source=model` (9 changes, 30 heartbeats). The field step8 runner uses a tree ensemble, distinct from the separate Transformer test metrics. [Code and log evidence](current-ai-status.md)
+- **Rules plus AI upgrades.** The model cannot lower rule-generated alerts; model errors fall back to rules. This is not independent triple redundancy against shared position-input faults. The field step8 runner leaves static zone risk at its default of 0.
+
+
 
 ---
 
@@ -66,4 +68,4 @@ The warning rate rises **monotonically** as the vehicle gets closer — 100k rea
 - Decision CSVs: each session's `risk_tx_*.csv` (distance, TTC, closing speed, level, GPS, model probability)
 - Figure scripts: [`scripts/figures/`](../scripts/figures/) — regenerate the SVGs from the same CSVs.
 
-> **Method note:** §1–2 are **live logs** (the decision made on the spot). The AI comparison in §3 is **replay scoring** — the same logs re-run through the model — labeled separately from live results.
+> **Method note:** Sections 1–2 summarize the historical August 12–25 logs; the September 19 AI evidence in §3 is a separate session. The 104,511 rows are not independent trials or labeled hazard outcomes. Alarm frequency by distance does not establish detection or false-alarm rates.
