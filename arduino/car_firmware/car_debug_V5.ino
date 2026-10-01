@@ -113,6 +113,12 @@ uint32_t lastUdpTelemetryMs = 0;
 #define UWB_CAL_TIMEOUT_MS 30000UL
 #define UWB_MIN_DISTANCE_M 0.05f
 #define UWB_MAX_DISTANCE_M 100.0f
+// UWB 정면 맞추기(uwb front): 지팡이를 든 사람이 차 정면에 서 있는 동안 각도를 모아
+// 그 평균을 정면(0°)으로 삼는다. 쉴드가 비뚤게 붙은 만큼을 한 번 재서 저장한다.
+#define UWB_FRONT_REQUIRED_SAMPLES 25U   // 5 Hz면 약 5초
+#define UWB_FRONT_MAX_SPREAD_DEG 10.0f   // 표준편차가 이보다 크면 움직였거나 반사 → 다시 모음
+#define UWB_FRONT_MAX_OFFSET_DEG 20.0f   // 평균이 이보다 크면 정면에 선 게 아니라고 본다
+#define UWB_FRONT_TIMEOUT_MS 20000UL
 
 // =====================
 // 동작 설정
@@ -379,6 +385,11 @@ uint32_t cfgUwbTimeoutMs = UWB_FRESH_TIMEOUT_MS;
 uint32_t cfgUwbRiskEnabled = 0;
 // UWB 각도(AoA)를 '유효'로 볼 최소 신뢰도(0~100). 실물 각도시험 후 조정.
 uint32_t cfgUwbAngleMinFom = 50;
+// uwb front가 재서 저장하는 쉴드 장착 비뚤어짐(쉴드 기준 원시 각도, 도).
+float cfgUwbAzimuthOffsetDeg = 0.0f;
+// 1이면 각도 부호를 뒤집는다. 실물 시험에서 오른쪽이 -로 나오면 1로 바꿔
+// '차 기준 오른쪽 +'로 맞춘다(뷰어 명령 uwbflip 1 → save).
+uint32_t cfgUwbAzimuthFlip = 0;
 
 #if USE_WEB_VIEWER
 // =====================
@@ -550,7 +561,7 @@ static const char WEB_PAGE[] PROGMEM =
 "\n"
 "<!-- 요약 설정: dual_serial_viewer.py 의 SUMMARY 등을 build_web_viewer.py 가 복사해 넣는다.\n"
 "     여기서 직접 고치지 말고 dual_serial_viewer.py 를 고친 뒤 build_web_viewer.py 실행. -->\n"
-"<script id=\"viewer-spec\" type=\"application/json\">{\"RISK_NAMES\":{\"0\":\"안전\",\"1\":\"주의\",\"2\":\"경고\",\"3\":\"위험\"},\"RISK_COLORS\":{\"0\":\"#2e9e44\",\"1\":\"#b8860b\",\"2\":\"#e8710a\",\"3\":\"#d0342c\"},\"FRESH_MS\":1500,\"STALE_SEC\":2.0,\"BOARD_MS_KEY\":\"시각ms\",\"BOOT_COUNT_KEY\":\"부팅횟수\",\"SUMMARY\":{\"차량\":{\"cards\":[{\"title\":\"위험 단계\",\"key\":\"위험\",\"risk\":true,\"sub\":{\"name\":\"원시\",\"key\":\"원시위험\"}},{\"title\":\"TTC\",\"key\":\"TTC\",\"unit\":\"s\",\"digits\":1,\"min\":0,\"max\":900,\"sub\":{\"name\":\"전방\",\"key\":\"전방여부\",\"map\":{\"1\":\"예\",\"0\":\"아니오\"}}},{\"title\":\"계산 거리\",\"key\":\"계산거리\",\"unit\":\"m\",\"digits\":2,\"min\":0,\"sub\":{\"name\":\"접근\",\"key\":\"접근속도\",\"unit\":\"m/s\",\"digits\":2}},{\"title\":\"UWB 거리\",\"key\":\"UWB보정거리\",\"unit\":\"m\",\"digits\":2,\"ok\":\"UWB유효\",\"sub\":[{\"name\":\"각도\",\"key\":\"UWB각도\",\"unit\":\"°\",\"digits\":0,\"when\":\"UWB각도유효\"},{\"name\":\"원시\",\"key\":\"UWB원시거리\",\"unit\":\"m\",\"digits\":2}]}],\"lines\":[{\"label\":\"GPS\",\"ok\":\"GPS유효\",\"bad\":\"무효\",\"parts\":[{\"name\":\"위성\",\"key\":\"GPS위성\"},{\"name\":\"HDOP\",\"key\":\"GPS_HDOP\",\"digits\":2},{\"name\":\"속도\",\"key\":\"속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"방향\",\"key\":\"방향\",\"unit\":\"°\",\"digits\":0},{\"key\":\"상대보정\",\"map\":{\"1\":\"영점 맞춤\",\"0\":\"영점 전\"}},{\"key\":\"상대보정중\",\"map\":{\"1\":\"영점 잡는 중\"}}]},{\"label\":\"UWB\",\"ok\":\"UWB유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"UWB보정\",\"map\":{\"1\":\"보정됨\",\"0\":\"보정 전\"}},{\"key\":\"UWB보정중\",\"map\":{\"1\":\"보정 중\"}},{\"name\":\"각도\",\"key\":\"UWB각도\",\"unit\":\"°\",\"digits\":0,\"when\":\"UWB각도유효\"},{\"key\":\"UWB각도유효\",\"map\":{\"0\":\"각도 모름\"}},{\"name\":\"신뢰\",\"key\":\"UWB각도신뢰\",\"min\":1},{\"key\":\"UWB가림\",\"map\":{\"1\":\"가림\",\"0\":\"트임\"}},{\"name\":\"접근\",\"key\":\"UWB접근속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"경과\",\"key\":\"UWB경과ms\",\"unit\":\"ms\",\"digits\":0,\"min\":0},{\"name\":\"전송\",\"key\":\"UWB전송\",\"rate\":true}]},{\"label\":\"IMU\",\"ok_eq\":{\"IMU보정\":\"3/3/3/3\",\"IMU정렬\":\"1\"},\"bad\":\"보정 필요\",\"parts\":[{\"name\":\"S/G/A/M\",\"key\":\"IMU보정\"},{\"key\":\"IMU정렬\",\"map\":{\"1\":\"정렬됨\",\"0\":\"정렬 전\"}},{\"name\":\"차체\",\"key\":\"차체방향\",\"unit\":\"°\",\"digits\":0}]},{\"label\":\"RSSI\",\"fresh\":\"RSSI경과ms\",\"bad\":\"끊김\",\"parts\":[{\"key\":[\"RSSI평활\",\"RSSI원시\"],\"unit\":\"dBm\",\"digits\":0},{\"name\":\"추정\",\"key\":\"RSSI거리\",\"unit\":\"m\",\"digits\":1,\"min\":0}]},{\"label\":\"통신\",\"parts\":[{\"name\":\"송신\",\"key\":\"송신\",\"rate\":true},{\"name\":\"지팡이 수신\",\"key\":\"지팡이수신\",\"rate\":true},{\"name\":\"RSU\",\"key\":\"RSU위험경과ms\",\"scale\":0.001,\"unit\":\"s 전\",\"digits\":1,\"min\":0}]}]},\"지팡이\":{\"cards\":[{\"title\":\"위험 단계\",\"key\":\"위험\",\"risk\":true},{\"title\":\"차량 경고\",\"key\":\"차량위험\",\"risk\":true,\"age\":\"차량위험경과ms\",\"sub\":{\"name\":\"경과\",\"key\":\"차량위험경과ms\",\"scale\":0.001,\"unit\":\"s\",\"digits\":1,\"min\":0}},{\"title\":\"RSU 경고\",\"key\":\"RSU위험\",\"risk\":true,\"age\":\"RSU위험경과ms\",\"sub\":{\"name\":\"경과\",\"key\":\"RSU위험경과ms\",\"scale\":0.001,\"unit\":\"s\",\"digits\":1,\"min\":0}},{\"title\":\"UWB 거리\",\"key\":\"UWB보정거리\",\"unit\":\"m\",\"digits\":2,\"ok\":\"UWB유효\",\"sub\":{\"name\":\"원시\",\"key\":\"UWB원시거리\",\"unit\":\"m\",\"digits\":2}}],\"lines\":[{\"label\":\"GPS\",\"ok\":\"GPS유효\",\"bad\":\"무효\",\"parts\":[{\"name\":\"위성\",\"key\":\"GPS위성\"},{\"name\":\"HDOP\",\"key\":\"GPS_HDOP\",\"digits\":2},{\"name\":\"속도\",\"key\":\"속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"GPS 복구\",\"key\":\"GPS복구횟수\",\"unit\":\"회\",\"min\":1}]},{\"label\":\"방향\",\"ok\":\"IMU방향유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"IMU방향\",\"unit\":\"°\",\"digits\":0}]},{\"label\":\"IMU\",\"ok_eq\":{\"IMU보정\":\"3/3/3/3\",\"IMU정렬\":\"1\"},\"bad\":\"보정 필요\",\"parts\":[{\"name\":\"S/G/A/M\",\"key\":\"IMU보정\"},{\"key\":\"IMU정렬\",\"map\":{\"1\":\"정렬됨\",\"0\":\"정렬 전\"}},{\"key\":\"IMU정렬중\",\"map\":{\"1\":\"걸어서 정렬 중\"}},{\"name\":\"표본\",\"key\":\"IMU정렬표본\",\"unit\":\"/20\",\"when\":\"IMU정렬중\"}]},{\"label\":\"UWB\",\"ok\":\"UWB유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"UWB보정\",\"map\":{\"1\":\"보정됨\",\"0\":\"보정 전\"}},{\"name\":\"접근\",\"key\":\"UWB접근속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"경과\",\"key\":\"UWB경과ms\",\"unit\":\"ms\",\"digits\":0,\"min\":0},{\"name\":\"수신\",\"key\":\"UWB수신\",\"rate\":true}]},{\"label\":\"RSSI\",\"fresh\":\"RSSI경과ms\",\"bad\":\"끊김\",\"parts\":[{\"key\":[\"RSSI평활\",\"RSSI원시\"],\"unit\":\"dBm\",\"digits\":0}]},{\"label\":\"통신\",\"parts\":[{\"name\":\"송신\",\"key\":\"송신\",\"rate\":true},{\"name\":\"차량 수신\",\"key\":\"차량수신\",\"rate\":true}]}]}},\"QUICK_COMMANDS\":{\"차량\":[[\"IMU 상태\",\"imu\"],[\"IMU 저장\",\"imusave\"],[\"UWB 상태\",\"uwb status\"]],\"지팡이\":[[\"IMU 상태\",\"imu\"],[\"IMU 저장\",\"imusave\"],[\"걸어서 방향 정렬\",\"imuwalk\"]]},\"MODE_COMMANDS\":[[\"운영 모드\",[\"logmode 0\",\"rate 500\"]],[\"상세 기록 모드\",[\"logmode 1\",\"rate 100\"]]],\"EXACT_GROUPS\":{\"속도\":\"GPS\",\"위도\":\"GPS\",\"경도\":\"GPS\",\"방향\":\"방향·IMU\",\"방향오차\":\"위험·경보\",\"송신\":\"통신\"},\"VALUE_GROUPS\":[[\"UWB\",[\"UWB\",\"uwb\"],[]],[\"RSSI\",[\"RSSI\",\"rssi\"],[]],[\"GPS\",[\"GPS\",\"gps\",\"원시위도\",\"원시경도\"],[\"GPS\",\"위성\",\"HDOP\",\"상대보정\",\"보정동쪽\",\"보정북쪽\",\"lat\",\"lng\"]],[\"방향·IMU\",[\"IMU\",\"BNO\"],[\"방향\",\"가속도\",\"자이로\",\"자력계\",\"자기모델\",\"요회전\",\"후진\",\"스윙\",\"heading\",\"yaw\"]],[\"충격\",[],[\"충격\",\"impact\"]],[\"위험·경보\",[],[\"위험\",\"TTC\",\"거리\",\"접근속도\",\"전방\",\"음성\",\"risk\",\"ttc\",\"dist\"]],[\"통신\",[],[\"송신\",\"수신\",\"전송\",\"seq\",\"lost\"]],[\"시스템\",[],[\"시각\",\"부팅\",\"리셋\",\"상태\",\"heap\",\"메모리\"]]],\"GROUP_ORDER\":[\"위험·경보\",\"UWB\",\"GPS\",\"방향·IMU\",\"RSSI\",\"통신\",\"충격\",\"시스템\",\"기타\"],\"NO_SPACE_UNITS\":[\"°\",\"%\",\"회\",\"/20\"]}</script>\n"
+"<script id=\"viewer-spec\" type=\"application/json\">{\"RISK_NAMES\":{\"0\":\"안전\",\"1\":\"주의\",\"2\":\"경고\",\"3\":\"위험\"},\"RISK_COLORS\":{\"0\":\"#2e9e44\",\"1\":\"#b8860b\",\"2\":\"#e8710a\",\"3\":\"#d0342c\"},\"FRESH_MS\":1500,\"STALE_SEC\":2.0,\"BOARD_MS_KEY\":\"시각ms\",\"BOOT_COUNT_KEY\":\"부팅횟수\",\"SUMMARY\":{\"차량\":{\"cards\":[{\"title\":\"위험 단계\",\"key\":\"위험\",\"risk\":true,\"sub\":{\"name\":\"원시\",\"key\":\"원시위험\"}},{\"title\":\"TTC\",\"key\":\"TTC\",\"unit\":\"s\",\"digits\":1,\"min\":0,\"max\":900,\"sub\":{\"name\":\"전방\",\"key\":\"전방여부\",\"map\":{\"1\":\"예\",\"0\":\"아니오\"}}},{\"title\":\"계산 거리\",\"key\":\"계산거리\",\"unit\":\"m\",\"digits\":2,\"min\":0,\"sub\":{\"name\":\"접근\",\"key\":\"접근속도\",\"unit\":\"m/s\",\"digits\":2}},{\"title\":\"UWB 거리\",\"key\":\"UWB보정거리\",\"unit\":\"m\",\"digits\":2,\"ok\":\"UWB유효\",\"sub\":[{\"name\":\"각도\",\"key\":\"UWB각도\",\"unit\":\"°\",\"digits\":0,\"when\":\"UWB각도유효\"},{\"name\":\"원시\",\"key\":\"UWB원시거리\",\"unit\":\"m\",\"digits\":2}]}],\"lines\":[{\"label\":\"GPS\",\"ok\":\"GPS유효\",\"bad\":\"무효\",\"parts\":[{\"name\":\"위성\",\"key\":\"GPS위성\"},{\"name\":\"HDOP\",\"key\":\"GPS_HDOP\",\"digits\":2},{\"name\":\"속도\",\"key\":\"속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"방향\",\"key\":\"방향\",\"unit\":\"°\",\"digits\":0},{\"key\":\"상대보정\",\"map\":{\"1\":\"영점 맞춤\",\"0\":\"영점 전\"}},{\"key\":\"상대보정중\",\"map\":{\"1\":\"영점 잡는 중\"}}]},{\"label\":\"UWB\",\"ok\":\"UWB유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"UWB보정\",\"map\":{\"1\":\"거리 보정됨\",\"0\":\"거리 보정 전\"}},{\"key\":\"UWB보정중\",\"map\":{\"1\":\"거리 보정 중\"}},{\"key\":\"UWB정면보정\",\"map\":{\"1\":\"정면 맞춤\",\"0\":\"정면 전\"}},{\"key\":\"UWB정면보정중\",\"map\":{\"1\":\"정면 맞추는 중\"}},{\"name\":\"표본\",\"key\":\"UWB정면표본\",\"unit\":\"/25\",\"when\":\"UWB정면보정중\"},{\"name\":\"각도\",\"key\":\"UWB각도\",\"unit\":\"°\",\"digits\":0,\"when\":\"UWB각도유효\"},{\"key\":\"UWB각도유효\",\"map\":{\"0\":\"각도 모름\"}},{\"name\":\"신뢰\",\"key\":\"UWB각도신뢰\",\"min\":1},{\"key\":\"UWB가림\",\"map\":{\"1\":\"가림\",\"0\":\"트임\"}},{\"name\":\"접근\",\"key\":\"UWB접근속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"경과\",\"key\":\"UWB경과ms\",\"unit\":\"ms\",\"digits\":0,\"min\":0},{\"name\":\"전송\",\"key\":\"UWB전송\",\"rate\":true}]},{\"label\":\"IMU\",\"ok_eq\":{\"IMU보정\":\"3/3/3/3\",\"IMU정렬\":\"1\"},\"bad\":\"보정 필요\",\"parts\":[{\"name\":\"S/G/A/M\",\"key\":\"IMU보정\"},{\"key\":\"IMU정렬\",\"map\":{\"1\":\"정렬됨\",\"0\":\"정렬 전\"}},{\"name\":\"차체\",\"key\":\"차체방향\",\"unit\":\"°\",\"digits\":0}]},{\"label\":\"RSSI\",\"fresh\":\"RSSI경과ms\",\"bad\":\"끊김\",\"parts\":[{\"key\":[\"RSSI평활\",\"RSSI원시\"],\"unit\":\"dBm\",\"digits\":0},{\"name\":\"추정\",\"key\":\"RSSI거리\",\"unit\":\"m\",\"digits\":1,\"min\":0}]},{\"label\":\"통신\",\"parts\":[{\"name\":\"송신\",\"key\":\"송신\",\"rate\":true},{\"name\":\"지팡이 수신\",\"key\":\"지팡이수신\",\"rate\":true},{\"name\":\"RSU\",\"key\":\"RSU위험경과ms\",\"scale\":0.001,\"unit\":\"s 전\",\"digits\":1,\"min\":0}]}]},\"지팡이\":{\"cards\":[{\"title\":\"위험 단계\",\"key\":\"위험\",\"risk\":true},{\"title\":\"차량 경고\",\"key\":\"차량위험\",\"risk\":true,\"age\":\"차량위험경과ms\",\"sub\":{\"name\":\"경과\",\"key\":\"차량위험경과ms\",\"scale\":0.001,\"unit\":\"s\",\"digits\":1,\"min\":0}},{\"title\":\"RSU 경고\",\"key\":\"RSU위험\",\"risk\":true,\"age\":\"RSU위험경과ms\",\"sub\":{\"name\":\"경과\",\"key\":\"RSU위험경과ms\",\"scale\":0.001,\"unit\":\"s\",\"digits\":1,\"min\":0}},{\"title\":\"UWB 거리\",\"key\":\"UWB보정거리\",\"unit\":\"m\",\"digits\":2,\"ok\":\"UWB유효\",\"sub\":{\"name\":\"원시\",\"key\":\"UWB원시거리\",\"unit\":\"m\",\"digits\":2}}],\"lines\":[{\"label\":\"GPS\",\"ok\":\"GPS유효\",\"bad\":\"무효\",\"parts\":[{\"name\":\"위성\",\"key\":\"GPS위성\"},{\"name\":\"HDOP\",\"key\":\"GPS_HDOP\",\"digits\":2},{\"name\":\"속도\",\"key\":\"속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"GPS 복구\",\"key\":\"GPS복구횟수\",\"unit\":\"회\",\"min\":1}]},{\"label\":\"방향\",\"ok\":\"IMU방향유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"IMU방향\",\"unit\":\"°\",\"digits\":0}]},{\"label\":\"IMU\",\"ok_eq\":{\"IMU보정\":\"3/3/3/3\",\"IMU정렬\":\"1\"},\"bad\":\"보정 필요\",\"parts\":[{\"name\":\"S/G/A/M\",\"key\":\"IMU보정\"},{\"key\":\"IMU정렬\",\"map\":{\"1\":\"정렬됨\",\"0\":\"정렬 전\"}},{\"key\":\"IMU정렬중\",\"map\":{\"1\":\"걸어서 정렬 중\"}},{\"name\":\"표본\",\"key\":\"IMU정렬표본\",\"unit\":\"/20\",\"when\":\"IMU정렬중\"}]},{\"label\":\"UWB\",\"ok\":\"UWB유효\",\"bad\":\"무효\",\"parts\":[{\"key\":\"UWB보정\",\"map\":{\"1\":\"거리 보정됨\",\"0\":\"거리 보정 전\"}},{\"name\":\"접근\",\"key\":\"UWB접근속도\",\"unit\":\"m/s\",\"digits\":2},{\"name\":\"경과\",\"key\":\"UWB경과ms\",\"unit\":\"ms\",\"digits\":0,\"min\":0},{\"name\":\"수신\",\"key\":\"UWB수신\",\"rate\":true}]},{\"label\":\"RSSI\",\"fresh\":\"RSSI경과ms\",\"bad\":\"끊김\",\"parts\":[{\"key\":[\"RSSI평활\",\"RSSI원시\"],\"unit\":\"dBm\",\"digits\":0}]},{\"label\":\"통신\",\"parts\":[{\"name\":\"송신\",\"key\":\"송신\",\"rate\":true},{\"name\":\"차량 수신\",\"key\":\"차량수신\",\"rate\":true}]}]}},\"QUICK_COMMANDS\":{\"차량\":[[\"IMU 상태\",\"imu\"],[\"IMU 저장\",\"imusave\"],[\"UWB 상태\",\"uwb status\"],[\"UWB 정면 맞추기\",\"uwb front\"]],\"지팡이\":[[\"IMU 상태\",\"imu\"],[\"IMU 저장\",\"imusave\"],[\"걸어서 방향 정렬\",\"imuwalk\"]]},\"MODE_COMMANDS\":[[\"운영 모드\",[\"logmode 0\",\"rate 500\"]],[\"상세 기록 모드\",[\"logmode 1\",\"rate 100\"]]],\"EXACT_GROUPS\":{\"속도\":\"GPS\",\"위도\":\"GPS\",\"경도\":\"GPS\",\"방향\":\"방향·IMU\",\"방향오차\":\"위험·경보\",\"송신\":\"통신\"},\"VALUE_GROUPS\":[[\"UWB\",[\"UWB\",\"uwb\"],[]],[\"RSSI\",[\"RSSI\",\"rssi\"],[]],[\"GPS\",[\"GPS\",\"gps\",\"원시위도\",\"원시경도\"],[\"GPS\",\"위성\",\"HDOP\",\"상대보정\",\"보정동쪽\",\"보정북쪽\",\"lat\",\"lng\"]],[\"방향·IMU\",[\"IMU\",\"BNO\"],[\"방향\",\"가속도\",\"자이로\",\"자력계\",\"자기모델\",\"요회전\",\"후진\",\"스윙\",\"heading\",\"yaw\"]],[\"충격\",[],[\"충격\",\"impact\"]],[\"위험·경보\",[],[\"위험\",\"TTC\",\"거리\",\"접근속도\",\"전방\",\"음성\",\"risk\",\"ttc\",\"dist\"]],[\"통신\",[],[\"송신\",\"수신\",\"전송\",\"seq\",\"lost\"]],[\"시스템\",[],[\"시각\",\"부팅\",\"리셋\",\"상태\",\"heap\",\"메모리\"]]],\"GROUP_ORDER\":[\"위험·경보\",\"UWB\",\"GPS\",\"방향·IMU\",\"RSSI\",\"통신\",\"충격\",\"시스템\",\"기타\"],\"NO_SPACE_UNITS\":[\"°\",\"%\",\"회\",\"/20\",\"/25\"]}</script>\n"
 "\n"
 "<script>\n"
 "var SPEC = JSON.parse(document.getElementById(\"viewer-spec\").textContent);\n"
@@ -1195,6 +1206,14 @@ typedef struct {
   uint8_t nlos;           // 0=가림 없음, 1=가림, 255=판단 불가
   uint32_t lastAngleMs;
   uint32_t angleCount;
+  // UWB 정면 맞추기 상태
+  bool frontCalibrated;
+  bool frontCalibrating;
+  uint32_t frontStartedMs;
+  uint16_t frontSamples;
+  uint16_t frontRejected;
+  double frontSumDeg;
+  double frontSumSqDeg;
 } UwbRangeState;
 
 UwbRangeState uwbRange = {};
@@ -2118,6 +2137,10 @@ TuningParam tuningParams[] = {
    "실물 검증 후 UWB 직접 위험계산 사용(0/1)"},
   {"uwbfom", &cfgUwbAngleMinFom, TUNING_UINT32, 0.0f, 100.0f, "",
    "UWB 각도를 유효로 볼 최소 신뢰도"},
+  {"uwbazoff", &cfgUwbAzimuthOffsetDeg, TUNING_FLOAT, -60.0f, 60.0f, "도",
+   "UWB 정면 보정각 (uwb front가 재서 자동 저장)"},
+  {"uwbflip", &cfgUwbAzimuthFlip, TUNING_UINT32, 0.0f, 1.0f, "",
+   "1이면 UWB 각도 부호 반대 (차 기준 오른쪽이 +가 되게)"},
   {"rate", &cfgTelemetryIntervalMs, TUNING_UINT32, 20.0f, 5000.0f, "ms",
    "뷰어 로그 전송 주기"},
   {"logmode", &cfgLogMode, TUNING_UINT32, 0.0f, 1.0f, "",
@@ -2175,6 +2198,85 @@ bool uwbAngleIsValid(uint32_t now) {
          fabsf(uwbRange.azimuthDeg) <= 60.0f &&
          uwbRange.azimuthFom >= cfgUwbAngleMinFom &&
          uwbRange.nlos != 1;
+}
+
+// 차 정면 기준 각도(오른쪽 +). 쉴드 장착 비뚤어짐(uwbazoff)과 부호(uwbflip)를 반영한다.
+// 유효 범위(±60°) 판정은 쉴드 기준 원시 각도로 한다(uwbAngleIsValid).
+float uwbAzimuthCarDeg() {
+  float deg = uwbRange.azimuthDeg - cfgUwbAzimuthOffsetDeg;
+  return cfgUwbAzimuthFlip ? -deg : deg;
+}
+
+void resetUwbFrontSamples() {
+  uwbRange.frontSamples = 0;
+  uwbRange.frontSumDeg = 0.0;
+  uwbRange.frontSumSqDeg = 0.0;
+}
+
+void startUwbFrontCalibration() {
+  resetUwbFrontSamples();
+  uwbRange.frontRejected = 0;
+  uwbRange.frontCalibrating = true;
+  uwbRange.frontStartedMs = millis();
+  cmdReply("UWB 정면 맞추기 시작: 지팡이를 든 사람이 차 정면 2~3 m에 가만히 서 있을 것 (%u회 수집)",
+           (unsigned)UWB_FRONT_REQUIRED_SAMPLES);
+}
+
+void clearUwbFrontCalibration() {
+  cfgUwbAzimuthOffsetDeg = 0.0f;
+  uwbRange.frontCalibrated = false;
+  uwbRange.frontCalibrating = false;
+  resetUwbFrontSamples();
+  if (tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+    tuningPrefs.remove("uwbazoff");
+    tuningPrefs.remove("uwbfront");
+    tuningPrefs.end();
+  }
+}
+
+// 새 각도가 들어올 때마다(parseUwbLine) 호출한다.
+void addUwbFrontSample() {
+  if (!uwbRange.frontCalibrating) return;
+  if (!uwbAngleIsValid(millis())) {
+    uwbRange.frontRejected++;
+    return;
+  }
+  double deg = uwbRange.azimuthDeg;
+  uwbRange.frontSumDeg += deg;
+  uwbRange.frontSumSqDeg += deg * deg;
+  uwbRange.frontSamples++;
+  if (uwbRange.frontSamples < UWB_FRONT_REQUIRED_SAMPLES) return;
+
+  double n = uwbRange.frontSamples;
+  double mean = uwbRange.frontSumDeg / n;
+  double variance = uwbRange.frontSumSqDeg / n - mean * mean;
+  float spread = (float)sqrt(variance > 0.0 ? variance : 0.0);
+  if (spread > UWB_FRONT_MAX_SPREAD_DEG) {
+    cmdReply("UWB 정면 맞추기: 각도가 %.1f도 흔들려 다시 모음 (가만히 서 있을 것)", spread);
+    resetUwbFrontSamples();
+    return;
+  }
+  if (fabs(mean) > UWB_FRONT_MAX_OFFSET_DEG) {
+    uwbRange.frontCalibrating = false;
+    resetUwbFrontSamples();
+    cmdReply("UWB 정면 맞추기 실패: 평균 %+.1f도라 정면이 아님 (차 정면에 서서 다시)",
+             (float)mean);
+    return;
+  }
+
+  cfgUwbAzimuthOffsetDeg = (float)mean;
+  uwbRange.frontCalibrated = true;
+  uwbRange.frontCalibrating = false;
+  resetUwbFrontSamples();
+  if (tuningPrefs.begin(TUNING_NVS_NAMESPACE, false)) {
+    tuningPrefs.putFloat("uwbazoff", cfgUwbAzimuthOffsetDeg);
+    tuningPrefs.putBool("uwbfront", true);
+    tuningPrefs.end();
+  } else {
+    cmdReply("UWB 정면 보정값 저장 실패 (재부팅하면 사라짐)");
+  }
+  cmdReply("UWB 정면 맞추기 완료: 보정 %+.1f도, 흔들림 %.1f도 (자동저장)",
+           cfgUwbAzimuthOffsetDeg, spread);
 }
 
 float medianUwbWindow() {
@@ -2310,6 +2412,7 @@ void parseUwbLine(char *line) {
           : 255;
         uwbRange.lastAngleMs = millis();
         uwbRange.angleCount++;
+        addUwbFrontSample();
       }
     }
 
@@ -2353,6 +2456,18 @@ void updateUwb() {
     cmdReply("UWB 보정 시간초과: %u/%u회 수신 (배선/CDK ranging 상태 확인)",
              (unsigned)uwbRange.calibrationSamples,
              (unsigned)UWB_CAL_REQUIRED_SAMPLES);
+  }
+
+  if (uwbRange.frontCalibrating &&
+      millis() - uwbRange.frontStartedMs > UWB_FRONT_TIMEOUT_MS) {
+    uwbRange.frontCalibrating = false;
+    cmdReply("UWB 정면 맞추기 시간초과: 쓸 수 있는 각도 %u/%u회, 버린 각도 %u회 (%s)",
+             (unsigned)uwbRange.frontSamples,
+             (unsigned)UWB_FRONT_REQUIRED_SAMPLES,
+             (unsigned)uwbRange.frontRejected,
+             uwbRange.frontRejected > uwbRange.frontSamples
+               ? "신뢰도 낮음·가림·쉴드 ±60° 밖" : "각도가 계속 흔들림");
+    resetUwbFrontSamples();
   }
 #endif
 }
@@ -2401,6 +2516,7 @@ void loadTuningFromFlash() {
     restored++;
   }
   uwbRange.calibrated = tuningPrefs.getBool("uwbcal", false);
+  uwbRange.frontCalibrated = tuningPrefs.getBool("uwbfront", false);
   tuningPrefs.end();
 
   if (restored > 0) {
@@ -2418,6 +2534,7 @@ void saveTuningToFlash() {
     tuningPrefs.putFloat(tuningParams[i].name, readTuningValue(i));
   }
   tuningPrefs.putBool("uwbcal", uwbRange.calibrated);
+  tuningPrefs.putBool("uwbfront", uwbRange.frontCalibrated);
   tuningPrefs.end();
   cmdReply("현재 설정 %u개를 플래시에 저장 (전원 껐다 켜도 유지)",
            (unsigned)tuningParamCount);
@@ -2433,6 +2550,8 @@ void restoreTuningDefaults() {
   }
   uwbRange.calibrated = false;
   uwbRange.calibrating = false;
+  uwbRange.frontCalibrated = false;
+  uwbRange.frontCalibrating = false;
   cmdReply("코드에 적힌 기본값으로 되돌리고 플래시 저장분도 삭제");
 }
 
@@ -2471,6 +2590,8 @@ void reportTuningHelp() {
   cmdReply("uwb cal <m> 알고 있는 거리에서 100회 자동보정");
   cmdReply("uwb stop    진행 중인 UWB 보정 취소");
   cmdReply("uwb reset   UWB 오프셋/보정 저장값 삭제");
+  cmdReply("uwb front   차 정면에 선 사람 기준으로 각도 0° 맞추기 (처음 한 번, 자동저장)");
+  cmdReply("uwb front 0 UWB 정면 보정값 삭제");
   cmdReply("imu / imusave / imureset / imualign <0~359.9>");
 }
 
@@ -2510,8 +2631,9 @@ bool runUwbCommand(String line) {
              cfgUwbOffsetM,
              (unsigned long)cfgUwbRiskEnabled);
     if (uwbRange.hasAngle) {
-      cmdReply("UWB angle valid=%u azimuth=%+.1fdeg fom=%u nlos=%u count=%lu (minfom=%lu)",
+      cmdReply("UWB angle valid=%u car=%+.1fdeg raw=%+.1fdeg fom=%u nlos=%u count=%lu (minfom=%lu)",
                uwbAngleIsValid(millis()) ? 1u : 0u,
+               uwbAzimuthCarDeg(),
                uwbRange.azimuthDeg,
                (unsigned)uwbRange.azimuthFom,
                (unsigned)uwbRange.nlos,
@@ -2520,6 +2642,13 @@ bool runUwbCommand(String line) {
     } else {
       cmdReply("UWB angle 없음 (C33 브리지가 각도를 안 보내거나 DWM3001CDK 사용 중)");
     }
+    cmdReply("UWB front calibrated=%u calibrating=%u progress=%u/%u offset=%+.1fdeg flip=%lu",
+             uwbRange.frontCalibrated ? 1u : 0u,
+             uwbRange.frontCalibrating ? 1u : 0u,
+             (unsigned)uwbRange.frontSamples,
+             (unsigned)UWB_FRONT_REQUIRED_SAMPLES,
+             cfgUwbAzimuthOffsetDeg,
+             (unsigned long)cfgUwbAzimuthFlip);
     return true;
   }
 
@@ -2541,7 +2670,22 @@ bool runUwbCommand(String line) {
 
   if (sub == "stop") {
     uwbRange.calibrating = false;
+    uwbRange.frontCalibrating = false;
     cmdReply("UWB 보정 취소");
+    return true;
+  }
+
+  if (sub == "front") {
+    if (value == "0") {
+      clearUwbFrontCalibration();
+      cmdReply("UWB 정면 보정값 삭제 (보정 0도)");
+      return true;
+    }
+    if (!uwbRange.hasAngle) {
+      cmdReply("UWB 각도가 안 들어옴: C33 브리지 V5가 각도를 보내는지 먼저 확인");
+      return true;
+    }
+    startUwbFrontCalibration();
     return true;
   }
 
@@ -4272,6 +4416,7 @@ void sendUdpTelemetry() {
       "UWB유효:%u\nUWB보정거리:%.3f\nUWB원시거리:%.3f\nUWB접근속도:%.3f\n"
       "UWB경과ms:%ld\nUWB보정:%u\n"
       "UWB각도유효:%u\nUWB각도:%.1f\nUWB각도신뢰:%u\nUWB가림:%u\n"
+      "UWB정면보정:%u\nUWB정면보정중:%u\nUWB정면표본:%u\n"
       "RSSI원시:%d\nRSSI평활:%.1f\nRSSI경과ms:%ld\n"
       "RSU위험:%u\nRSU위험경과ms:%ld\n송신:%lu\n지팡이수신:%lu\n"
       "부팅횟수:%lu\n리셋원인:%s\n",
@@ -4287,9 +4432,12 @@ void sendUdpTelemetry() {
       uwbIsFresh(telemetryMs) ? 1u : 0u, uwbRange.filteredDistanceM,
       uwbRange.rawDistanceM, uwbRange.closingSpeedMps,
       uwbAgeMs, uwbRange.calibrated ? 1u : 0u,
-      uwbAngleIsValid(telemetryMs) ? 1u : 0u, uwbRange.azimuthDeg,
+      uwbAngleIsValid(telemetryMs) ? 1u : 0u, uwbAzimuthCarDeg(),
       (unsigned)uwbRange.azimuthFom,
       uwbRange.hasAngle ? (unsigned)uwbRange.nlos : 255u,
+      uwbRange.frontCalibrated ? 1u : 0u,
+      uwbRange.frontCalibrating ? 1u : 0u,
+      (unsigned)uwbRange.frontSamples,
       (int)rssiRawSnapshot, rssiFilteredSnapshot, rssiAgeMs,
       (unsigned)lastRsuRiskLevel, rsuAgeMs, (unsigned long)sendCount,
       (unsigned long)caneRxCount,
@@ -4391,8 +4539,12 @@ void sendUdpTelemetry() {
     // V5에서 추가된 값 (상세 모드에도 같은 이름으로 보낸다)
     "UWB각도유효:%u\n"
     "UWB각도:%.1f\n"
+    "UWB원시각도:%.1f\n"
     "UWB각도신뢰:%u\n"
     "UWB가림:%u\n"
+    "UWB정면보정:%u\n"
+    "UWB정면보정중:%u\n"
+    "UWB정면표본:%u\n"
     "IMU보정:%u/%u/%u/%u\n"
     "IMU정렬:%u\n"
     "RSU위험:%u\n"
@@ -4482,9 +4634,13 @@ void sendUdpTelemetry() {
     (unsigned long)uwbSendCount,
     (unsigned long)riskSendCount,
     uwbAngleIsValid(telemetryMs) ? 1u : 0u,
+    uwbAzimuthCarDeg(),
     uwbRange.azimuthDeg,
     (unsigned)uwbRange.azimuthFom,
     uwbRange.hasAngle ? (unsigned)uwbRange.nlos : 255u,
+    uwbRange.frontCalibrated ? 1u : 0u,
+    uwbRange.frontCalibrating ? 1u : 0u,
+    (unsigned)uwbRange.frontSamples,
     imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
     imuHeadingAligned ? 1u : 0u,
     (unsigned)lastRsuRiskLevel,
