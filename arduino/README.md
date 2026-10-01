@@ -2,6 +2,15 @@
 
 Arduino IDE에서 각 폴더를 열어 업로드합니다. 폴더 이름과 `.ino` 파일 이름이 같아야 Arduino 스케치로 인식됩니다.
 
+## car_firmware / cane_firmware
+
+차량·지팡이 노드 펌웨어를 버전별로 모아 둔 폴더입니다(예전 이름 `car_bt_debug`, `cane_bt_debug`).
+
+- `car_firmware`: 차량 ESP32 `car_debug_V2`~`V5`, V5 차량 UWB(Portenta C33 + UWB Shield) `c33_uwb_bridge_V5.ino`
+- `cane_firmware`: 지팡이 ESP32 `cane_debug_V2`~`V5`, V5 지팡이 UWB(Arduino Stella) `stella_uwb_responder_V5.ino`
+- 한 폴더에 여러 버전이 있으므로, 쓸 `.ino` 하나를 같은 이름의 폴더에 넣어 엽니다(예: `car_debug_V5/car_debug_V5.ino`).
+- V5 조립·보정 순서: `V5_BRINGUP_AND_CALIBRATION.md`
+
 ## 01_sender_gps_imu_espnow
 
 송신기 ESP32용 코드입니다.

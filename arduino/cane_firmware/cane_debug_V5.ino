@@ -155,6 +155,19 @@
 #define CANE_HEADING_FILTER_TAU_S 0.80f
 #define CANE_HEADING_VALID_TIMEOUT_MS 1500UL
 
+// 지팡이 버튼(GPIO33) 2초 = 걸어서 방향 정렬.
+// 보행자가 앞을 보고 버튼을 누른 뒤 그대로 똑바로 걸으면, GPS 진행방향(북쪽 기준)과
+// IMU 방위를 GPS 표본마다 짝지어 평균내고 그 차이를 장착 보정값(head_off)으로 저장한다.
+// 그 뒤 IMU방향 = 보행자가 향한 실제 방위. 좌우 스윙은 1초 저역통과와 여러 걸음 평균으로 상쇄.
+#define WALK_ALIGN_HOLD_MS 2000UL
+#define WALK_ALIGN_MIN_SPEED_MPS 0.60f        // GPS 정지 잡음(최대 0.38 m/s)보다 크게
+#define WALK_ALIGN_MIN_SAMPLES 20             // 5 Hz면 약 4초 걷기
+#define WALK_ALIGN_MAX_SAMPLES 60             // 이만큼 모아도 퍼짐이 크면 처음부터 다시
+#define WALK_ALIGN_MIN_RESULTANT 0.95f        // 짝 차이의 퍼짐 약 18도 이내
+#define WALK_ALIGN_MAX_COURSE_STEP_DEG 25.0f  // 한 표본 사이에 이만큼 꺾이면 그 표본은 버림
+#define WALK_ALIGN_TIMEOUT_MS 60000UL
+#define WALK_ALIGN_RAW_LP_TAU_S 1.0f
+
 // ===== 차량 상태만 받을 때 사용하는 예비 CPA 위험판정 =====
 // 차량이 RSSI+상대GPS로 직접 판정하므로 지팡이의 GPS 단독 fallback은 끈다.
 // 이 값을 1로 바꾸면 예전 GPS 단독 예비판정을 다시 사용할 수 있다.
@@ -674,6 +687,28 @@ uint32_t lastCaneHeadingAcceptedMs = 0;
 uint32_t caneHeadingAcceptedCount = 0;
 uint32_t caneHeadingRejectedCount = 0;
 
+// 걸어서 방향 정렬(버튼·imuwalk) 상태.
+bool walkAlignActive = false;
+uint32_t walkAlignStartedMs = 0;
+uint32_t walkAlignLastLogMs = 0;
+uint16_t walkAlignSamples = 0;
+float walkAlignSumSin = 0.0f;
+float walkAlignSumCos = 0.0f;
+float walkAlignLastCourseDeg = -1.0f;
+uint16_t walkAlignNoGps = 0;   // 표본을 못 쓴 이유별 횟수(실패 안내용)
+uint16_t walkAlignSlow = 0;
+uint16_t walkAlignImuLow = 0;
+// IMU 원시 방위의 저역통과(sin/cos 평균). 걷는 중 좌우 스윙을 평균낸다.
+float imuRawLpSin = 0.0f;
+float imuRawLpCos = 1.0f;
+bool imuRawLpReady = false;
+uint32_t imuRawLpLastMs = 0;
+// 버튼 확인 신호(진동+부저). 위험 경보가 켜져 있으면 경보가 우선한다.
+uint8_t feedbackPulses = 0;
+uint16_t feedbackOnMs = 0;
+uint16_t feedbackOffMs = 0;
+uint32_t feedbackStartMs = 0;
+
 // UDP 진단용 마지막 방향 판정값.
 float caneHeadingAccelNorm = 0.0f;
 float caneHeadingGyroNorm = 0.0f;
@@ -754,6 +789,20 @@ void updateActuators() {
 
     motorOn = phaseMs < DANGER_MOTOR_ON_MS;
     buzzerOn = phaseMs < DANGER_BUZZER_ON_MS;
+  }
+
+  // 버튼 확인 신호. 위험 경보 중에는 내지 않는다(경보가 항상 우선).
+  if (feedbackPulses > 0) {
+    uint32_t periodMs = (uint32_t)feedbackOnMs + feedbackOffMs;
+    uint32_t feedbackElapsedMs = millis() - feedbackStartMs;
+    if (periodMs == 0 || feedbackElapsedMs >= periodMs * feedbackPulses) {
+      feedbackPulses = 0;
+    } else if (currentRisk != RISK_CAUTION && currentRisk != RISK_WARNING &&
+               currentRisk != RISK_DANGER) {
+      bool pulseOn = feedbackElapsedMs % periodMs < feedbackOnMs;
+      motorOn = pulseOn;
+      buzzerOn = pulseOn;
+    }
   }
 
   // SAFE이거나 잘못된 위험 단계면 둘 다 false 상태로 유지.
@@ -990,13 +1039,15 @@ void resetImuCalibration() {
   imuHeadingAligned = false;
   imuHeadingOffsetDeg = 0.0f;
   caneImuHeadingHasFix = false;
+  walkAlignActive = false;
+  resetWalkAlignSamples();
 }
 
-bool alignImuHeading(float trueHeadingDeg) {
-  if (!imuReady || lastImuSampleMs == 0 || !isfinite(trueHeadingDeg)) return false;
-  imuHeadingOffsetDeg = normalizeHeading(trueHeadingDeg - imuRawHeadingDeg);
+// 장착 보정값(IMU 원시 방위 → 실제 방위)을 적용하고 플래시에 저장한다.
+bool applyImuHeadingOffset(float offsetDeg, float currentRawDeg) {
+  imuHeadingOffsetDeg = normalizeHeading(offsetDeg);
   imuHeadingAligned = true;
-  caneImuHeadingDeg = normalizeHeading(trueHeadingDeg);
+  caneImuHeadingDeg = normalizeHeading(currentRawDeg + imuHeadingOffsetDeg);
   caneImuHeadingHasFix = true;
   lastCaneHeadingAcceptedMs = millis();
   Preferences prefs;
@@ -1007,11 +1058,170 @@ bool alignImuHeading(float trueHeadingDeg) {
   return true;
 }
 
+bool alignImuHeading(float trueHeadingDeg) {
+  if (!imuReady || lastImuSampleMs == 0 || !isfinite(trueHeadingDeg)) return false;
+  return applyImuHeadingOffset(trueHeadingDeg - imuRawHeadingDeg, imuRawHeadingDeg);
+}
+
+void startFeedback(uint8_t pulses, uint16_t onMs, uint16_t offMs) {
+  feedbackPulses = pulses;
+  feedbackOnMs = onMs;
+  feedbackOffMs = offMs;
+  feedbackStartMs = millis();
+}
+
+void updateImuRawLowPass(uint32_t now) {
+  float rad = imuRawHeadingDeg * DEG_TO_RAD;
+  if (!imuRawLpReady) {
+    imuRawLpSin = sinf(rad);
+    imuRawLpCos = cosf(rad);
+    imuRawLpReady = true;
+  } else {
+    float dt = constrain((now - imuRawLpLastMs) / 1000.0f, 0.001f, 0.5f);
+    float alpha = 1.0f - expf(-dt / WALK_ALIGN_RAW_LP_TAU_S);
+    imuRawLpSin += alpha * (sinf(rad) - imuRawLpSin);
+    imuRawLpCos += alpha * (cosf(rad) - imuRawLpCos);
+  }
+  imuRawLpLastMs = now;
+}
+
+float imuRawLowPassDeg() {
+  return normalizeHeading(atan2f(imuRawLpSin, imuRawLpCos) * RAD_TO_DEG);
+}
+
+void resetWalkAlignSamples() {
+  walkAlignSamples = 0;
+  walkAlignSumSin = 0.0f;
+  walkAlignSumCos = 0.0f;
+  walkAlignLastCourseDeg = -1.0f;
+}
+
+void startWalkAlignment() {
+  resetWalkAlignSamples();
+  walkAlignNoGps = 0;
+  walkAlignSlow = 0;
+  walkAlignImuLow = 0;
+  walkAlignActive = true;
+  walkAlignStartedMs = millis();
+  walkAlignLastLogMs = walkAlignStartedMs;
+  startFeedback(1, 150, 0);
+  cmdReply("방향 정렬 시작. 앞을 보고 그대로 똑바로 걸을 것(약 5초)");
+}
+
+void stopWalkAlignment(const char *reason) {
+  if (!walkAlignActive) return;
+  walkAlignActive = false;
+  resetWalkAlignSamples();
+  cmdReply("방향 정렬 중지 (%s). 기존 정렬값 유지", reason);
+}
+
+float walkAlignSpreadDeg(float resultant) {
+  return sqrtf(-2.0f * logf(fmaxf(resultant, 1e-6f))) * RAD_TO_DEG;
+}
+
+// GPS 표본마다 호출. GPS 진행방향과 스윙을 평균낸 IMU 방위의 차이를 모은다.
+void addWalkAlignmentSample(bool gpsOk, float speedMps, bool courseOk,
+                            float courseDeg) {
+  if (!walkAlignActive) return;
+
+  if (!gpsOk || !courseOk) {
+    walkAlignNoGps++;
+    walkAlignLastCourseDeg = -1.0f;
+    return;
+  }
+  if (speedMps < WALK_ALIGN_MIN_SPEED_MPS) {
+    walkAlignSlow++;
+    walkAlignLastCourseDeg = -1.0f;
+    return;
+  }
+  if (!imuReady || !imuRawLpReady || imuCalGyro < 2 || imuCalMag < 2 ||
+      millis() - lastImuSampleMs > 200UL) {
+    walkAlignImuLow++;
+    walkAlignLastCourseDeg = -1.0f;
+    return;
+  }
+
+  // 방향을 꺾는 중이면 저역통과한 IMU 방위가 늦게 따라오므로 그 표본은 버린다.
+  float courseStep = walkAlignLastCourseDeg < 0.0f ? 0.0f :
+    fabsf(fmodf(courseDeg - walkAlignLastCourseDeg + 540.0f, 360.0f) - 180.0f);
+  walkAlignLastCourseDeg = courseDeg;
+  if (courseStep > WALK_ALIGN_MAX_COURSE_STEP_DEG) return;
+
+  float diffRad = (courseDeg - imuRawLowPassDeg()) * DEG_TO_RAD;
+  walkAlignSumSin += sinf(diffRad);
+  walkAlignSumCos += cosf(diffRad);
+  walkAlignSamples++;
+
+  float resultant = sqrtf(walkAlignSumSin * walkAlignSumSin +
+                          walkAlignSumCos * walkAlignSumCos) / walkAlignSamples;
+  if (walkAlignSamples >= WALK_ALIGN_MIN_SAMPLES &&
+      resultant >= WALK_ALIGN_MIN_RESULTANT) {
+    float offsetDeg = atan2f(walkAlignSumSin, walkAlignSumCos) * RAD_TO_DEG;
+    uint16_t used = walkAlignSamples;
+    walkAlignActive = false;
+    resetWalkAlignSamples();
+    bool saved = applyImuHeadingOffset(offsetDeg, imuRawLowPassDeg());
+    startFeedback(2, 150, 150);
+    cmdReply("방향 정렬 완료: 보정 %.1f도, 퍼짐 %.1f도, 표본 %u개%s",
+             normalizeHeading(offsetDeg), walkAlignSpreadDeg(resultant),
+             (unsigned)used, saved ? "" : " (플래시 저장 실패)");
+    return;
+  }
+  if (walkAlignSamples >= WALK_ALIGN_MAX_SAMPLES) {
+    cmdReply("방향 정렬: 걸음이 곧지 않아 다시 모음 (퍼짐 %.0f도)",
+             walkAlignSpreadDeg(resultant));
+    resetWalkAlignSamples();
+  }
+}
+
+// loop마다 호출: 버튼 2초 누름 → 걸어서 방향 정렬, 시간 초과 처리.
+void handleCaneButton() {
+  // 실수로 스쳐 눌러 정렬이 바뀌지 않게, 2초 넘게 누를 때만 한 번 시작한다.
+  // 정렬 중에 다시 2초 누르면 처음부터 다시 모은다.
+  static uint32_t buttonDownSinceMs = 0;
+  static bool buttonFired = false;
+  uint32_t now = millis();
+
+  bool buttonPressed = digitalRead(BUTTON_PIN) == LOW;
+  if (!buttonPressed) {
+    buttonDownSinceMs = 0;
+    buttonFired = false;
+  } else if (buttonDownSinceMs == 0) {
+    buttonDownSinceMs = now;
+  } else if (!buttonFired && now - buttonDownSinceMs >= WALK_ALIGN_HOLD_MS) {
+    buttonFired = true;
+    Serial.println("[BUTTON] 2초 누름 → 걸어서 방향 정렬 시작");
+    startWalkAlignment();
+  }
+
+  if (!walkAlignActive) return;
+  if (now - walkAlignStartedMs > WALK_ALIGN_TIMEOUT_MS) {
+    walkAlignActive = false;
+    resetWalkAlignSamples();
+    startFeedback(1, 1000, 0);
+    const char *reason = "걸음이 곧지 않음";
+    uint16_t most = 0;
+    if (walkAlignNoGps > most) { most = walkAlignNoGps; reason = "GPS 없음(실외에서 할 것)"; }
+    if (walkAlignSlow > most) { most = walkAlignSlow; reason = "걷는 속도 부족(0.6 m/s 이상)"; }
+    if (walkAlignImuLow > most) { most = walkAlignImuLow; reason = "IMU 자이로·자력계 보정 부족(G·M 2 이상)"; }
+    cmdReply("방향 정렬 실패: %s. 기존 정렬값 유지", reason);
+    return;
+  }
+  if (now - walkAlignLastLogMs >= 2000UL) {
+    walkAlignLastLogMs = now;
+    Serial.printf("[ALIGN] 표본 %u/%u, GPS없음 %u, 느림 %u, IMU부족 %u\n",
+                  (unsigned)walkAlignSamples, (unsigned)WALK_ALIGN_MIN_SAMPLES,
+                  (unsigned)walkAlignNoGps, (unsigned)walkAlignSlow,
+                  (unsigned)walkAlignImuLow);
+  }
+}
+
 void reportImuStatus() {
-  cmdReply("IMU ready=%u cal S/G/A/M=%u/%u/%u/%u offsets=%u aligned=%u raw=%.1f heading=%.1f offset=%.1f",
+  cmdReply("IMU ready=%u cal S/G/A/M=%u/%u/%u/%u offsets=%u aligned=%u raw=%.1f heading=%.1f offset=%.1f walk=%u n=%u",
            imuReady ? 1u : 0u, imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
            imuOffsetsRestored ? 1u : 0u, imuHeadingAligned ? 1u : 0u,
-           imuRawHeadingDeg, caneImuHeadingDeg, imuHeadingOffsetDeg);
+           imuRawHeadingDeg, caneImuHeadingDeg, imuHeadingOffsetDeg,
+           walkAlignActive ? 1u : 0u, (unsigned)walkAlignSamples);
 }
 
 void setupImu() {
@@ -1082,8 +1292,12 @@ void readGps() {
       rawSpeed <= cfgGpsMaxSpeed;
     bool courseOk = rawGpsCourseValid;
     bool velocityOk = speedOk && courseOk;
+    bool qualityOk = locationOk && gpsQualityIsGood();
 
-    if (!locationOk || !gpsQualityIsGood()) {
+    addWalkAlignmentSample(qualityOk && speedOk, rawSpeed, courseOk,
+                           rawGpsCourseDeg);
+
+    if (!qualityOk) {
       gpsQualityRejectedCount++;
       Serial.printf(
         "[GPS FILTER] quality rejected sats=%lu hdop=%.2f\n",
@@ -1219,6 +1433,7 @@ void readImu() {
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
   lastGyroX = gyro.x(); lastGyroY = gyro.y(); lastGyroZ = gyro.z();
   imuRawHeadingDeg = normalizeHeading(euler.x());
+  updateImuRawLowPass(now);
 
   static uint32_t lastSlowImuReadMs = 0;
   if (lastSlowImuReadMs == 0 || now - lastSlowImuReadMs >= IMU_SLOW_INTERVAL_MS) {
@@ -1891,6 +2106,7 @@ void sendUdpTelemetry() {
       "GPS유효:%u\n위도:%.6f\n경도:%.6f\n속도:%.2f\n"
       "GPS위성:%lu\nGPS_HDOP:%.2f\nGPS복구횟수:%lu\n"
       "방향:%.1f\nIMU방향유효:%u\nIMU방향:%.1f\nIMU보정:%u/%u/%u/%u\nIMU정렬:%u\n"
+      "IMU정렬중:%u\nIMU정렬표본:%u\n"
       "UWB유효:%u\nUWB보정:%u\nUWB보정거리:%.3f\nUWB원시거리:%.3f\n"
       "UWB접근속도:%.3f\nUWB경과ms:%ld\n"
       "RSSI원시:%d\nRSSI평활:%.1f\nRSSI경과ms:%ld\n"
@@ -1905,6 +2121,7 @@ void sendUdpTelemetry() {
       caneHeadingIsFresh() ? 1u : 0u, caneImuHeadingDeg,
       imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
       imuHeadingAligned ? 1u : 0u,
+      walkAlignActive ? 1u : 0u, (unsigned)walkAlignSamples,
       uwbFreshSnapshot && (uwbSnapshot.flags & 0x01) ? 1u : 0u,
       (uwbSnapshot.flags & 0x02) ? 1u : 0u,
       uwbSnapshot.distance_m, uwbSnapshot.raw_distance_m,
@@ -1987,7 +2204,9 @@ void sendUdpTelemetry() {
     "UWB수신:%lu\n"
     // V5에서 추가된 값 (상세 모드에도 같은 이름으로 보낸다)
     "IMU보정:%u/%u/%u/%u\n"
-    "IMU정렬:%u\n",
+    "IMU정렬:%u\n"
+    "IMU정렬중:%u\n"
+    "IMU정렬표본:%u\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     (unsigned long)caneBootCount,
@@ -2048,7 +2267,9 @@ void sendUdpTelemetry() {
     uwbAgeMs,
     (unsigned long)uwbRxCountSnapshot,
     imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
-    imuHeadingAligned ? 1u : 0u
+    imuHeadingAligned ? 1u : 0u,
+    walkAlignActive ? 1u : 0u,
+    (unsigned)walkAlignSamples
   );
 
   if (written <= 0) return;
@@ -2184,9 +2405,18 @@ bool runDeviceCommand(const String &name, bool hasValue, float number) {
     cmdReply("IMU 저장 보정/방향 정렬값 삭제 (재부팅 후 다시 보정)");
     return true;
   }
+  if (name == "imuwalk") {
+    if (hasValue && number == 0.0f) {
+      if (walkAlignActive) stopWalkAlignment("명령");
+      else cmdReply("방향 정렬 중이 아님");
+    } else {
+      startWalkAlignment();
+    }
+    return true;
+  }
   if (name == "imualign") {
     if (!hasValue || number < 0.0f || number >= 360.0f) {
-      cmdReply("사용법: imualign <실제 지팡이방향 0~359.9도>");
+      cmdReply("사용법: imualign <보행자가 향한 실제 방위 0~359.9도> (걸어서 자동은 imuwalk 또는 버튼 2초)");
     } else {
       cmdReply(alignImuHeading(number) ? "IMU 지팡이방향 정렬/저장 완료" :
                                         "IMU 정렬 실패: 센서 샘플을 기다릴 것");
@@ -2402,6 +2632,7 @@ void reportTuningHelp() {
   cmdReply("== 지팡이 전용 ==");
   cmdReply("test <0-3>  진동/부저 5초 테스트 (0=중지)");
   cmdReply("imu / imusave / imureset / imualign <0~359.9>");
+  cmdReply("imuwalk     걸어서 방향 정렬 (= 버튼 2초, imuwalk 0 = 중지)");
 }
 
 void runTuningCommand(String line) {
@@ -2573,6 +2804,7 @@ void setup() {
 void loop() {
   handleCaneSerialCommands();
   handleUdpCommands();
+  handleCaneButton();
 
   // 현재 위험 단계에 맞춰 진동과 부저 패턴을 계속 갱신.
   updateActuators();
