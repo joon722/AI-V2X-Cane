@@ -43,8 +43,12 @@
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define BNO055_I2C_ADDRESS 0x28
-#define BNO_USE_EXTERNAL_CRYSTAL 1
+// CJMCU-055 보드에 32.768kHz 외부 크리스털을 납땜했을 때만 1.
+// (크리스털은 보드와 따로 들어 있다. 안 달았는데 1이면 동작이 불안정할 수 있다)
+#define BNO_USE_EXTERNAL_CRYSTAL 0
 #define IMU_SAMPLE_INTERVAL_MS 10UL
+// 가속도·자력계·보정상태는 이 주기로만 읽어 I2C(100kHz) 점유를 줄인다.
+#define IMU_SLOW_INTERVAL_MS 100UL
 
 // Active LOW buzzer, Active HIGH vibration motor.
 #define BUZZER_ON LOW
@@ -893,13 +897,29 @@ bool configureMgF10FiveHz() {
   return ok;
 }
 
+// GPS L5 위성 신호는 아직 '시험 운용(unhealthy)'으로 방송돼서 그대로는 안 쓴다.
+// NEO-F10N 통합 매뉴얼 예제대로 L5를 켜고 건강상태를 L1 기준으로 덮어쓴다.
+// 알 수 없는 키가 섞이면 메시지 전체가 거절되므로 5Hz 설정과 따로 보낸다.
+// 신호 설정을 바꾸면 GNSS가 잠깐 재시작하므로 5Hz 설정보다 먼저 보낸다.
+bool configureMgF10L5() {
+  bool ok = gnss.newCfgValset(VAL_LAYER_RAM);
+  ok &= gnss.addCfgValset(UBLOX_CFG_SIGNAL_GPS_L5_ENA, 1);
+  ok &= gnss.addCfgValset(UBLOX_CFG_SIGNAL_GPS_L5_HEALTH_OVERRIDE, 1);
+  ok &= gnss.sendCfgValset(1200);
+  return ok;
+}
+
 void setupGps() {
 #if USE_GPS
   gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(300);
   bool gnssDetected = gnss.begin(gpsSerial, 1200);
+  bool gpsL5Configured = gnssDetected && configureMgF10L5();
+  if (gpsL5Configured) delay(600);  // GNSS 재시작 대기
   bool gps5HzConfigured = gnssDetected && configureMgF10FiveHz();
+  Serial.printf("[GPS] L5 enable+health override=%s\n",
+                gpsL5Configured ? "ACK" : "FAILED");
   Serial.printf(
     "[GPS] MG-F10/NEO-F10N detected=%u, 5Hz config=%s, GGA+RMC, 115200bps\n",
     gnssDetected ? 1u : 0u,
@@ -1132,9 +1152,11 @@ bool estimateCaneHeadingFromMeasuredModel(float *outHeadingDeg) {
   caneMagModelResidual = imuCalMag < 2 ? 999.0f : 0.0f;
   caneMagModelRadius = imuCalMag / 3.0f;
 
-  // 새 하드웨어는 BNO055 내부 센서융합 결과를 사용한다. 완전 보정값을
-  // 저장한 뒤 장착 방향까지 정렬해야 위험 예측에 방향값을 내보낸다.
-  if (!imuHeadingAligned || imuCalGyro < 2 || imuCalAccel < 2 || imuCalMag < 2) {
+  // 새 하드웨어는 BNO055 내부 센서융합 결과를 사용한다. 장착 방향까지
+  // 정렬해야 위험 예측에 방향값을 내보낸다. 방위는 자이로·자력계 보정도로
+  // 판단한다. 가속도 보정도(A)는 6방향 정지를 다시 해야 오르는데, 저장한
+  // 오프셋을 불러와도 재부팅 직후엔 낮게 보일 수 있어 조건에서 뺀다.
+  if (!imuHeadingAligned || imuCalGyro < 2 || imuCalMag < 2) {
     return false;
   }
   *outHeadingDeg = normalizeHeading(imuRawHeadingDeg + imuHeadingOffsetDeg);
@@ -1191,16 +1213,22 @@ void readImu() {
   if (!imuReady || now - lastImuReadAttemptMs < IMU_SAMPLE_INTERVAL_MS) return;
   lastImuReadAttemptMs = now;
 
-  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+  // 100kHz I2C에서 벡터 하나 읽는 데 약 1ms가 든다. 매 10ms에는 방위와
+  // 자이로만 읽고, 가속도·자력계·보정상태는 IMU_SLOW_INTERVAL_MS마다 읽는다.
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
-  imu::Vector<3> mag = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-  bno.getCalibration(&imuCalSystem, &imuCalGyro, &imuCalAccel, &imuCalMag);
-
-  lastAccelX = accel.x(); lastAccelY = accel.y(); lastAccelZ = accel.z();
   lastGyroX = gyro.x(); lastGyroY = gyro.y(); lastGyroZ = gyro.z();
-  lastMagX = mag.x(); lastMagY = mag.y(); lastMagZ = mag.z();
   imuRawHeadingDeg = normalizeHeading(euler.x());
+
+  static uint32_t lastSlowImuReadMs = 0;
+  if (lastSlowImuReadMs == 0 || now - lastSlowImuReadMs >= IMU_SLOW_INTERVAL_MS) {
+    lastSlowImuReadMs = now;
+    imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    imu::Vector<3> mag = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
+    bno.getCalibration(&imuCalSystem, &imuCalGyro, &imuCalAccel, &imuCalMag);
+    lastAccelX = accel.x(); lastAccelY = accel.y(); lastAccelZ = accel.z();
+    lastMagX = mag.x(); lastMagY = mag.y(); lastMagZ = mag.z();
+  }
   lastImuSampleMs = now;
 
   updateCaneHeading();
@@ -1855,20 +1883,34 @@ void sendUdpTelemetry() {
     uwbReceivedSnapshot && uwbAgeMs >= 0 && uwbAgeMs <= 1000L;
 
   if (cfgLogMode == 0) {
+    // 키 이름은 V4와 같게 둔다(뷰어 요약·기록 CSV가 이 이름을 쓴다).
     int essentialWritten = snprintf(
       udpBuffer, sizeof(udpBuffer),
-      "위험:%u\nGPS유효:%u\n위도:%.6f\n경도:%.6f\n속도:%.2f\n방향:%.1f\n"
-      "GPS위성:%lu\nGPS_HDOP:%.2f\nIMU보정:%u/%u/%u/%u\nIMU정렬:%u\n"
-      "UWB유효:%u\nUWB보정거리:%.3f\nUWB경과ms:%ld\nRSSI원시:%d\nRSSI경과ms:%ld\n"
-      "RSU위험:%u\nRSU위험경과ms:%ld\n부팅횟수:%lu\n리셋원인:%s\n",
-      currentRisk == 255 ? 0 : currentRisk, lastGpsValid, lastLat, lastLng,
-      lastSpeed, caneHeadingIsFresh() ? caneImuHeadingDeg : 0.0f,
+      "시각ms:%lu\n위험:%u\n차량위험:%u\n차량위험경과ms:%ld\n"
+      "RSU위험:%u\nRSU위험경과ms:%ld\n"
+      "GPS유효:%u\n위도:%.6f\n경도:%.6f\n속도:%.2f\n"
+      "GPS위성:%lu\nGPS_HDOP:%.2f\nGPS복구횟수:%lu\n"
+      "방향:%.1f\nIMU방향유효:%u\nIMU방향:%.1f\nIMU보정:%u/%u/%u/%u\nIMU정렬:%u\n"
+      "UWB유효:%u\nUWB보정:%u\nUWB보정거리:%.3f\nUWB원시거리:%.3f\n"
+      "UWB접근속도:%.3f\nUWB경과ms:%ld\n"
+      "RSSI원시:%d\nRSSI평활:%.1f\nRSSI경과ms:%ld\n"
+      "송신:%lu\n차량수신:%lu\n부팅횟수:%lu\n리셋원인:%s\n",
+      (unsigned long)telemetryMs,
+      currentRisk == 255 ? 0 : currentRisk,
+      vehicleRiskLevel, vehicleRiskAgeMs, rsuRiskLevel, rsuRiskAgeMs,
+      lastGpsValid, lastLat, lastLng, lastSpeed,
       (unsigned long)rawGpsSatellites, rawGpsHdop,
+      (unsigned long)gps5HzRecoveryCount,
+      caneHeadingIsFresh() ? caneImuHeadingDeg : 0.0f,
+      caneHeadingIsFresh() ? 1u : 0u, caneImuHeadingDeg,
       imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
       imuHeadingAligned ? 1u : 0u,
       uwbFreshSnapshot && (uwbSnapshot.flags & 0x01) ? 1u : 0u,
-      uwbSnapshot.distance_m, uwbAgeMs, (int)rssiRawSnapshot, rssiAgeMs,
-      rsuRiskLevel, rsuRiskAgeMs,
+      (uwbSnapshot.flags & 0x02) ? 1u : 0u,
+      uwbSnapshot.distance_m, uwbSnapshot.raw_distance_m,
+      uwbSnapshot.closing_speed_mps, uwbAgeMs,
+      (int)rssiRawSnapshot, rssiFilteredSnapshot, rssiAgeMs,
+      (unsigned long)sendCount, (unsigned long)vehicleRxCount,
       (unsigned long)caneBootCount, resetReasonName(caneResetReason)
     );
     if (essentialWritten <= 0) return;
@@ -1942,7 +1984,10 @@ void sendUdpTelemetry() {
     "UWB접근속도:%.3f\n"
     "UWB오프셋:%.3f\n"
     "UWB경과ms:%ld\n"
-    "UWB수신:%lu\n",
+    "UWB수신:%lu\n"
+    // V5에서 추가된 값 (상세 모드에도 같은 이름으로 보낸다)
+    "IMU보정:%u/%u/%u/%u\n"
+    "IMU정렬:%u\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     (unsigned long)caneBootCount,
@@ -2001,7 +2046,9 @@ void sendUdpTelemetry() {
     uwbSnapshot.closing_speed_mps,
     uwbSnapshot.offset_m,
     uwbAgeMs,
-    (unsigned long)uwbRxCountSnapshot
+    (unsigned long)uwbRxCountSnapshot,
+    imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
+    imuHeadingAligned ? 1u : 0u
   );
 
   if (written <= 0) return;

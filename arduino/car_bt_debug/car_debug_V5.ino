@@ -93,9 +93,12 @@ uint32_t lastUdpTelemetryMs = 0;
 #define IMU_SDA 21
 #define IMU_SCL 22
 #define BNO055_I2C_ADDRESS 0x28
-// CJMCU-055 보드에 32.768kHz 외부 크리스털이 장착되어 있으면 1.
-#define BNO_USE_EXTERNAL_CRYSTAL 1
+// CJMCU-055 보드에 32.768kHz 외부 크리스털을 납땜했을 때만 1.
+// (크리스털은 보드와 따로 들어 있다. 안 달았는데 1이면 동작이 불안정할 수 있다)
+#define BNO_USE_EXTERNAL_CRYSTAL 0
 #define IMU_SAMPLE_INTERVAL_MS 10UL
+// 가속도·자력계·보정상태는 이 주기로만 읽어 I2C(100kHz) 점유를 줄인다.
+#define IMU_SLOW_INTERVAL_MS 100UL
 
 #define UWB_RX 32       // ESP32 RX1 <- Portenta C33 D14/TX
 #define DFPLAYER_TX 27  // ESP32 TX1 -> DFPlayer RX
@@ -262,8 +265,10 @@ const char *V2X_AP_PASSWORD = "12345678";
 // 2026-08-08 울퉁불퉁한 노면/배치 중 비충돌 트리거 97.08m/s² 확인.
 // 실제 접근 주행 최대 피크는 42.95m/s²이었으며,
 // 비충돌 트리거에 약 13% 여유를 둔다.
-// BNO055 VECTOR_LINEARACCEL 기준 시작값. 실차 충격시험 후 조정한다.
-#define IMPACT_THRESHOLD_MPS2 30.0f
+// BNO055는 NDOF 융합모드에서 가속도 범위가 ±4g(약 39 m/s²)로 고정되어
+// 큰 충돌과 거친 노면이 모두 이 근처에서 잘린다(V4 정상 접근 주행 피크 42.95).
+// 그래서 실차 충격시험 전에는 300(사실상 끔)으로 둔다. 시험 후 impact 명령으로 조정.
+#define IMPACT_THRESHOLD_MPS2 300.0f
 #define IMPACT_COOLDOWN_MS 5000UL
 
 #define TRACK_CAUTION_FILE "/0001.mp3"
@@ -372,6 +377,8 @@ float cfgUwbFilterAlpha = 0.35f;
 uint32_t cfgUwbTimeoutMs = UWB_FRESH_TIMEOUT_MS;
 // 실물 검증 전에 기존 경고를 망치지 않도록 기본 0.
 uint32_t cfgUwbRiskEnabled = 0;
+// UWB 각도(AoA)를 '유효'로 볼 최소 신뢰도(0~100). 실물 각도시험 후 조정.
+uint32_t cfgUwbAngleMinFom = 50;
 
 #if USE_WEB_VIEWER
 // =====================
@@ -392,324 +399,8 @@ IPAddress caneNodeIp;
 bool caneNodeIpKnown = false;
 
 // ===WEB_PAGE_BEGIN=== (build_web_viewer.py 가 생성. 직접 고치지 말 것)
-static const char WEB_PAGE[] PROGMEM = R"HTMLPAGE(
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>V2X 듀얼 뷰어</title>
-<style>
-:root{--bg:#f4f5f7;--card:#fff;--line:#d8dbe0;--ink:#1a1c1f;--dim:#6b7280;
-      --ok:#1a7f37;--warn:#b8860b;--bad:#c62828;--accent:#1a56db}
-*{box-sizing:border-box;-webkit-text-size-adjust:100%}
-body{margin:0;padding:10px;background:var(--bg);color:var(--ink);
-     font:15px/1.45 -apple-system,"Apple SD Gothic Neo",sans-serif}
-h1{font-size:17px;margin:0 0 8px}
-h2{font-size:15px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
-.bar{background:var(--card);border:1px solid var(--line);border-radius:10px;
-     padding:8px 10px;margin-bottom:10px;display:flex;flex-wrap:wrap;
-     gap:8px;align-items:center}
-.grid{display:grid;grid-template-columns:1fr;gap:10px}
-@media(min-width:820px){.grid{grid-template-columns:1fr 1fr}}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:10px}
-table{width:100%;border-collapse:collapse;font-size:14px}
-td{padding:3px 4px;border-bottom:1px solid #eef0f3;
-   font-variant-numeric:tabular-nums}
-td.k{color:var(--dim);width:44%;word-break:keep-all}
-td.v{font-family:ui-monospace,Menlo,monospace}
-tr.chg td.v{background:#fff6d5}
-input,select,button{font:inherit;border-radius:8px;border:1px solid var(--line);
-                    padding:7px 10px;background:#fff;color:var(--ink)}
-input{flex:1;min-width:80px}
-button{background:var(--accent);color:#fff;border-color:transparent;
-       cursor:pointer;-webkit-appearance:none}
-button.sub{background:#eef1f6;color:var(--ink);border-color:var(--line)}
-button:active{opacity:.7}
-.row{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-.dot{width:9px;height:9px;border-radius:50%;background:#bbb;display:inline-block}
-.dot.on{background:var(--ok)}.dot.old{background:var(--warn)}
-.age{font-size:12px;color:var(--dim);font-weight:400}
-pre{background:#0f1115;color:#e6e8eb;border-radius:8px;padding:8px;
-    font:12px/1.4 ui-monospace,Menlo,monospace;height:230px;overflow:auto;
-    margin:0;white-space:pre-wrap;word-break:break-all}
-.rec{color:var(--bad);font-weight:600}
-a.dl{display:inline-block;background:var(--ok);color:#fff;text-decoration:none;
-     padding:7px 10px;border-radius:8px;margin:4px 4px 0 0;font-size:14px}
-</style>
-</head>
-<body>
-
-<h1>V2X 듀얼 뷰어 <span class="age" id="conn"></span></h1>
-
-<div class="bar">
-  <input id="recName" placeholder="기록 이름 (예: 직선접근1)">
-  <button id="recBtn" onclick="toggleRecord()">기록 시작</button>
-  <span id="recInfo" class="age">기록 안 함</span>
-  <span style="flex:1"></span>
-  <select id="interval" onchange="restartTimer()">
-    <option value="200">0.2초</option>
-    <option value="500" selected>0.5초</option>
-    <option value="1000">1초</option>
-  </select>
-</div>
-<div id="dlBox"></div>
-
-<div class="grid">
-  <section>
-    <h2><span class="dot" id="dotCar"></span>차량<span class="age" id="ageCar"></span></h2>
-    <table id="tblCar"></table>
-    <div class="row">
-      <input id="cmdCar" placeholder="명령 (예: alpha 0.25)"
-             autocapitalize="off" autocorrect="off" spellcheck="false">
-      <button onclick="send('car')">전송</button>
-    </div>
-    <div class="row">
-      <button class="sub" onclick="quick('car','get')">get</button>
-      <button class="sub" onclick="quick('car','help')">help</button>
-      <button class="sub" onclick="quick('car','save')">save</button>
-      <button class="sub" onclick="quick('car','reset')">reset</button>
-      <button class="sub" onclick="quick('car','play 3')">음성</button>
-    </div>
-  </section>
-
-  <section>
-    <h2><span class="dot" id="dotCane"></span>지팡이<span class="age" id="ageCane"></span></h2>
-    <table id="tblCane"></table>
-    <div class="row">
-      <input id="cmdCane" placeholder="명령 (예: alpha 0.25)"
-             autocapitalize="off" autocorrect="off" spellcheck="false">
-      <button onclick="send('cane')">전송</button>
-    </div>
-    <div class="row">
-      <button class="sub" onclick="quick('cane','get')">get</button>
-      <button class="sub" onclick="quick('cane','help')">help</button>
-      <button class="sub" onclick="quick('cane','save')">save</button>
-      <button class="sub" onclick="quick('cane','reset')">reset</button>
-      <button class="sub" onclick="quick('cane','test 3')">진동</button>
-    </div>
-  </section>
-</div>
-
-<section style="margin-top:10px">
-  <h2>수신 로그
-    <button class="sub" onclick="paused=!paused" id="pauseBtn"
-            style="margin-left:auto;padding:4px 9px">일시정지</button>
-    <button class="sub" onclick="logLines=[];draw()"
-            style="padding:4px 9px">지우기</button>
-  </h2>
-  <pre id="log"></pre>
-</section>
-
-<script>
-var logLines = [], paused = false, timer = null;
-var prev = {car:{}, cane:{}};
-var recording = false, recStart = 0, recName = "";
-var recRows = {car:[], cane:[]}, recKeys = {car:[], cane:[]}, recLog = [];
-
-function esc(s){return String(s).replace(/[&<>]/g,function(c){
-  return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
-
-function stamp(){
-  var d = new Date();
-  return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+
-         ":"+("0"+d.getSeconds()).slice(-2);
-}
-
-function pushLog(line){
-  logLines.push(stamp()+"  "+line);
-  if (logLines.length > 600) logLines.splice(0, 200);
-  if (recording) recLog.push(stamp()+"  "+line);
-}
-
-function parseSections(text){
-  var out = {}, cur = null, lines = text.split("\n");
-  for (var i=0;i<lines.length;i++){
-    var l = lines[i];
-    if (l.indexOf("###") === 0){ cur = l.slice(3).trim(); out[cur] = []; continue; }
-    if (cur) out[cur].push(l);
-  }
-  return out;
-}
-
-function toPairs(lines){
-  var pairs = [];
-  for (var i=0;i<lines.length;i++){
-    var p = lines[i].indexOf(":");
-    if (p > 0) pairs.push([lines[i].slice(0,p), lines[i].slice(p+1)]);
-  }
-  return pairs;
-}
-
-function fillTable(id, node, pairs){
-  var html = "", changed = 0;
-  for (var i=0;i<pairs.length;i++){
-    var k = pairs[i][0], v = pairs[i][1];
-    var cls = (prev[node][k] !== undefined && prev[node][k] !== v) ? " class='chg'" : "";
-    if (cls) changed++;
-    prev[node][k] = v;
-    html += "<tr"+cls+"><td class='k'>"+esc(k)+"</td><td class='v'>"+esc(v)+"</td></tr>";
-  }
-  document.getElementById(id).innerHTML = html;
-  return changed;
-}
-
-function markAge(dotId, ageId, ms){
-  var dot = document.getElementById(dotId), age = document.getElementById(ageId);
-  if (ms < 0 || ms > 60000){ dot.className = "dot"; age.textContent = "수신 없음"; return false; }
-  dot.className = ms < 3000 ? "dot on" : "dot old";
-  age.textContent = (ms/1000).toFixed(1)+"초 전";
-  return true;
-}
-
-function recordRow(node, pairs){
-  if (!recording || !pairs.length) return;
-  var row = {"시각": stamp(),
-             "경과초": ((Date.now()-recStart)/1000).toFixed(3)};
-  for (var i=0;i<pairs.length;i++){
-    row[pairs[i][0]] = pairs[i][1];
-    if (recKeys[node].indexOf(pairs[i][0]) < 0) recKeys[node].push(pairs[i][0]);
-  }
-  recRows[node].push(row);
-}
-
-function refresh(){
-  fetch("/data", {cache:"no-store"}).then(function(r){return r.text();})
-  .then(function(text){
-    var s = parseSections(text);
-    var meta = {};
-    (s.META||[]).forEach(function(l){
-      var p = l.indexOf(":"); if (p>0) meta[l.slice(0,p)] = parseInt(l.slice(p+1),10);
-    });
-
-    var carOk = markAge("dotCar","ageCar", meta.carAge===undefined?-1:meta.carAge);
-    var caneOk = markAge("dotCane","ageCane", meta.caneAge===undefined?-1:meta.caneAge);
-    document.getElementById("conn").textContent =
-      (carOk?"차량 O":"차량 X") + " / " + (caneOk?"지팡이 O":"지팡이 X");
-
-    var carPairs = toPairs(s.CAR||[]), canePairs = toPairs(s.CANE||[]);
-    if (!paused){
-      fillTable("tblCar","car", carPairs);
-      fillTable("tblCane","cane", canePairs);
-    }
-    recordRow("car", carPairs);
-    recordRow("cane", canePairs);
-
-    if (!paused){
-      if (carPairs.length) pushLog("[차량] " + carPairs.map(function(p){
-        return p[0]+":"+p[1];}).join(" "));
-      if (canePairs.length) pushLog("[지팡이] " + canePairs.map(function(p){
-        return p[0]+":"+p[1];}).join(" "));
-    }
-    (s.REPLY||[]).forEach(function(l){ if (l.trim()) pushLog(l); });
-    draw();
-  })
-  .catch(function(){
-    document.getElementById("conn").textContent = "보드 연결 끊김";
-  });
-}
-
-function draw(){
-  var el = document.getElementById("log");
-  el.textContent = logLines.slice(-300).join("\n");
-  if (!paused) el.scrollTop = el.scrollHeight;
-  document.getElementById("pauseBtn").textContent = paused ? "재개" : "일시정지";
-  if (recording){
-    var sec = Math.floor((Date.now()-recStart)/1000);
-    document.getElementById("recInfo").innerHTML =
-      "<span class='rec'>기록 중 " + ("0"+Math.floor(sec/60)).slice(-2) + ":" +
-      ("0"+(sec%60)).slice(-2) + " (" +
-      (recRows.car.length + recRows.cane.length) + "행)</span>";
-  }
-}
-
-function send(target, text){
-  var el = document.getElementById(target === "car" ? "cmdCar" : "cmdCane");
-  if (text === undefined) text = el.value.trim();
-  if (!text) return;
-  pushLog("> [" + (target==="car"?"차량":"지팡이") + "] " + text);
-  if (recording) recLog.push(stamp()+"  > ["+target+"] "+text);
-  fetch("/cmd?target="+target+"&text="+encodeURIComponent(text))
-    .then(function(){ setTimeout(refresh, 250); });
-  if (el.value) el.value = "";
-  draw();
-}
-function quick(target, text){ send(target, text); }
-
-function toggleRecord(){
-  if (!recording){
-    recName = (document.getElementById("recName").value || "기록").trim();
-    recording = true; recStart = Date.now();
-    recRows = {car:[], cane:[]}; recKeys = {car:[], cane:[]}; recLog = [];
-    document.getElementById("recBtn").textContent = "기록 중지";
-    document.getElementById("dlBox").innerHTML = "";
-  } else {
-    recording = false;
-    document.getElementById("recBtn").textContent = "기록 시작";
-    document.getElementById("recInfo").textContent =
-      "기록 완료 — 아래 버튼으로 저장";
-    showDownloads();
-  }
-}
-
-function toCsv(node){
-  var keys = ["시각","경과초"].concat(recKeys[node]);
-  var out = "﻿" + keys.join(",") + "\n";
-  for (var i=0;i<recRows[node].length;i++){
-    var r = recRows[node][i], line = [];
-    for (var j=0;j<keys.length;j++){
-      var v = r[keys[j]] === undefined ? "" : String(r[keys[j]]);
-      line.push(v.indexOf(",") >= 0 ? '"'+v+'"' : v);
-    }
-    out += line.join(",") + "\n";
-  }
-  return out;
-}
-
-function fileName(suffix){
-  var d = new Date(recStart), p = function(n){return ("0"+n).slice(-2);};
-  return recName + "_" + d.getFullYear() + "-" + p(d.getMonth()+1) + "-" +
-         p(d.getDate()) + "_" + p(d.getHours()) + "-" + p(d.getMinutes()) +
-         "-" + p(d.getSeconds()) + "_" + suffix;
-}
-
-function makeLink(text, content, name, type){
-  var blob = new Blob([content], {type:type||"text/csv;charset=utf-8"});
-  var a = document.createElement("a");
-  a.className = "dl"; a.textContent = text;
-  a.href = URL.createObjectURL(blob); a.download = name;
-  return a;
-}
-
-function showDownloads(){
-  var box = document.getElementById("dlBox");
-  box.innerHTML = "";
-  if (recRows.car.length)
-    box.appendChild(makeLink("차량 CSV 저장", toCsv("car"), fileName("차량.csv")));
-  if (recRows.cane.length)
-    box.appendChild(makeLink("지팡이 CSV 저장", toCsv("cane"), fileName("지팡이.csv")));
-  if (recLog.length)
-    box.appendChild(makeLink("로그 저장", recLog.join("\n"),
-                             fileName("로그.txt"), "text/plain;charset=utf-8"));
-}
-
-function restartTimer(){
-  if (timer) clearInterval(timer);
-  timer = setInterval(refresh, parseInt(document.getElementById("interval").value,10));
-}
-
-document.getElementById("cmdCar").addEventListener("keydown", function(e){
-  if (e.key === "Enter") send("car"); });
-document.getElementById("cmdCane").addEventListener("keydown", function(e){
-  if (e.key === "Enter") send("cane"); });
-
-refresh();
-restartTimer();
-</script>
-</body>
-</html>
-)HTMLPAGE";
+// 웹페이지 본문은 같은 폴더의 web_page.h 에 있다.
+#include "web_page.h"
 // ===WEB_PAGE_END===
 #endif
 
@@ -847,6 +538,8 @@ void captureBootDiagnostics() {
 uint32_t lastCaneRxMs = 0;
 volatile uint32_t lastRsuRiskRxMs = 0;
 volatile uint32_t rsuRiskRxCount = 0;
+// RSU가 마지막으로 보낸 위험 단계 (lastRiskLevel은 차량 자체 판정과 섞인 최종값)
+volatile uint8_t lastRsuRiskLevel = 0;
 uint32_t lastSensorLogMs = 0;
 
 typedef struct {
@@ -869,6 +562,13 @@ typedef struct {
   double calibrationRawSumM;
   uint16_t calibrationSamples;
   uint32_t calibrationStartedMs;
+  // V5: Portenta UWB Shield가 잰 Stella 방향(AoA). DWM3001CDK는 각도가 없다.
+  bool hasAngle;
+  float azimuthDeg;       // 쉴드 정면 기준 방위각(도). 측정 범위 약 ±60°
+  uint8_t azimuthFom;     // 각도 신뢰도 0~100
+  uint8_t nlos;           // 0=가림 없음, 1=가림, 255=판단 불가
+  uint32_t lastAngleMs;
+  uint32_t angleCount;
 } UwbRangeState;
 
 UwbRangeState uwbRange = {};
@@ -1790,6 +1490,8 @@ TuningParam tuningParams[] = {
    "UWB 최신값 유효 시간"},
   {"uwbrisk", &cfgUwbRiskEnabled, TUNING_UINT32, 0.0f, 1.0f, "",
    "실물 검증 후 UWB 직접 위험계산 사용(0/1)"},
+  {"uwbfom", &cfgUwbAngleMinFom, TUNING_UINT32, 0.0f, 100.0f, "",
+   "UWB 각도를 유효로 볼 최소 신뢰도"},
   {"rate", &cfgTelemetryIntervalMs, TUNING_UINT32, 20.0f, 5000.0f, "ms",
    "뷰어 로그 전송 주기"},
   {"logmode", &cfgLogMode, TUNING_UINT32, 0.0f, 1.0f, "",
@@ -1836,6 +1538,17 @@ bool uwbIsFresh(uint32_t now) {
   return uwbRange.valid &&
          uwbRange.lastSampleMs > 0 &&
          now - uwbRange.lastSampleMs <= cfgUwbTimeoutMs;
+}
+
+// 각도는 최신이고, 쉴드 측정범위(±60°) 안이며, 신뢰도가 충분하고,
+// 가림(NLOS) 판정이 아닐 때만 유효. 아니면 '방향 모름'으로 다룬다.
+bool uwbAngleIsValid(uint32_t now) {
+  return uwbRange.hasAngle &&
+         uwbRange.lastAngleMs > 0 &&
+         now - uwbRange.lastAngleMs <= cfgUwbTimeoutMs &&
+         fabsf(uwbRange.azimuthDeg) <= 60.0f &&
+         uwbRange.azimuthFom >= cfgUwbAngleMinFom &&
+         uwbRange.nlos != 1;
 }
 
 float medianUwbWindow() {
@@ -1953,6 +1666,27 @@ void parseUwbLine(char *line) {
     if (rssiField != nullptr) {
       rssiDbm = strtof(rssiField + strlen("RSSI[dBm]="), nullptr);
     }
+
+    // V5 C33 브리지만 붙이는 각도 항목. 없으면(DWM3001CDK) 거리만 쓴다.
+    char *azimuthField = strstr(line, "azimuth[deg]=");
+    if (azimuthField != nullptr) {
+      float azimuthDeg = strtof(azimuthField + strlen("azimuth[deg]="), nullptr);
+      char *fomField = strstr(line, "aoa_fom=");
+      char *nlosField = strstr(line, "nlos=");
+      if (isfinite(azimuthDeg)) {
+        uwbRange.hasAngle = true;
+        uwbRange.azimuthDeg = azimuthDeg;
+        uwbRange.azimuthFom = fomField != nullptr
+          ? (uint8_t)constrain(atoi(fomField + strlen("aoa_fom=")), 0, 100)
+          : 0;
+        uwbRange.nlos = nlosField != nullptr
+          ? (uint8_t)constrain(atoi(nlosField + strlen("nlos=")), 0, 255)
+          : 255;
+        uwbRange.lastAngleMs = millis();
+        uwbRange.angleCount++;
+      }
+    }
+
     acceptUwbMeasurement(distanceCm / 100.0f, rssiDbm);
     return;
   }
@@ -2149,6 +1883,17 @@ bool runUwbCommand(String line) {
              (unsigned)UWB_CAL_REQUIRED_SAMPLES,
              cfgUwbOffsetM,
              (unsigned long)cfgUwbRiskEnabled);
+    if (uwbRange.hasAngle) {
+      cmdReply("UWB angle valid=%u azimuth=%+.1fdeg fom=%u nlos=%u count=%lu (minfom=%lu)",
+               uwbAngleIsValid(millis()) ? 1u : 0u,
+               uwbRange.azimuthDeg,
+               (unsigned)uwbRange.azimuthFom,
+               (unsigned)uwbRange.nlos,
+               (unsigned long)uwbRange.angleCount,
+               (unsigned long)cfgUwbAngleMinFom);
+    } else {
+      cmdReply("UWB angle 없음 (C33 브리지가 각도를 안 보내거나 DWM3001CDK 사용 중)");
+    }
     return true;
   }
 
@@ -2312,17 +2057,23 @@ void readSerialCommandLines() {
 }
 
 void handleVehicleSerialCommands() {
-  static bool previousButtonPressed = false;
-  static uint32_t lastButtonEventMs = 0;
+  // 실수로 스쳐 눌러 영점이 틀어지지 않게, 2초 넘게 누르고 있을 때만
+  // 한 번 시작한다. 손을 뗐다가 다시 눌러야 다음 영점을 잡는다.
+  static uint32_t buttonDownSinceMs = 0;
+  static bool buttonFired = false;
   uint32_t now = millis();
 
   bool buttonPressed = digitalRead(REL_CAL_BUTTON_PIN) == LOW;
-  if (buttonPressed && !previousButtonPressed &&
-      now - lastButtonEventMs >= 500UL) {
-    lastButtonEventMs = now;
+  if (!buttonPressed) {
+    buttonDownSinceMs = 0;
+    buttonFired = false;
+  } else if (buttonDownSinceMs == 0) {
+    buttonDownSinceMs = now;
+  } else if (!buttonFired && now - buttonDownSinceMs >= 2000UL) {
+    buttonFired = true;
+    Serial.println("[BUTTON] 2초 누름 → GPS 상대좌표 영점 시작");
     startRelativeGpsCalibration();
   }
-  previousButtonPressed = buttonPressed;
 
   readSerialCommandLines();
 }
@@ -2747,13 +2498,29 @@ bool configureMgF10FiveHz() {
   return ok;
 }
 
+// GPS L5 위성 신호는 아직 '시험 운용(unhealthy)'으로 방송돼서 그대로는 안 쓴다.
+// NEO-F10N 통합 매뉴얼 예제대로 L5를 켜고 건강상태를 L1 기준으로 덮어쓴다.
+// 알 수 없는 키가 섞이면 메시지 전체가 거절되므로 5Hz 설정과 따로 보낸다.
+// 신호 설정을 바꾸면 GNSS가 잠깐 재시작하므로 5Hz 설정보다 먼저 보낸다.
+bool configureMgF10L5() {
+  bool ok = gnss.newCfgValset(VAL_LAYER_RAM);
+  ok &= gnss.addCfgValset(UBLOX_CFG_SIGNAL_GPS_L5_ENA, 1);
+  ok &= gnss.addCfgValset(UBLOX_CFG_SIGNAL_GPS_L5_HEALTH_OVERRIDE, 1);
+  ok &= gnss.sendCfgValset(1200);
+  return ok;
+}
+
 void setupGps() {
 #if USE_GPS
   gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(300);
   bool gnssDetected = gnss.begin(gpsSerial, 1200);
+  bool gpsL5Configured = gnssDetected && configureMgF10L5();
+  if (gpsL5Configured) delay(600);  // GNSS 재시작 대기
   bool gps5HzConfigured = gnssDetected && configureMgF10FiveHz();
+  Serial.printf("[GPS] L5 enable+health override=%s\n",
+                gpsL5Configured ? "ACK" : "FAILED");
   Serial.printf(
     "[GPS] MG-F10/NEO-F10N detected=%u, 5Hz config=%s, GGA+RMC, 115200bps\n",
     gnssDetected ? 1u : 0u,
@@ -3017,19 +2784,23 @@ void readImu() {
       ? (now - lastImuSampleMs) / 1000.0f
       : 0.0f;
 
-  imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+  // 100kHz I2C에서 벡터 하나 읽는 데 약 1ms가 든다. 매 10ms에는 방향 계산과
+  // 충격 판정에 필요한 3개만 읽고, 나머지는 IMU_SLOW_INTERVAL_MS마다 읽는다.
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
-  imu::Vector<3> mag = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
   imu::Vector<3> linear = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
-  imu::Vector<3> gravity = bno.getVector(Adafruit_BNO055::VECTOR_GRAVITY);
   imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-  bno.getCalibration(&imuCalSystem, &imuCalGyro, &imuCalAccel, &imuCalMag);
-
-  accelX = accel.x(); accelY = accel.y(); accelZ = accel.z();
   gyroX = gyro.x(); gyroY = gyro.y(); gyroZ = gyro.z();
-  magX = mag.x(); magY = mag.y(); magZ = mag.z();
-  gravityX = gravity.x(); gravityY = gravity.y(); gravityZ = gravity.z();
   imuRawHeadingDeg = normalizeHeading(euler.x());
+
+  static uint32_t lastSlowImuReadMs = 0;
+  if (lastSlowImuReadMs == 0 || now - lastSlowImuReadMs >= IMU_SLOW_INTERVAL_MS) {
+    lastSlowImuReadMs = now;
+    imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    imu::Vector<3> mag = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
+    bno.getCalibration(&imuCalSystem, &imuCalGyro, &imuCalAccel, &imuCalMag);
+    accelX = accel.x(); accelY = accel.y(); accelZ = accel.z();
+    magX = mag.x(); magY = mag.y(); magZ = mag.z();
+  }
   lastImuSampleMs = now;
   imuHasSample = true;
 
@@ -3503,6 +3274,7 @@ void handleRsuReply(const v2x_status_message_t &message) {
   if (message.risk_level > RISK_DANGER) return;
   lastRsuRiskRxMs = millis();
   rsuRiskRxCount++;
+  lastRsuRiskLevel = message.risk_level;
   lastRiskLevel = message.risk_level;
   announceRisk(lastRiskLevel);
   Serial.printf("[RSU RX LEGACY] risk=%u seq=%u\n",
@@ -3530,6 +3302,7 @@ void handleRsuRiskAlert(const v2x_risk_message_t &message) {
 
   lastRsuRiskRxMs = millis();
   rsuRiskRxCount++;
+  lastRsuRiskLevel = message.risk_level;
   lastRiskLevel = message.risk_level;
   announceRisk(lastRiskLevel);
 
@@ -3794,6 +3567,7 @@ void resetStaleRsuRisk() {
   }
 
   lastRsuRiskRxMs = 0;
+  lastRsuRiskLevel = RISK_SAFE;
   lastRiskLevel = RISK_SAFE;
   announceRisk(RISK_SAFE);
   Serial.println("[RSU RISK] timeout -> SAFE");
@@ -3862,19 +3636,35 @@ void sendUdpTelemetry() {
   if (cfgLogMode == 0) {
     long rsuAgeMs = lastRsuRiskRxMs > 0
       ? (long)(telemetryMs - lastRsuRiskRxMs) : -1L;
+    // 키 이름은 V4와 같게 둔다(뷰어 요약·기록 CSV가 이 이름을 쓴다).
     int essentialWritten = snprintf(
       udpBuffer, sizeof(udpBuffer),
-      "위험:%u\nGPS유효:%u\n위도:%.6f\n경도:%.6f\n속도:%.2f\n방향:%.1f\n"
+      "시각ms:%lu\n위험:%u\n원시위험:%u\nTTC:%.2f\n계산거리:%.2f\n접근속도:%.2f\n"
+      "전방여부:%u\n"
+      "GPS유효:%u\n위도:%.6f\n경도:%.6f\n속도:%.2f\n방향:%.1f\n"
       "GPS위성:%lu\nGPS_HDOP:%.2f\nIMU보정:%u/%u/%u/%u\nIMU정렬:%u\n차체방향:%.1f\n"
-      "UWB유효:%u\nUWB보정거리:%.3f\nUWB경과ms:%ld\nRSSI원시:%d\nRSSI경과ms:%ld\n"
-      "RSU위험:%u\nRSU경과ms:%ld\n송신:%lu\n부팅횟수:%lu\n리셋원인:%s\n",
-      lastRiskLevel, vehicleGpsValid, vehicleLat, vehicleLng, vehicleSpeed,
+      "UWB유효:%u\nUWB보정거리:%.3f\nUWB원시거리:%.3f\nUWB접근속도:%.3f\n"
+      "UWB경과ms:%ld\nUWB보정:%u\n"
+      "UWB각도유효:%u\nUWB각도:%.1f\nUWB각도신뢰:%u\nUWB가림:%u\n"
+      "RSSI원시:%d\nRSSI평활:%.1f\nRSSI경과ms:%ld\n"
+      "RSU위험:%u\nRSU위험경과ms:%ld\n송신:%lu\n지팡이수신:%lu\n"
+      "부팅횟수:%lu\n리셋원인:%s\n",
+      (unsigned long)telemetryMs, lastRiskLevel, rawRiskLevel,
+      lastCalculatedTtcS, lastCalculatedDistanceM,
+      lastCalculatedClosingSpeedMps, lastCalculatedInPath ? 1u : 0u,
+      vehicleGpsValid, vehicleLat, vehicleLng, vehicleSpeed,
       vehicleHeading, (unsigned long)rawGpsSatellites, rawGpsHdop,
       imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
       imuHeadingAligned ? 1u : 0u, vehicleBodyHeadingDeg,
       uwbIsFresh(telemetryMs) ? 1u : 0u, uwbRange.filteredDistanceM,
-      uwbAgeMs, (int)rssiRawSnapshot, rssiAgeMs,
-      lastRiskLevel, rsuAgeMs, (unsigned long)sendCount,
+      uwbRange.rawDistanceM, uwbRange.closingSpeedMps,
+      uwbAgeMs, uwbRange.calibrated ? 1u : 0u,
+      uwbAngleIsValid(telemetryMs) ? 1u : 0u, uwbRange.azimuthDeg,
+      (unsigned)uwbRange.azimuthFom,
+      uwbRange.hasAngle ? (unsigned)uwbRange.nlos : 255u,
+      (int)rssiRawSnapshot, rssiFilteredSnapshot, rssiAgeMs,
+      (unsigned)lastRsuRiskLevel, rsuAgeMs, (unsigned long)sendCount,
+      (unsigned long)caneRxCount,
       (unsigned long)vehicleBootCount, resetReasonName(vehicleResetReason)
     );
     if (essentialWritten <= 0) return;
@@ -3969,7 +3759,18 @@ void sendUdpTelemetry() {
     "UWB오프셋:%.3f\n"
     "UWB위험사용:%lu\n"
     "UWB전송:%lu\n"
-    "위험송신:%lu\n",
+    "위험송신:%lu\n"
+    // V5에서 추가된 값 (상세 모드에도 같은 이름으로 보낸다)
+    "UWB각도유효:%u\n"
+    "UWB각도:%.1f\n"
+    "UWB각도신뢰:%u\n"
+    "UWB가림:%u\n"
+    "IMU보정:%u/%u/%u/%u\n"
+    "IMU정렬:%u\n"
+    "RSU위험:%u\n"
+    "RSU위험경과ms:%ld\n"
+    "부팅횟수:%lu\n"
+    "리셋원인:%s\n",
     (unsigned long)telemetryMs,
     (unsigned long)lastImuSampleMs,
     lastRiskLevel,
@@ -4051,7 +3852,17 @@ void sendUdpTelemetry() {
     cfgUwbOffsetM,
     (unsigned long)cfgUwbRiskEnabled,
     (unsigned long)uwbSendCount,
-    (unsigned long)riskSendCount
+    (unsigned long)riskSendCount,
+    uwbAngleIsValid(telemetryMs) ? 1u : 0u,
+    uwbRange.azimuthDeg,
+    (unsigned)uwbRange.azimuthFom,
+    uwbRange.hasAngle ? (unsigned)uwbRange.nlos : 255u,
+    imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
+    imuHeadingAligned ? 1u : 0u,
+    (unsigned)lastRsuRiskLevel,
+    lastRsuRiskRxMs > 0 ? (long)(telemetryMs - lastRsuRiskRxMs) : -1L,
+    (unsigned long)vehicleBootCount,
+    resetReasonName(vehicleResetReason)
   );
 
   if (written <= 0) {
