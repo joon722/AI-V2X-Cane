@@ -1,4 +1,4 @@
-// Cane V2X endpoint V5: MG-F10 + BNO055, 기존 V4 V2X/경고 동작 호환.
+// Cane V2X endpoint V5: u-blox M9N GPS(KoA, MG-F10도 동작) + BNO055, 기존 V4 V2X/경고 동작 호환.
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -958,21 +958,43 @@ bool configureMgF10L5() {
   return ok;
 }
 
+// GPS 보드레이트 찾기: 115200(KoA·Holybro M9N, MG-F10 출고값)으로 먼저 붙고, 안 되면 u-blox 공장값 38400, 그다음 9600에서
+// 찾아 GPS UART1을 115200으로 바꾼다(RAM만 — 전원을 켤 때마다 다시 함). 찾은 속도를 돌려주고, 못 찾으면 0.
+const uint32_t GPS_BAUD_FALLBACK[] = {38400, 9600};
+
+uint32_t beginGnssAnyBaud() {
+  if (gnss.begin(gpsSerial, 1200)) return GPS_BAUD;
+  for (uint32_t baud : GPS_BAUD_FALLBACK) {
+    gpsSerial.updateBaudRate(baud);
+    delay(200);
+    if (!gnss.begin(gpsSerial, 1200)) continue;
+    gnss.setSerialRate(GPS_BAUD, COM_PORT_UART1, VAL_LAYER_RAM, 300);  // 응답은 새 속도로 오므로 결과는 보지 않음
+    delay(200);
+    gpsSerial.updateBaudRate(GPS_BAUD);
+    delay(200);
+    return gnss.begin(gpsSerial, 1200) ? baud : 0;
+  }
+  gpsSerial.updateBaudRate(GPS_BAUD);
+  return 0;
+}
+
 void setupGps() {
 #if USE_GPS
   gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(300);
-  bool gnssDetected = gnss.begin(gpsSerial, 1200);
+  uint32_t gpsFoundBaud = beginGnssAnyBaud();
+  bool gnssDetected = gpsFoundBaud > 0;
   bool gpsL5Configured = gnssDetected && configureMgF10L5();
   if (gpsL5Configured) delay(600);  // GNSS 재시작 대기
   bool gps5HzConfigured = gnssDetected && configureMgF10FiveHz();
   Serial.printf("[GPS] L5 enable+health override=%s\n",
                 gpsL5Configured ? "ACK" : "FAILED");
   Serial.printf(
-    "[GPS] MG-F10/NEO-F10N detected=%u, 5Hz config=%s, GGA+RMC, 115200bps\n",
+    "[GPS] u-blox detected=%u, 5Hz config=%s, GGA+RMC, 115200bps (found %lu)\n",
     gnssDetected ? 1u : 0u,
-    gps5HzConfigured ? "ACK" : "FAILED"
+    gps5HzConfigured ? "ACK" : "FAILED",
+    (unsigned long)gpsFoundBaud
   );
   Serial.println("[GPS] GPS TX -> ESP32 GPIO16 RX2");
   Serial.println("[GPS] GPS RX -> ESP32 GPIO17 TX2");

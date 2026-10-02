@@ -1,5 +1,5 @@
 // ESP32 V2X 차량 노드 통합 코드 V5
-// - MicoAir MG-F10 / u-blox NEO-F10N (L1+L5, 5Hz): 차량 위치/속도/방향 수집
+// - u-blox M9N GPS(KoA, L1 4-GNSS) 또는 MicoAir MG-F10/NEO-F10N(L1+L5), 5Hz: 차량 위치/속도/방향 수집
 // - BNO055 (100Hz): 센서융합 방향, 가속도/자이로 및 큰 충격 감지
 // - Fermion DFPlayer Pro DFR0768 + 스피커: 위험 단계/충격 음성 안내
 // - ESP-NOW: 차량 상태 송신, 지팡이 상태 수신, 거리/TTC 위험도 송신
@@ -3250,7 +3250,7 @@ bool pollGpsMeasurementRate(uint16_t &measurementRateMs,
 }
 
 bool configureMgF10FiveHz() {
-  // MG-F10(NEO-F10N)은 출고 시 UART1 115200bps, UBX-only이다.
+  // MG-F10(NEO-F10N)은 출고 시 UART1 115200bps, UBX-only이다. M9N(KoA)도 115200(판매처 사양)이고 NMEA를 여기서 켠다.
   // 전원을 켤 때마다 RAM 계층만 설정해 플래시 수명에 영향을 주지 않는다.
   bool ok = gnss.newCfgValset(VAL_LAYER_RAM);
   ok &= gnss.addCfgValset(UBLOX_CFG_UART1OUTPROT_UBX, 1);
@@ -3280,21 +3280,43 @@ bool configureMgF10L5() {
   return ok;
 }
 
+// GPS 보드레이트 찾기: 115200(KoA·Holybro M9N, MG-F10 출고값)으로 먼저 붙고, 안 되면 u-blox 공장값 38400, 그다음 9600에서
+// 찾아 GPS UART1을 115200으로 바꾼다(RAM만 — 전원을 켤 때마다 다시 함). 찾은 속도를 돌려주고, 못 찾으면 0.
+const uint32_t GPS_BAUD_FALLBACK[] = {38400, 9600};
+
+uint32_t beginGnssAnyBaud() {
+  if (gnss.begin(gpsSerial, 1200)) return GPS_BAUD;
+  for (uint32_t baud : GPS_BAUD_FALLBACK) {
+    gpsSerial.updateBaudRate(baud);
+    delay(200);
+    if (!gnss.begin(gpsSerial, 1200)) continue;
+    gnss.setSerialRate(GPS_BAUD, COM_PORT_UART1, VAL_LAYER_RAM, 300);  // 응답은 새 속도로 오므로 결과는 보지 않음
+    delay(200);
+    gpsSerial.updateBaudRate(GPS_BAUD);
+    delay(200);
+    return gnss.begin(gpsSerial, 1200) ? baud : 0;
+  }
+  gpsSerial.updateBaudRate(GPS_BAUD);
+  return 0;
+}
+
 void setupGps() {
 #if USE_GPS
   gpsSerial.setRxBufferSize(1024);
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   delay(300);
-  bool gnssDetected = gnss.begin(gpsSerial, 1200);
+  uint32_t gpsFoundBaud = beginGnssAnyBaud();
+  bool gnssDetected = gpsFoundBaud > 0;
   bool gpsL5Configured = gnssDetected && configureMgF10L5();
   if (gpsL5Configured) delay(600);  // GNSS 재시작 대기
   bool gps5HzConfigured = gnssDetected && configureMgF10FiveHz();
   Serial.printf("[GPS] L5 enable+health override=%s\n",
                 gpsL5Configured ? "ACK" : "FAILED");
   Serial.printf(
-    "[GPS] MG-F10/NEO-F10N detected=%u, 5Hz config=%s, GGA+RMC, 115200bps\n",
+    "[GPS] u-blox detected=%u, 5Hz config=%s, GGA+RMC, 115200bps (found %lu)\n",
     gnssDetected ? 1u : 0u,
-    gps5HzConfigured ? "ACK" : "FAILED"
+    gps5HzConfigured ? "ACK" : "FAILED",
+    (unsigned long)gpsFoundBaud
   );
   Serial.println("[GPS] ready: TX->GPIO16, RX<-GPIO17");
 #endif
