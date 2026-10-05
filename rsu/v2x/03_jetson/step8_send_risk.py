@@ -719,7 +719,9 @@ def stdout_transport(command):
     print(f"[WIRE] {command}", file=sys.stderr, flush=True)
 
 
-def parse_args():
+def build_parser():
+    # parse_args()에서 파서 구성만 떼어 냈다. step8_multi_vehicle.py가 같은 옵션에
+    # 자기 옵션 몇 개를 더 얹어 쓰기 위해서다 - 옵션 목록이 두 벌로 갈라지지 않게.
     parser = argparse.ArgumentParser(
         description="Transmit step 7 risk_level to the RSU downlink."
     )
@@ -826,7 +828,34 @@ def parse_args():
         default=str(VEHICLE_BIAS_FILE),
         help="calibrate_bias.py 가 저장한 차량 GPS 상대 바이어스 파일. 없으면 보정 없이 동작",
     )
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv=None):
+    return build_parser().parse_args(argv)
+
+
+def open_bridge_serial(port, baud):
+    """브리지 시리얼을 DTR/RTS를 내린 채로 연다. 연 뒤에도 호출자가 한 번 더 내린다.
+
+    ESP32 자동리셋 회로: pyserial 기본 오픈은 DTR/RTS를 assert하고, RTS가 브리지
+    ESP32의 EN(리셋)핀을 눌러 칩을 리셋 상태로 붙잡는다. 2026-08-25 젯슨 무송신의
+    원인 — 같은 브리지가 PC(Arduino)에선 스트리밍, 젯슨 step8에선 0바이트였다.
+    포트를 열기 전후로 DTR/RTS를 내려 리셋핀을 놓는다(한 번 리셋 후 정상 부팅·스트림).
+    """
+    try:
+        import serial
+    except ImportError as exc:
+        raise SystemExit("pyserial is required for serial mode: pip3 install pyserial") from exc
+
+    connection = serial.Serial()
+    connection.port = port
+    connection.baudrate = baud
+    connection.timeout = 1
+    connection.dtr = False
+    connection.rts = False
+    connection.open()
+    return connection
 
 
 def main():
@@ -897,22 +926,8 @@ def main():
             raw_log.close()
         return
 
-    try:
-        import serial
-    except ImportError as exc:
-        raise SystemExit("pyserial is required for serial mode: pip3 install pyserial") from exc
-
-    # ESP32 자동리셋 회로: pyserial 기본 오픈은 DTR/RTS를 assert하고, RTS가 브리지
-    # ESP32의 EN(리셋)핀을 눌러 칩을 리셋 상태로 붙잡는다. 2026-08-25 젯슨 무송신의
-    # 원인 — 같은 브리지가 PC(Arduino)에선 스트리밍, 젯슨 step8에선 0바이트였다.
-    # 포트를 열기 전후로 DTR/RTS를 내려 리셋핀을 놓는다(한 번 리셋 후 정상 부팅·스트림).
-    connection = serial.Serial()
-    connection.port = args.port
-    connection.baudrate = args.baud
-    connection.timeout = 1
-    connection.dtr = False
-    connection.rts = False
-    connection.open()
+    # DTR/RTS를 내린 채로 연다 — 이유는 open_bridge_serial 참조.
+    connection = open_bridge_serial(args.port, args.baud)
     try:
         connection.dtr = False
         connection.rts = False
