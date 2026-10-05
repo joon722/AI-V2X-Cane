@@ -45,6 +45,15 @@ if [ -n "${V2X_HEARTBEAT_S:-}" ]; then
   HEARTBEAT_ARG="--tx-heartbeat-s ${V2X_HEARTBEAT_S}"
 fi
 
+# 기본: 차량 여러 대를 node_id별로 따로 추적·판정하는 step8_multi_vehicle.py
+# (옵션은 step8과 같다). 지팡이에는 차량별 등급의 최댓값을 방송하고, 차량별 판정은
+# logs/risk_tx_<시각>_vehicles/veh_<id>.csv에 남는다. 차가 한 대면 step8과 판정이 같다.
+# V2X_MULTI_VEHICLE=0 을 주면 예전 step8_send_risk.py(차량 칸 하나)로 돈다.
+ENGINE="step8_multi_vehicle.py"
+if [ "${V2X_MULTI_VEHICLE:-1}" = "0" ]; then
+  ENGINE="step8_send_risk.py"
+fi
+
 # 부팅 직후 USB 인식이 늦을 수 있으므로 최대 2분 대기
 for i in $(seq 1 60); do
   [ -e "$PORT" ] && break
@@ -72,8 +81,8 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 CSV="$LOG_DIR/risk_tx_$STAMP.csv"
 RAW="$LOG_DIR/raw_$STAMP.log"
 
-echo "[START] port=$PORT csv=$CSV raw=$RAW source_mode=$SOURCE_MODE${NO_MODEL:+ MODEL=off}"
-exec python3 "$DIR/step8_send_risk.py" \
+echo "[START] engine=$ENGINE port=$PORT csv=$CSV raw=$RAW source_mode=$SOURCE_MODE${NO_MODEL:+ MODEL=off}"
+exec python3 "$DIR/$ENGINE" \
   --port "$PORT" \
   --csv "$CSV" \
   --raw-log "$RAW" \
