@@ -14,6 +14,8 @@
 출력 (CLI)
     <out>/raw_multi_<시나리오>_p<보행자>_<N>v.log      RSU raw 로그 형식(pc_time RX {json})
     <out>/truth_multi_<시나리오>_p<보행자>_<차>.csv     차량별 5 Hz 참값(sim_to_rsu_stream과 같은 열)
+    <out>/label_multi_<시나리오>_p<보행자>_<차>.csv     차량별 1 Hz SUMO 위험 라벨(채점표 x DCPA 게이트,
+                                                        v2~v5 학습 라벨과 같은 식 - sumo_labels)
 
 사용
     python sim_multi_vehicle_stream.py <scenario_dir> [--out DIR] [--near-m 15] [--randomize]
@@ -149,6 +151,70 @@ def aligned_truth(ped, track):
     return truth_rows([a for a, _ in pairs], [b for _, b in pairs])
 
 
+# ---------------------------------------------------------------- SUMO 위험 라벨
+LABEL_HORIZON_S = 3   # risk_level_future3 = 향후 1~3초 최대 (build_v3_and_baseline과 같음)
+
+
+def _labeler():
+    """학습 라벨을 만든 build_dataset_local(팀 채점표·DCPA 게이트 동결 사본)을 불러온다."""
+    transformer = HERE.parents[3] / "AI_Model" / "transformer"
+    if str(transformer) not in sys.path:
+        sys.path.insert(0, str(transformer))
+    import build_dataset_local
+    return build_dataset_local
+
+
+def sumo_labels(scenario_dir, person_id, vehicle_ids):
+    """{차 id: 1 Hz 라벨 DataFrame} - v2~v5 학습 라벨과 같은 식을 이 (차, 보행자) 쌍에 적용.
+
+    build_dataset_local.build_scenario의 쌍 계산을 그대로 옮겼다: 참값 좌표(잡음 없음)로
+    거리, 거리 미분 접근속도, TTC(30 s 클램프), 팀 채점표, 상대속도 벡터 DCPA,
+    dcpa_gate(2.5/7.5 m, 바닥 0.2) -> risk_level. 미래 라벨 risk_level_future3는
+    build_v3_and_baseline처럼 향후 1~3초 최대(끝 3초는 있는 만큼만, future_full=False).
+    build_scenario는 차마다 "최근접 보행자" 한 명을 고르지만 여기서는 지팡이 보행자로
+    고정한다 - 묻는 것이 "이 차가 이 보행자에게 위험했나"이기 때문이다.
+    """
+    import pandas as pd
+
+    bdl = _labeler()
+    veh, ped = _read(scenario_dir)
+    p = ped[ped["person_id"] == str(person_id)][["timestep_time", "person_x", "person_y"]]
+    out = {}
+    for vid in vehicle_ids:
+        v = veh[veh["vehicle_id"] == str(vid)][
+            ["timestep_time", "vehicle_x", "vehicle_y", "vehicle_speed"]]
+        df = v.merge(p, on="timestep_time").sort_values("timestep_time").reset_index(drop=True)
+        if len(df) < 2:
+            continue
+        dt = df["timestep_time"].diff()
+        rx = df["vehicle_x"] - df["person_x"]
+        ry = df["vehicle_y"] - df["person_y"]
+        dist = np.sqrt(rx ** 2 + ry ** 2)
+        rel = (-dist.diff() / dt).fillna(0.0)
+        ttc = np.minimum([bdl.calculate_ttc(d, r) for d, r in zip(dist, rel)], bdl.TTC_CLAMP_S)
+        score = [bdl.calculate_risk_score(d, r, s, t, bdl.ZONE_BASE_RISK)
+                 for d, r, s, t in zip(dist, rel, df["vehicle_speed"], ttc)]
+        dvx, dvy = rx.diff() / dt, ry.diff() / dt
+        v2 = dvx ** 2 + dvy ** 2
+        t_cpa = -(rx * dvx + ry * dvy) / v2.where(v2 > 1e-6)
+        dcpa = np.sqrt((rx + dvx * t_cpa) ** 2 + (ry + dvy * t_cpa) ** 2)
+        dcpa = dcpa.where((t_cpa > 0) & v2.notna(), dist).fillna(dist)
+        gate = [bdl.dcpa_gate(d) for d in dcpa]
+        level = pd.Series([bdl.classify_risk_level(s * g) for s, g in zip(score, gate)])
+        fut = pd.concat([level.shift(-k) for k in range(1, LABEL_HORIZON_S + 1)], axis=1)
+        out[str(vid)] = pd.DataFrame({
+            "t": df["timestep_time"].astype(float),
+            "distance_m": dist.round(3),
+            "risk_score": score,
+            "dcpa_m": dcpa.round(3),
+            "gate": np.round(gate, 3),
+            "risk_level": level,
+            "risk_level_future3": fut.max(axis=1).fillna(level).astype(int),
+            "future_full": fut.notna().all(axis=1),
+        })
+    return out
+
+
 # ---------------------------------------------------------------- 패킷
 def node_packets(ped, tracks, seed, randomize=False, origin=ORIGIN):
     """노드별 잡음 패킷 {"cane": [...], 차 id: [...]}. pc_time = BASE_EPOCH + t.
@@ -224,12 +290,17 @@ def main():
         tag = f"{sd.name}_p{item['person_id']}"
         write_stream(packets, out / f"raw_multi_{tag}_{len(tracks)}v.log")
         ids = node_id_map(tracks)
+        labels = sumo_labels(sd, item["person_id"], list(tracks))
         for vid, track in tracks.items():
             rows = aligned_truth(ped, track)
             for r in rows:
                 r["node_id"] = ids[vid]
             if rows:
                 write_truth(rows, out / f"truth_multi_{tag}_{vid}.csv")
+            if vid in labels:
+                lab = labels[vid]
+                lab.insert(0, "node_id", ids[vid])
+                lab.to_csv(out / f"label_multi_{tag}_{vid}.csv", index=False)
         print(f"[OK] {tag}: vehicles={item['vehicles']} packets={len(packets)}")
 
 

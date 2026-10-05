@@ -13,6 +13,12 @@
     2) 근접 통과 적시 경보(참값): SUMO 참값으로 near_hit_m 안까지 온 차마다, 최근접
        3초 전~최근접 사이에 L2+가 있었나. 잡음 없는 좌표 기준이라 기준과 독립이다.
     3) 가짜 경보: 지팡이가 L2+인데 어느 차의 기준도 L2+가 아닌 시간(초).
+    4) SUMO 위험 라벨 기준(sim_multi_vehicle_stream.sumo_labels - v2~v5 학습 라벨과 같은
+       채점표 x DCPA 게이트, 참값 좌표 1 Hz). 차마다:
+         - 라벨 위험 구간(L2+, L3) 검출: 구간 시작 3초 전 ~ 구간 끝 사이에 지팡이 L2+였나,
+           선행시간(라벨 시작 - 첫 경보, 양수 = 라벨보다 먼저 울림)
+         - 차선 등급 vs 그 차 라벨(초 단위): 다중 방식만 차마다 등급이 있어 잴 수 있다
+         - 라벨 근거 없는 경보: 지팡이 L2+인데 ±3초 안에 어느 차 라벨도 L2+가 아닌 초
 
     모델은 끈다(규칙만) - 추적 분리 효과만 보기 위해서. 그 밖의 정책은 step8 기본값.
 
@@ -52,8 +58,11 @@ LEAD_S = 3.0
 
 
 # ---------------------------------------------------------------- 재생
-def _replay(packets, build):
-    """packets를 원본 시각 그대로 흘린다. 반환: (보낸 [(t, risk)], sender)."""
+def _replay(packets, build, on_line=None):
+    """packets를 원본 시각 그대로 흘린다. 반환: (보낸 [(t, risk)], sender).
+
+    on_line(sender, now)을 주면 줄마다 부른다(차선 등급 기록용).
+    """
     state = {"now": None}
     sent = []
 
@@ -69,6 +78,8 @@ def _replay(packets, build):
             state["now"] = p["pc_time"]
             body = {k: v for k, v in p.items() if k != "pc_time"}
             sender.process_line(json.dumps(body, separators=(",", ":")), "simulation")
+            if on_line is not None:
+                on_line(sender, state["now"])
     return sent, sender
 
 
@@ -82,9 +93,19 @@ def replay_single(packets):
 
 
 def replay_multi(packets):
+    """반환: (지팡이로 보낸 [(t, risk)], {차선 node_id: [(t, 등급)] 바뀔 때만})."""
+    lanes = {}
+
+    def record(sender, now):
+        for key, level in sender.lane_levels(now).items():
+            hist = lanes.setdefault(key, [])
+            if not hist or hist[-1][1] != level:
+                hist.append((now, level))
+
     def build(transport):
         return mv.MultiVehicleSender(mv.LaneConfig(gate_params=GATE_PARAMS), transport)
-    return _replay(packets, build)[0]
+    sent, _ = _replay(packets, build, on_line=record)
+    return sent, lanes
 
 
 # ---------------------------------------------------------------- 지표
@@ -135,6 +156,81 @@ def covered_time(intervals_a, intervals_b):
     return extra
 
 
+def label_runs(lab, min_level):
+    """라벨이 min_level 이상인 연속 초 구간 [(시작 t, 끝 t)] (SUMO 시각)."""
+    runs, start, prev = [], None, None
+    for t, level in zip(lab["t"], lab["risk_level"]):
+        if level >= min_level:
+            if start is None or t - prev > 1.0:
+                if start is not None:
+                    runs.append((start, prev))
+                start = t
+            prev = t
+        elif start is not None:
+            runs.append((start, prev))
+            start = None
+    if start is not None:
+        runs.append((start, prev))
+    return runs
+
+
+def label_metrics(labels, ids, tracks, refs, old, new, lanes, t_lo, t_hi, scenario, person):
+    """라벨 기준 지표. 반환: (차별 dict, 라벨 구간 기록 [dict], 에피소드 dict)."""
+    per_vehicle, run_rows = {}, []
+    supported = set()   # 어느 차든 라벨 L2+ ±LEAD_S 안인 초
+    for vid in tracks:
+        lab = labels.get(vid)
+        stats = {"label_max": None, "label_l2_runs": 0, "label_l3_runs": 0}
+        if lab is None:
+            per_vehicle[vid] = stats
+            continue
+        lab = lab[(lab["t"] >= t_lo) & (lab["t"] <= t_hi)]
+        stats["label_max"] = int(lab["risk_level"].max()) if len(lab) else None
+        for t in lab.loc[lab["risk_level"] >= ALARM, "t"]:
+            supported.update(range(int(t - LEAD_S), int(t + LEAD_S) + 1))
+        for min_level in (2, 3):
+            for s, e in label_runs(lab, min_level):
+                stats[f"label_l{min_level}_runs"] += 1
+                rec = {"scenario": scenario, "person_id": person, "vehicle_id": vid,
+                       "label_level": min_level, "start_t": s, "end_t": e}
+                for name, sent in (("ref", refs[vid]), ("old", old), ("new", new)):
+                    ok, first = alarm_during(sent, BASE_EPOCH + s - LEAD_S, BASE_EPOCH + e)
+                    rec[f"{name}_detected"] = int(ok)
+                    rec[f"{name}_lead_s"] = round(BASE_EPOCH + s - first, 2) if ok else None
+                run_rows.append(rec)
+        # 차선 등급 vs 그 차 라벨 (초 단위). 기준(차 단독)도 같은 식으로.
+        lane = lanes.get(str(ids[vid]), [])
+        for name, hist in (("lane", lane), ("ref", refs[vid])):
+            tp = fn = fp = exact = n = 0
+            for t, level, fut in zip(lab["t"], lab["risk_level"], lab["risk_level_future3"]):
+                got = level_at(hist, BASE_EPOCH + t)
+                n += 1
+                exact += int(got == level)
+                if level >= ALARM:
+                    tp += int(got >= ALARM)
+                    fn += int(got < ALARM)
+                elif got >= ALARM and fut < ALARM:
+                    fp += 1
+            stats.update({f"{name}_sec": n, f"{name}_exact": exact, f"{name}_l2_tp": tp,
+                          f"{name}_l2_fn": fn, f"{name}_l2_fp": fp})
+        per_vehicle[vid] = stats
+    # refmax = 차마다 단독으로 판정한 등급의 최댓값. 다중 방식이 "차선을 나눈 것 말고는
+    # 기존 엔진 그대로"라면 이것과 같아야 한다 - 라벨과의 차이가 분리 탓인지 엔진 규칙
+    # (안전 하한이 DCPA 게이트를 무시하는 등) 탓인지 여기서 갈린다.
+    episode = {"label_sec": 0, "old_unsupported_s": 0, "new_unsupported_s": 0,
+               "refmax_unsupported_s": 0}
+    for t in range(int(t_lo), int(t_hi) + 1):
+        episode["label_sec"] += 1
+        if t in supported:
+            continue
+        levels = {"old": level_at(old, BASE_EPOCH + t), "new": level_at(new, BASE_EPOCH + t),
+                  "refmax": max(level_at(sent, BASE_EPOCH + t) for sent in refs.values())}
+        for name, level in levels.items():
+            if level >= ALARM:
+                episode[f"{name}_unsupported_s"] += 1
+    return per_vehicle, run_rows, episode
+
+
 def evaluate_episode(scenario_dir, item, near_hit_m, randomize):
     vids = [v for v, _, _ in item["vehicles"]]
     t_min = [t for _, t, _ in item["vehicles"]]
@@ -148,8 +244,13 @@ def evaluate_episode(scenario_dir, item, near_hit_m, randomize):
     end_t = full[-1]["pc_time"]
 
     old = replay_single(full)
-    new = replay_multi(full)
+    new, lanes = replay_multi(full)
     refs = {vid: replay_single(sm.merge_packets(per_node, keep={vid})) for vid in tracks}
+    labels = sm.sumo_labels(scenario_dir, item["person_id"], list(tracks))
+    lab_vehicle, run_rows, lab_episode = label_metrics(
+        labels, sm.node_id_map(tracks), tracks, refs, old, new, lanes,
+        full[0]["pc_time"] - BASE_EPOCH, end_t - BASE_EPOCH,
+        scenario_dir.name, item["person_id"])
     ref_intervals = {vid: alarm_intervals(sent, end_t) for vid, sent in refs.items()}
     all_ref = [iv for ivs in ref_intervals.values() for iv in ivs]
 
@@ -173,17 +274,19 @@ def evaluate_episode(scenario_dir, item, near_hit_m, randomize):
             cpa = BASE_EPOCH + t_cpa
             for name, sent in (("ref", refs[vid]), ("old", old), ("new", new)):
                 row[f"{name}_timely"] = int(alarm_during(sent, cpa - LEAD_S, cpa)[0])
+        row.update(lab_vehicle[vid])
         rows.append(row)
     episode = {
         "duration_s": end_t - full[0]["pc_time"],
         "old_extra_s": covered_time(alarm_intervals(old, end_t), all_ref),
         "new_extra_s": covered_time(alarm_intervals(new, end_t), all_ref),
+        **lab_episode,
     }
-    return rows, episode
+    return rows, episode, run_rows
 
 
 # ---------------------------------------------------------------- 실행
-def summarize(rows, episodes, near_hit_m):
+def summarize(rows, episodes, runs, near_hit_m):
     eps = sum(r["ref_alarm_episodes"] for r in rows)
     lines = []
     lines.append(f"차량 {len(rows)}대 / 묶음 {len(episodes)}개 / 재생 {sum(e['duration_s'] for e in episodes) / 60:.1f}분")
@@ -203,6 +306,50 @@ def summarize(rows, episodes, near_hit_m):
     for name, label in (("old", "기존(칸 1개)"), ("new", "다중(차선)")):
         extra = sum(e[f"{name}_extra_s"] for e in episodes)
         lines.append(f"가짜 경보(어느 차 기준도 L2+ 아님) {label}: {extra:.1f}초 ({extra / max(1e-9, total) * 100:.2f}% 시간)")
+    lines.extend(summarize_labels(rows, episodes, runs))
+    return lines
+
+
+def _median(values):
+    values = sorted(values)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def summarize_labels(rows, episodes, runs):
+    names = (("ref", "기준(차별 단독)"), ("old", "기존(칸 1개)"), ("new", "다중(차선)"))
+    lines = ["", "[SUMO 위험 라벨 기준 - 채점표 x DCPA 게이트, 참값 좌표 1 Hz]"]
+    labelled = sum(1 for r in rows if r.get("label_max") is not None)
+    danger = sum(1 for r in rows if (r.get("label_max") or 0) >= ALARM)
+    lines.append(f"라벨 붙은 차 {labelled}대 중 L2+ 라벨이 있는 차 {danger}대")
+    for level, title in ((2, "L2+(경고 이상)"), (3, "L3(위험)")):
+        sel = [r for r in runs if r["label_level"] == level]
+        if not sel:
+            continue
+        lines.append(f"라벨 {title} 구간 {len(sel)}개 - 시작 {LEAD_S:.0f}초 전~구간 끝에 지팡이 L2+:")
+        for name, label in names:
+            ok = sum(r[f"{name}_detected"] for r in sel)
+            lead = _median([r[f"{name}_lead_s"] for r in sel if r[f"{name}_lead_s"] is not None])
+            lead_txt = "-" if lead is None else f"{lead:+.1f}초"
+            lines.append(f"  {label}: {ok}/{len(sel)} ({ok / len(sel) * 100:.1f}%), 선행 중앙값 {lead_txt}")
+    lines.append("차선 등급 vs 그 차 라벨 (초 단위, 다중 방식만 차마다 등급이 있다):")
+    for name, label in (("ref", "기준(차별 단독)"), ("lane", "다중 차선")):
+        n = sum(r.get(f"{name}_sec", 0) for r in rows)
+        if not n:
+            continue
+        exact = sum(r.get(f"{name}_exact", 0) for r in rows)
+        tp = sum(r.get(f"{name}_l2_tp", 0) for r in rows)
+        fn = sum(r.get(f"{name}_l2_fn", 0) for r in rows)
+        fp = sum(r.get(f"{name}_l2_fp", 0) for r in rows)
+        lines.append(f"  {label}: 4등급 일치 {exact / n * 100:.1f}%, L2+ 재현율 {tp / max(1, tp + fn) * 100:.1f}% "
+                     f"({tp}/{tp + fn}), 라벨(현재·3초 미래) 없는 L2+ {fp}초")
+    total = sum(e["label_sec"] for e in episodes)
+    for name, label in names[1:] + (("refmax", "차별 단독 판정의 최댓값"),):
+        bad = sum(e[f"{name}_unsupported_s"] for e in episodes)
+        lines.append(f"라벨 근거 없는 지팡이 경보(±{LEAD_S:.0f}초 안에 어느 차도 L2+ 아님) {label}: "
+                     f"{bad}초 / {total}초 ({bad / max(1, total) * 100:.2f}%)")
     return lines
 
 
@@ -218,7 +365,7 @@ def main():
     args = ap.parse_args()
 
     dirs = sorted(d for d in Path(args.data_dir).glob("scenario_*") if (d / "DONE").exists())
-    rows, episodes = [], []
+    rows, episodes, runs = [], [], []
     started = time.time()
     for d in dirs:
         if len(episodes) >= args.limit:
@@ -235,6 +382,7 @@ def main():
                 continue
             rows.extend(result[0])
             episodes.append(result[1])
+            runs.extend(result[2])
             if len(episodes) % 20 == 0:
                 print(f"{len(episodes)}/{args.limit} 묶음 ({time.time() - started:.0f}s)", flush=True)
 
@@ -247,7 +395,11 @@ def main():
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-    summary = summarize(rows, episodes, args.near_hit_m)
+    with (out / "per_label_run.csv").open("w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(runs[0].keys()) if runs else ["scenario"])
+        writer.writeheader()
+        writer.writerows(runs)
+    summary = summarize(rows, episodes, runs, args.near_hit_m)
     (out / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
     print("\n".join(summary))
 
