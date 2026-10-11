@@ -73,7 +73,7 @@ Model loading or inference failures fall back to rules. Both paths share positio
 | [`Simulation/`](Simulation/) | SUMO / netedit work logs |
 | [`v2x-server/`](v2x-server/) | Risk-map web server (FastAPI + PostgreSQL + Leaflet, Cloud Run deployable) |
 | [`python/`](python/) | Early Jetson prototype (superseded by `lux/`) |
-| [`docs/`](docs/) | Project plans, meeting notes, handover documents |
+| [`docs/`](docs/) | Technical reports, design notes, field results |
 
 ## Hardware
 

@@ -73,7 +73,7 @@ flowchart TB
 | [`Simulation/`](Simulation/) | SUMO / netedit 작업 기록 |
 | [`v2x-server/`](v2x-server/) | 위험지도 웹 서버 (FastAPI + PostgreSQL + Leaflet, Cloud Run 배포형) |
 | [`python/`](python/) | 초기 Jetson 프로토타입 (`lux/`로 대체됨) |
-| [`docs/`](docs/) | 수행계획서, 회의록, 인수인계 문서 |
+| [`docs/`](docs/) | 기술 보고·설계 문서·현장 결과 |
 
 ## 하드웨어
 

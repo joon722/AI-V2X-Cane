@@ -67,8 +67,6 @@ const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 ## 참고 문서
 
 - `docs/코드_검증_정리.md`
-- `docs/수행계획서/5.10 Project Implementation Plan.pdf`
-- `docs/수행계획서/5.17 5차_수행계획서_최종.pdf`
 
 ## 현재 확인된 상태
 
