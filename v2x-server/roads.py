@@ -1,6 +1,6 @@
 """OSM 도로망(roads.json)을 불러와 좌표를 가장 가까운 도로 구간(엣지)에 스냅.
 
-- roads.json: Overpass API로 받아둔 숭실대/상도동 일대 도로(way) 목록.
+- roads.json: Overpass API로 받아둔 실험 지역 일대 도로(way) 목록.
   각 way는 [lat, lng] 점들의 리스트이며, 인접한 두 점씩 잘라 '엣지'로 취급.
 - nearest_edge_id(lat, lng): 좌표에서 가장 가까운 엣지 id 반환 (이벤트 저장 시 사용)
 - get_edge_points(edge_id): 엣지 양 끝점 반환 (집계/지도 표시 시 사용)
@@ -17,7 +17,7 @@ ROADS_PATH = Path(__file__).resolve().parent / "roads.json"
 
 _LAT_TO_M = 110_540.0  # 위도 1도 ≈ 110.54km
 
-# [변경] 스냅 상한을 300m -> 50m. 상도동 도로 밀도면 300m 안에는 거의 항상
+# [변경] 스냅 상한을 300m -> 50m. 실험 지역 도로 밀도면 300m 안에는 거의 항상
 # 도로가 있어서 사실상 아무것도 걸러지지 않았다. 실측 GPS 오차는 σ≈2m.
 MAX_SNAP_DISTANCE_M = float(os.environ.get("MAX_SNAP_DISTANCE_M", "50"))
 # [변경] 서비스 지역 밖 좌표를 먼저 거른다. 실내 fallback 좌표(37.0/127.0)처럼

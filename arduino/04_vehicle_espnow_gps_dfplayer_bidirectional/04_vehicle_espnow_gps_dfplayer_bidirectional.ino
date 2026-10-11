@@ -1,4 +1,4 @@
-// [강현준/박중선] V2X Vehicle Node
+// [통신 담당/HW 담당] V2X Vehicle Node
 // GPS 수집 + ESP-NOW 양방향 통신 + 차량 부저/등/DFPlayer 음성 출력
 
 #include <WiFi.h>

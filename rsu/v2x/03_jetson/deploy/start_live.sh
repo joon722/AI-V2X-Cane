@@ -10,7 +10,7 @@ set -a; . /etc/default/v2x-riskmap; set +a
 if [ -z "$RISKMAP_API_KEY" ]; then
   echo "[에러] RISKMAP_API_KEY 비어있음 -> /etc/default/v2x-riskmap 에 키 채우기"; exit 1
 fi
-cd /home/ssu212324/v2x/03_jetson || exit 1
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 export PYTHONUTF8=1 PYTHONUNBUFFERED=1
 setsid python3 deploy/stream_live.py > /tmp/stream_live.log 2>&1 < /dev/null &
 sleep 6

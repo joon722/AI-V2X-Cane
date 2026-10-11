@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""8/17 실측 raw 로그에서 82 모델 vs 규칙 — 현장 채점 (현준 지시 ①).
+"""8/17 실측 raw 로그에서 82 모델 vs 규칙 — 현장 채점 (통신 담당 지시 ①).
 
 방법: 실측 raw 로그(pc_time RX {json})를 build_dataset_from_streams.stream_to_features 로 흘린다.
      이 함수는 젯슨 실행 코드(step3 파서 → step4 store → step6 KF → StreamingFeatures) 그대로라

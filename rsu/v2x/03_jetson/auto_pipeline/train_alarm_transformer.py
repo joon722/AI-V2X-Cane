@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """경보 transformer — 학습 공장 CSV(build_dataset_from_streams) 위에서 최근 10프레임 시퀀스로 학습.
 
-팀 요청(2026-08-18 현준) 그대로:
+팀 요청(2026-08-18 통신 담당) 그대로:
   입력  CSV 의 FEATURE_COLUMNS 15열 그대로 (다른 특징 만들지 않음 — 젯슨 실행 특징과 동일)
   정답  y_train (2 초 뒤 창 = "지금 울려야 피할 수 있는 위험")
   채점  시나리오 단위 적시경보율(ttc_study/safety_floor.timely_alarm_rate). 행 단위 재현율 X.

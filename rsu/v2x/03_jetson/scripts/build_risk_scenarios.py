@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-OUT = Path("minseo_outputs")
+OUT = Path("sim_outputs")
 OUT.mkdir(exist_ok=True)
 
 # 보행자(지팡이) 고정 위치

@@ -3,7 +3,7 @@
 Risk calculation engine for the AI-V2X cane project.
 
 This module is intentionally independent from UART/Serial code so the same
-logic can be used by Jetson live input, CSV replay, and Minseo's SUMO dataset.
+logic can be used by Jetson live input, CSV replay, and the AI team's SUMO dataset.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def classify_zone_risk(ped_x: float, ped_y: float, zones: list[Zone]) -> tuple[i
 
 
 def transformer_risk_placeholder(input_data: RiskInput) -> tuple[int, str]:
-    # Minseo's .onnx model will be called here later.
+    # the AI team's .onnx model will be called here later.
     return 0, "ai:placeholder"
 
 

@@ -87,7 +87,7 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9축 IMU · 진동모�
 
 | 위험지도 화면 | 접근 실험 중 실시간 판정 모니터 |
 | --- | --- |
-| ![캠퍼스 주변 AI 위험맵](docs/images/risk-map.jpg) | ![LV0에서 LV3까지 상승하는 실시간 모니터](docs/images/live-risk-monitor.jpg) |
+| ![AI 위험맵](docs/images/risk-map.jpg) | ![LV0에서 LV3까지 상승하는 실시간 모니터](docs/images/live-risk-monitor.jpg) |
 
 *왼쪽: 위험지도 서버(Leaflet)의 도로별 위험 등급 표시. 화면만으로 현장 3초 선행 예측 성능이 입증되는 것은 아닙니다. 오른쪽: 야외 접근 실험 중 젯슨 실시간 모니터 — 차량이 다가오며 무경보(LV0)에서 주의(LV1)·경고(LV2)·위험(LV3)까지 오르고, 지나가면 다시 해제된다.*
 
@@ -116,9 +116,11 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9축 IMU · 진동모�
 
 ## 팀
 
-| 팀원 | 역할 |
+4인 팀, 파트별 분담:
+
+| 파트 | 담당 내용 |
 | --- | --- |
-| **강현준** ([@joon722](https://github.com/joon722)) | **통신·시스템 통합 — ESP-NOW, Jetson UART, `lux/` 실시간 파이프라인** |
-| 최민서 | AI·데이터·클라우드 — SUMO 시뮬레이션, 라벨링, Transformer 학습, 위험지도, 클라우드 서버 연동(Cloud Run)  |
-| 박채린 | 웹 — 홈페이지(실시간 차량뷰 `drive.html`)|
-| 박중선 | 하드웨어 — 센서/액추에이터 회로, 전원, 기구 |
+| 통신·시스템 통합 | ESP-NOW, Jetson UART, `lux/` 실시간 파이프라인 |
+| AI·데이터·클라우드 | SUMO 시뮬레이션, 라벨링, Transformer 학습, 위험지도, 클라우드 서버 연동(Cloud Run) |
+| 웹 | 홈페이지(실시간 차량뷰 `drive.html`) |
+| 하드웨어 | 센서/액추에이터 회로, 전원, 기구 |

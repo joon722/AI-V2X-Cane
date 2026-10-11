@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_MIN_INTERVAL_S = 10.0  # 같은 레벨 지속 중 전송 간격
-SELF_TEST_LAT = 37.4963       # 숭실대 근처 (지도 도로 스냅 범위 안)
+SELF_TEST_LAT = 37.4963       # 실험 지역 근처 (지도 도로 스냅 범위 안)
 SELF_TEST_LNG = 126.9575
 
 # 지도에 올릴 TTC 상한. 이보다 크면 상충이 아니라 "그냥 근처에 있었다"이다.

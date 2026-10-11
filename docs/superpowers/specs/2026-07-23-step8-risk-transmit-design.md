@@ -86,7 +86,7 @@ heartbeat(기본 1.0s, `--tx-heartbeat-s`)는 다운링크 패킷이 드롭돼�
 
 1. `python3 -m unittest discover -p "test_*.py"` — 기존 75 + 신규 통과.
 2. 인프로세스 스모크: 접근하며 level 상승 시 change 전송, 정지 구간은 heartbeat만.
-3. Jetson 실기: `scp step8_send_risk.py test_step8_send_risk.py ssu212324@192.168.55.1:~/v2x/03_jetson/`
+3. Jetson 실기: `scp step8_send_risk.py test_step8_send_risk.py <user>@192.168.55.1:~/v2x/03_jetson/`
    - `python3 step8_send_risk.py --source-mode fallback --test-vehicle --tx-untrusted`
      (실내라 gps_valid=0이므로 개방 플래그 필요) → 접근에 따라 `[TX] risk=…`가 나가고 지팡이
      시리얼 모니터의 `[CANE RX] risk=…` / node_risk가 따라오는지 확인.

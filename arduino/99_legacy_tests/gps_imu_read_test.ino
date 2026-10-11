@@ -1,5 +1,5 @@
 #imu 가속도, gps 좌표 찍기 (0503)
-// [박중선] IMU + GPS 통합 읽기 테스트
+// [HW 담당] IMU + GPS 통합 읽기 테스트
 #include <Wire.h>
 #include <ICM_20948.h>
 #include <TinyGPSPlus.h>

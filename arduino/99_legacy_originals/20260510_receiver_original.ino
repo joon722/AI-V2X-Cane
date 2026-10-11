@@ -1,4 +1,4 @@
-// [강현준/박중선] V2X Smart Cane Receiver
+// [통신 담당/HW 담당] V2X Smart Cane Receiver
 // ESP-NOW 수신 + 진동모터/부저 제어 + Jetson UART 전달
 
 #include <WiFi.h>

@@ -1,4 +1,4 @@
-// [강현준] B-5: ESP-NOW 수신기 전체 코드 (Receiver.ino)
+// [통신 담당] B-5: ESP-NOW 수신기 전체 코드 (Receiver.ino)
 #include <esp_now.h>
 #include <WiFi.h>
 
@@ -106,7 +106,7 @@ void loop() {
 
 
 //송신기
-// [강현준] B-4: ESP-NOW 송신기 전체 코드 (Sender.ino)
+// [통신 담당] B-4: ESP-NOW 송신기 전체 코드 (Sender.ino)
 #include <esp_now.h>
 #include <WiFi.h>
 

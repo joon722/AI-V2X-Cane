@@ -94,6 +94,6 @@ step7은 step6를 고치지 않으므로 자체 루프를 갖는다(step6 루프
 ## 검증 계획
 
 1. `python3 -m unittest discover -p "test_*.py"` — 기존 61 + 신규 모두 통과.
-2. Jetson 실기: `scp step7_risk.py test_step7_risk.py ssu212324@192.168.55.1:~/v2x/03_jetson/`
+2. Jetson 실기: `scp step7_risk.py test_step7_risk.py <user>@192.168.55.1:~/v2x/03_jetson/`
    후 `python3 step7_risk.py --source-mode fallback --test-vehicle` — 거리 감소에 따라
    risk_score/level이 함께 오르는지 눈으로 확인. dcpa≈0이라 gate는 1.0 유지.

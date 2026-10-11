@@ -127,7 +127,7 @@ def process_file(path, base_dt):
     with opener(path, "rt", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             # 위험 등급 기준: onnx_risk_level (0~3, AI 모델 예측)
-            # build_map_data.py(민서)와 동일한 컬럼·필터를 사용해 두 지도가 어긋나지 않게 함.
+            # build_map_data.py(AI 담당)와 동일한 컬럼·필터를 사용해 두 지도가 어긋나지 않게 함.
             # onnx_risk_level이 없는 구버전 파일은 risk_score(0~100)를 팀 기준으로 환산.
             raw = row.get("onnx_risk_level")
             if raw not in (None, ""):

@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import serial
 
-csv_path = sys.argv[1] if len(sys.argv) > 1 else "minseo_outputs/scenario_front_clean.csv"
+csv_path = sys.argv[1] if len(sys.argv) > 1 else "sim_outputs/scenario_front_clean.csv"
 port = sys.argv[2] if len(sys.argv) > 2 else "/dev/ttyUSB0"
 baud = 115200
 

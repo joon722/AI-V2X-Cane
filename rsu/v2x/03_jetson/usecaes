@@ -7,7 +7,7 @@
 아래 파일을 Jetson의 이 폴더에 넣습니다.
 
 ```bash
-/home/ssu212324/v2x/03_jetson/serial_link_monitor.py
+~/v2x/03_jetson/serial_link_monitor.py
 ```
 
 ## 실행 전에 포트 확인
@@ -27,7 +27,7 @@ ls /dev/ttyUSB*
 ## 터미널에 쭈루룩 나오게 실행
 
 ```bash
-cd /home/ssu212324/v2x/03_jetson
+cd ~/v2x/03_jetson
 python3 serial_link_monitor.py /dev/ttyUSB0
 ```
 
@@ -35,7 +35,7 @@ python3 serial_link_monitor.py /dev/ttyUSB0
 
 ```text
 [MONITOR] port=/dev/ttyUSB0, baud=115200
-[LOG] /home/ssu212324/v2x/03_jetson/serial_link_monitor_log.csv
+[LOG] ~/v2x/03_jetson/serial_link_monitor_log.csv
 [OK 기준] vehicle/cane/json/RISK 메시지가 timeout 안에 계속 들어오면 연결 정상
 Stop: Ctrl + C
 ```
@@ -56,7 +56,7 @@ Ctrl + C
 멈추면 로그가 아래 파일에 저장됩니다.
 
 ```bash
-/home/ssu212324/v2x/03_jetson/serial_link_monitor_log.csv
+~/v2x/03_jetson/serial_link_monitor_log.csv
 ```
 
 ## 권한 에러가 날 때

@@ -2,8 +2,8 @@
 """SUMO → 젯슨 데이터 계약 v1 검증기.
 
 시나리오 폴더(tracks.csv + meta.json)가 계약을 지키는지 확인한다.
-- 민서(VM): 시나리오 생성 직후 실행, 통과해야 DONE 파일을 만든다.
-- 현준(젯슨): process_scenarios.py가 처리 전에 실행, 불합격이면 .failed 처리.
+- AI 담당(VM): 시나리오 생성 직후 실행, 통과해야 DONE 파일을 만든다.
+- 통신 담당(젯슨): process_scenarios.py가 처리 전에 실행, 불합격이면 .failed 처리.
 
 의존성 없음(표준 라이브러리만) - VM/젯슨 어디서든 python3 하나로 돈다.
 

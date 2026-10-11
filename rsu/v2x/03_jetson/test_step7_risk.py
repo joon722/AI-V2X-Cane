@@ -429,7 +429,7 @@ class DistanceTrendTest(unittest.TestCase):
 
 
 class NearFloorTest(unittest.TestCase):
-    """코앞 규칙 — 2026-08-17 현준 확정: "2.5 m 안에서 다가올 때는 울리고, 멀어지면
+    """코앞 규칙 — 2026-08-17 통신 담당 확정: "2.5 m 안에서 다가올 때는 울리고, 멀어지면
     안 울린다. 5 m쯤 떨어져 평행이면 울리지 말아야 한다."
 
     접근속도가 잡음(데드밴드 0.5) 아래라 TTC가 안 나와도, 2.5 m 안에서 멀어지는

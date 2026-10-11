@@ -12,7 +12,7 @@
 
 입력 두 갈래
     (a) --streams DIR : sim_to_rsu_stream.py 가 만든 raw_sim_*.log + truth_sim_*.csv 쌍
-                       (민서 SUMO 생성기 시나리오, 실차 스케일)
+                       (AI 담당 SUMO 생성기 시나리오, 실차 스케일)
     (b) --from-scenario-sim N : ttc_study/scenario_sim 시나리오 N개를 여기서 만들어
                        잡음층에 통과 (RC·보행자 스케일, 기존 risk_model.json 학습 원천)
     (a)(b) 섞어도 된다.
@@ -174,7 +174,7 @@ def build_from_streams_dir(streams_dir, base_epoch=BASE_EPOCH):
 # 걸어 지나가기, RC 속도(0.5~2.5 m/s)로 평행 통과. 그런 "안 위험한데 잡음 때문에 위험해
 # 보이는" 상황을 학습·평가에 넣어야 모델이 오경보를 배울 수 있고, RC 스케일 접근도 넣어야
 # 실기(오늘 4 m/s 스침이 L1)와 같은 속도대의 위험을 본다.
-# 2026-08-18 현준: 시스템은 1:1(지팡이 하나·차 하나)이라 "주차 차 옆 보행"은 고려 대상이
+# 2026-08-18 통신 담당: 시스템은 1:1(지팡이 하나·차 하나)이라 "주차 차 옆 보행"은 고려 대상이
 # 아님 → walk_by_parked 는 비율 0(코드는 남겨 둠, 필요하면 올리면 됨). 스펙: 5 m쯤 평행이면
 # 무음, 2.5 m 안에서 다가오면 경보·멀어지면 무음 → parallel_rc 비중을 올린다.
 FAMILY_WEIGHTS = {

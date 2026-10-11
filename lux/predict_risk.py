@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Future-risk prediction slot for the fusion stage.
 
-Minseo's Transformer is exported to ONNX and outputs a future risk_level (0-3)
+the AI team's Transformer is exported to ONNX and outputs a future risk_level (0-3)
 directly (confirmed 2026-07-23). This module is the adapter that feeds a recent
 trajectory window into that model and returns the level, or None when there is
 nothing to say (model absent, or not enough history yet).
 
-The exact feature list, coordinate frame and normalisation must match Minseo's
+The exact feature list, coordinate frame and normalisation must match the AI team's
 training pipeline -- see docs/integration_contract.md section 2. They are passed
 in (feature_order, plus any scaling done by the caller) so this file does not
 hard-code a guess. Without onnxruntime or a model file the factory returns a
@@ -16,7 +16,7 @@ NullPredictor and the whole pipeline degrades to rule+zone gracefully.
 from abc import ABC, abstractmethod
 from collections import deque
 
-# Confirmed with Minseo: match training window/features in the contract.
+# Confirmed with the AI team: match training window/features in the contract.
 DEFAULT_WINDOW = 10  # ~1 s at 10 Hz
 DEFAULT_FEATURE_ORDER = [
     "ped_x", "ped_y", "veh_x", "veh_y",
@@ -60,7 +60,7 @@ class NullPredictor(RiskPredictor):
 
 
 class OnnxPredictor(RiskPredictor):
-    """Runs Minseo's exported model. Output is a future risk_level 0-3.
+    """Runs the AI team's exported model. Output is a future risk_level 0-3.
 
     Handles both output shapes: a length-4 logit/prob vector (argmax) or a
     single scalar (round + clamp). Which one it is comes from the contract; the

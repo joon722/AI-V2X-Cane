@@ -87,7 +87,7 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9-axis IMU · vibration
 
 | Risk-map display | Live risk monitor during an approach test |
 | --- | --- |
-| ![AI risk map around the campus](docs/images/risk-map.jpg) | ![Live monitor escalating LV0 to LV3](docs/images/live-risk-monitor.jpg) |
+| ![AI risk map](docs/images/risk-map.jpg) | ![Live monitor escalating LV0 to LV3](docs/images/live-risk-monitor.jpg) |
 
 *Left: per-road risk levels rendered by the risk-map server (Leaflet); the display alone does not establish 3-second-ahead field prediction performance. Right: the Jetson's live monitor during a field run — no alert (LV0) escalates through caution (LV1) and warning (LV2) to danger (LV3) as the vehicle closes in, then clears once it passes.*
 
@@ -116,9 +116,11 @@ Firmware upload order, Wi-Fi configuration, and pin maps: [docs/SETUP.ko.md](doc
 
 ## Team
 
-| Member | Role |
+A 4-person team, split by part:
+
+| Part | Scope |
 | --- | --- |
-| **강현준** ([@joon722](https://github.com/joon722)) | **Communications & system integration — ESP-NOW, Jetson UART, `lux/` real-time pipeline** |
-| 최민서 | AI & data — SUMO simulation, labeling, Transformer training, risk map |
-| 박채린 | Web & cloud — website (live vehicle view `drive.html`), cloud server integration (Cloud Run) |
-| 박중선 | Hardware — sensor/actuator circuits, power, enclosure |
+| Communications & system integration | ESP-NOW, Jetson UART, `lux/` real-time pipeline |
+| AI & data | SUMO simulation, labeling, Transformer training, risk map |
+| Web & cloud | Website (live vehicle view `drive.html`), cloud server integration (Cloud Run) |
+| Hardware | Sensor/actuator circuits, power, enclosure |

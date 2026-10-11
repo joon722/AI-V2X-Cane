@@ -1,4 +1,4 @@
-// [박중선] V2X Smart Cane Sender
+// [HW 담당] V2X Smart Cane Sender
 // GPS + ICM-20948 IMU + ESP-NOW 송신기
 // + 부저/진동모터 제어 추가
 
@@ -51,7 +51,7 @@
 #define AD0_VAL 1
 
 // =====================
-// 강현준 수신기 MAC 주소
+// 통신 담당 수신기 MAC 주소
 // 1C:C3:AB:D1:73:5C
 // =====================
 uint8_t receiverMAC[] = {0x1C, 0xC3, 0xAB, 0xD1, 0x73, 0x5C};

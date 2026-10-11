@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 최민서 파트가 넘겨준 Transformer 예측(.onnx, 미래 risk_level 0~3 직접 출력)과 지도 zone 위험도를, 이미 완성된 강현준 실시간 rule 파이프라인(step7)에 `final_risk = max(rule, zone, predicted)` 구조로 합류시켜 지팡이까지 한 번에 흐르게 한다.
+**Goal:** AI 담당 파트가 넘겨준 Transformer 예측(.onnx, 미래 risk_level 0~3 직접 출력)과 지도 zone 위험도를, 이미 완성된 통신 담당 실시간 rule 파이프라인(step7)에 `final_risk = max(rule, zone, predicted)` 구조로 합류시켜 지팡이까지 한 번에 흐르게 한다.
 
 **Architecture:** 기존 단계 파일(step2~8)은 한 줄도 수정하지 않고 import만 하는 확립된 컨벤션을 그대로 따른다. 세 개의 순수 모듈(`zone_risk.py`, `predict_risk.py`, `fusion.py`)을 새로 만들고, 이들을 묶는 통합 실시간 러너(`step_fused_send.py`)가 step8의 전송·트러스트·heartbeat 로직을 재사용한다. 모든 위험원은 최종적으로 risk_level(0~3)로 통일된 뒤 max로 합쳐지고, reason에 어느 위험원이 이겼는지 기록한다.
 
@@ -22,10 +22,10 @@
 
 ## ⚠️ 통합을 막는 미확정 항목 (Task 0에서 반드시 먼저 닫는다)
 
-이 세 가지가 확정되지 않으면 아래 코드 태스크는 "인터페이스는 맞지만 값이 틀린" 상태가 된다. 코드로 우회할 수 없고 **최민서와의 합의**가 필요하다.
+이 세 가지가 확정되지 않으면 아래 코드 태스크는 "인터페이스는 맞지만 값이 틀린" 상태가 된다. 코드로 우회할 수 없고 **AI 담당와의 합의**가 필요하다.
 
-1. **좌표계 불일치.** 실시간 파이프라인은 GPS 위경도(37.0/127.0) → ENU 평면(원점=첫 cane 좌표). 민서 `zone_definition.csv`는 SUMO 로컬좌표(center_x=3602.48 등 수천 단위). 그대로 붙이면 보행자가 **항상 OUT zone**으로 판정된다.
-2. **AI 입력 feature 규격.** 사용자는 "AI엔 GPS 위경도를 넣겠다"고 했으나, 모델이 SUMO 로컬좌표·정규화된 feature로 학습됐다면 위경도(37/127 스케일)를 그대로 넣으면 예측이 무의미하다. onnx 입력 텐서의 **feature 이름·순서·윈도우 길이·정규화 방식**을 민서 학습 코드와 1:1로 맞춰야 한다.
+1. **좌표계 불일치.** 실시간 파이프라인은 GPS 위경도(37.0/127.0) → ENU 평면(원점=첫 cane 좌표). AI 담당 `zone_definition.csv`는 SUMO 로컬좌표(center_x=3602.48 등 수천 단위). 그대로 붙이면 보행자가 **항상 OUT zone**으로 판정된다.
+2. **AI 입력 feature 규격.** 사용자는 "AI엔 GPS 위경도를 넣겠다"고 했으나, 모델이 SUMO 로컬좌표·정규화된 feature로 학습됐다면 위경도(37/127 스케일)를 그대로 넣으면 예측이 무의미하다. onnx 입력 텐서의 **feature 이름·순서·윈도우 길이·정규화 방식**을 AI 담당 학습 코드와 1:1로 맞춰야 한다.
 3. **zone base_risk(0~5) → risk_level(0~3) 매핑.** zone csv의 base_risk는 2~5. 이를 융합용 level로 바꾸는 규칙을 확정한다.
 
 ---
@@ -36,16 +36,16 @@
 
 | 구간 | 내용 | 상태 | 담당 |
 |---|---|---|---|
-| A | 실시간 rule 파이프라인 step1~8 (수신→파싱→상태→거리/TTC/CPA/칼만→score→RSU 전송) | ✅ 완료 (테스트 85, Jetson 실기 7/23) | 강현준 |
-| A' | SUMO 데이터셋·zone 정의·Transformer 학습·ONNX 변환 | ✅ 완료 | 최민서 |
+| A | 실시간 rule 파이프라인 step1~8 (수신→파싱→상태→거리/TTC/CPA/칼만→score→RSU 전송) | ✅ 완료 (테스트 85, Jetson 실기 7/23) | 통신 담당 |
+| A' | SUMO 데이터셋·zone 정의·Transformer 학습·ONNX 변환 | ✅ 완료 | AI 담당 |
 | **B0** | **통합 규격 3종 합의 (좌표계 / onnx 입력 feature / zone level 매핑)** | ⏳ 이 플랜 Task 0 | 공동 |
-| **B1** | **zone 판정 모듈 (zone_risk.py)** | ⏳ 이 플랜 Task 1 | 강현준 |
-| **B2** | **AI 예측 추론 슬롯 (predict_risk.py) — 미래 RISK 직접** | ⏳ 이 플랜 Task 2 | 강현준 |
-| **B3** | **max 융합 엔진 (fusion.py)** | ⏳ 이 플랜 Task 3 | 강현준 |
-| **B4** | **통합 실시간 러너 (step_fused_send.py) — end-to-end** | ⏳ 이 플랜 Task 4 | 강현준 |
-| C | 9단계: test vehicle → 실차 ESP32 신호 교체 | ⏭ 차량 ESP32 신호 대기 | 강현준+차량담당 |
+| **B1** | **zone 판정 모듈 (zone_risk.py)** | ⏳ 이 플랜 Task 1 | 통신 담당 |
+| **B2** | **AI 예측 추론 슬롯 (predict_risk.py) — 미래 RISK 직접** | ⏳ 이 플랜 Task 2 | 통신 담당 |
+| **B3** | **max 융합 엔진 (fusion.py)** | ⏳ 이 플랜 Task 3 | 통신 담당 |
+| **B4** | **통합 실시간 러너 (step_fused_send.py) — end-to-end** | ⏳ 이 플랜 Task 4 | 통신 담당 |
+| C | 9단계: test vehicle → 실차 ESP32 신호 교체 | ⏭ 차량 ESP32 신호 대기 | 통신 담당+차량담당 |
 | D | Jetson TensorRT 변환(.onnx 최적화), 실외 GPS 로그로 임계값(DCPA near/far, zone 반경) 재조정 | ⏭ 8월, Jetson·실외 데이터 후 | 공동 |
-| E | 발표용 시각화 3종(rule vs 예측 / 궤적 / RISK 추이), 위험지도 자동 연동 | ⏭ | 최민서 중심 |
+| E | 발표용 시각화 3종(rule vs 예측 / 궤적 / RISK 추이), 위험지도 자동 연동 | ⏭ | AI 담당 중심 |
 
 이 플랜은 B0~B4를 다룬다. C/D/E는 별도 플랜.
 
@@ -55,7 +55,7 @@
 
 새로 만드는 파일 (리포 루트 = `goag/`):
 
-- `zone_risk.py` — zone_definition.csv 로드 + 보행자 위치 → zone_base_risk → zone_level. detect 로직은 민서 `zone_detector.py`의 원형-반경 판정을 벤더(복사)하되, 좌표 변환 어댑터를 앞에 둔다.
+- `zone_risk.py` — zone_definition.csv 로드 + 보행자 위치 → zone_base_risk → zone_level. detect 로직은 AI 담당 `zone_detector.py`의 원형-반경 판정을 벤더(복사)하되, 좌표 변환 어댑터를 앞에 둔다.
 - `predict_risk.py` — 과거 궤적 버퍼(`TrajectoryBuffer`) + 예측기 인터페이스(`RiskPredictor`). onnxruntime 있으면 `OnnxPredictor`, 없으면 `NullPredictor`(항상 None). 미래 risk_level 0~3을 직접 반환.
 - `fusion.py` — `fuse_risk(rule_level, zone_level, predicted_level) -> FusedRisk(level, reason, sources)`.
 - `step_fused_send.py` — 통합 실시간 러너. step6 `KinematicsPipeline`, step7 `assess_risk`, step8 `RiskTransmitter`/transport를 재사용해 rule+zone+predicted를 융합·전송·로그.
@@ -72,12 +72,12 @@
 **Interfaces:**
 - Produces: 좌표계 결정, onnx 입력 feature 명세, zone level 매핑표. Task 1(zone 매핑), Task 2(onnx feature/shape), Task 4(좌표 변환)가 이 문서를 참조한다.
 
-- [ ] **Step 1: 민서에게 확인할 3개 질문을 문서로 정리**
+- [ ] **Step 1: AI 담당에게 확인할 3개 질문을 문서로 정리**
 
 `docs/integration_contract.md` 생성, 아래 골격:
 
 ```markdown
-# 통합 규격 합의 (강현준 ↔ 최민서)
+# 통합 규격 합의 (통신 담당 ↔ AI 담당)
 
 ## 1. 좌표계
 - [ ] zone 판정 기준 좌표계: (위경도 / SUMO로컬) 중 택1
@@ -95,7 +95,7 @@
 - [ ] 매핑표 확정 (아래 잠정안 검토)
 ```
 
-- [ ] **Step 2: zone level 매핑 잠정안을 문서에 기입 (민서 검토용)**
+- [ ] **Step 2: zone level 매핑 잠정안을 문서에 기입 (AI 담당 검토용)**
 
 ```markdown
 | base_risk | risk_level | 근거 |
@@ -109,7 +109,7 @@
 
 - [ ] **Step 3: onnx 파일과 메타데이터 요청 항목 명시**
 
-문서에 "민서에게 받을 것" 체크리스트: `model.onnx` 파일, 학습 시 feature 추출 스크립트(전처리 정규화 파라미터 포함), 샘플 입력/출력 한 쌍(회귀 테스트 고정용).
+문서에 "AI 담당에게 받을 것" 체크리스트: `model.onnx` 파일, 학습 시 feature 추출 스크립트(전처리 정규화 파라미터 포함), 샘플 입력/출력 한 쌍(회귀 테스트 고정용).
 
 - [ ] **Step 4: 커밋**
 
@@ -118,7 +118,7 @@ git add docs/integration_contract.md
 git commit -m "docs: integration contract skeleton for zone/onnx/coord"
 ```
 
-**완료 기준:** 3개 표의 빈칸이 민서 답변으로 채워지고, `model.onnx` + 샘플 입출력 한 쌍을 확보. (이 완료 없이 Task 2의 OnnxPredictor는 인터페이스만 맞는 stub 상태로 남는다 — 그래도 Task 1/3/4는 진행 가능.)
+**완료 기준:** 3개 표의 빈칸이 AI 담당 답변으로 채워지고, `model.onnx` + 샘플 입출력 한 쌍을 확보. (이 완료 없이 Task 2의 OnnxPredictor는 인터페이스만 맞는 stub 상태로 남는다 — 그래도 Task 1/3/4는 진행 가능.)
 
 ---
 
@@ -367,12 +367,12 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'predict_risk'`
 #!/usr/bin/env python3
 """Future-risk prediction slot for the fusion stage.
 
-Minseo's Transformer is exported to ONNX and outputs a future risk_level (0-3)
+the AI team's Transformer is exported to ONNX and outputs a future risk_level (0-3)
 directly (confirmed 2026-07-23). This module is the adapter that feeds a recent
 trajectory window into that model and returns the level, or None when there is
 nothing to say (model absent, or not enough history yet).
 
-The exact feature list, coordinate frame and normalisation must match Minseo's
+The exact feature list, coordinate frame and normalisation must match the AI team's
 training pipeline -- see docs/integration_contract.md section 2. They are passed
 in (feature_order, plus any scaling done by the caller) so this file does not
 hard-code a guess. Without onnxruntime or a model file the factory returns a
@@ -382,7 +382,7 @@ NullPredictor and the whole pipeline degrades to rule+zone gracefully.
 from abc import ABC, abstractmethod
 from collections import deque
 
-# Confirmed with Minseo: match training window/features in the contract.
+# Confirmed with the AI team: match training window/features in the contract.
 DEFAULT_WINDOW = 10  # ~1 s at 10 Hz
 DEFAULT_FEATURE_ORDER = [
     "ped_x", "ped_y", "veh_x", "veh_y",
@@ -426,7 +426,7 @@ class NullPredictor(RiskPredictor):
 
 
 class OnnxPredictor(RiskPredictor):
-    """Runs Minseo's exported model. Output is a future risk_level 0-3.
+    """Runs the AI team's exported model. Output is a future risk_level 0-3.
 
     Handles both output shapes: a length-4 logit/prob vector (argmax) or a
     single scalar (round + clamp). Which one it is comes from the contract; the
@@ -970,7 +970,7 @@ git commit -m "feat: fused realtime sender (rule+zone+ai max, reuses step6-8)"
 
 ## Self-Review
 
-**1. 스펙 커버리지 (회의에서 정한 강현준 통합 할 일 vs 태스크):**
+**1. 스펙 커버리지 (회의에서 정한 통신 담당 통합 할 일 vs 태스크):**
 - "zone 판정 함수 추가" → Task 1 ✅
 - "max 병합 로직 (reason에 셋 다 기록)" → Task 3 ✅
 - ".onnx 추론 슬롯 (빈 함수 먼저)" → Task 2 ✅ (NullPredictor 폴백 = 빈 슬롯, 모델 오면 OnnxPredictor)

@@ -29,5 +29,5 @@
 
 - 위험도 정의가 두 벌(점수표 방식 A / 거리 임계 방식 B) — Transformer가 A로 학습되어 **A로 통일** 필요
 - 점수표가 `scripts/risk_calculator.py`(정의)와 `lux/risk_scoring.py`(실행)에 이중 존재 — 단일 소스 관리 필요
-- 좌표계 3종(실시간 위경도 / SUMO 로컬 미터 / 지도 상도동 위경도) 미통일
+- 좌표계 3종(실시간 위경도 / SUMO 로컬 미터 / 지도 위경도) 미통일
 - RSU(`arduino/10_...`)는 V2X version 1, 지팡이(`09_...`)·차량(`06_...`)은 version 2 — RSU 경유 경고 전달을 위해 정합 필요
