@@ -5,13 +5,14 @@
 # 사전 준비 (한 번만):
 #   1. Jetson에서 SSH 키 생성:  ssh-keygen -t ed25519 -f ~/.ssh/risk_server_key -N ""
 #   2. 공개키(~/.ssh/risk_server_key.pub 내용)를 서버의 ~/.ssh/authorized_keys에 추가
+#   3. 서버 계정을 환경변수로 지정:  export V2X_SERVER=<사용자>@<서버 주소>
 #
 # 사용:
 #   ./jetson_fetch.sh            # 새 시나리오 가져오기 (이미 받은 것은 건너뜀)
 #   crontab에 등록하면 주기적으로 자동 수신:
-#   * * * * * /home/<jetson사용자>/jetson_fetch.sh >> /home/<jetson사용자>/fetch.log 2>&1
+#   * * * * * V2X_SERVER=<사용자>@<서버 주소> /home/<jetson사용자>/jetson_fetch.sh >> /home/<jetson사용자>/fetch.log 2>&1
 
-SERVER="ssukpc347@8.230.1.67"
+SERVER="${V2X_SERVER:?V2X_SERVER 환경변수(사용자@서버주소)를 설정하세요}"
 KEY="$HOME/.ssh/risk_server_key"
 DEST="$HOME/incoming_data"
 

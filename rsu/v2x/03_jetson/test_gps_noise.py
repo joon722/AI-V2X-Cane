@@ -148,7 +148,7 @@ def test_uneven_timesteps_are_handled():
 import math
 import struct
 
-ORIGIN = (37.4977, 126.9528)  # 캠퍼스 중심 (생성기와 같은 값)
+ORIGIN = (37.4977, 126.9528)  # 실험 구역 중심 (생성기와 같은 값)
 
 
 def clean_track(seconds=20.0, hz=5.0, speed=0.0, heading=90.0, x0=0.0, y0=10.0):

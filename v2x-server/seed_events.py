@@ -5,7 +5,7 @@
 
 사용법 (Cloud Shell에서):
     export API_KEY=$(gcloud secrets versions access latest --secret=api-key-jetson)
-    python3 seed_events.py --url https://riskmap-api-193571596396.asia-northeast3.run.app
+    python3 seed_events.py --url https://<서비스>.run.app
 
 옵션:
     --url   서버 주소 (기본: http://localhost:8000)
@@ -23,12 +23,12 @@ from datetime import datetime, timedelta, timezone
 # risk_bias가 높을수록 위험 이벤트 비중이 높아짐
 HOTSPOTS = [
     # (이름, lat, lng, 실측 건수, 시뮬 건수, risk_bias)
-    ("정문 앞 횡단보도", 37.4966, 126.9573, 30, 45, 3),
+    ("횡단보도 A", 37.4966, 126.9573, 30, 45, 3),
     ("주차장 출구",     37.4958, 126.9562, 20, 30, 2),
-    ("중문",           37.4972, 126.9558, 15, 25, 2),
+    ("횡단보도 B",           37.4972, 126.9558, 15, 25, 2),
     ("큰길 방면",     37.4950, 126.9581, 10, 30, 1),
-    ("캠퍼스 북측",     37.4983, 126.9566,  8,  0, 1),   # 실측만 있는 구간 (live_only 시연용)
-    ("후문 골목",       37.4975, 126.9590,  0, 25, 2),   # 시뮬만 있는 구간 (sumo_only 시연용)
+    ("북측 구간",     37.4983, 126.9566,  8,  0, 1),   # 실측만 있는 구간 (live_only 시연용)
+    ("골목 구간",       37.4975, 126.9590,  0, 25, 2),   # 시뮬만 있는 구간 (sumo_only 시연용)
 ]
 
 def risk_to_ttc(risk):

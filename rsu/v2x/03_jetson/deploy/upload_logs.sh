@@ -7,10 +7,15 @@ set -u
 DIR="$(cd "$(dirname "$0")/.." && pwd)"   # 03_jetson
 LOG_DIR="$DIR/logs"
 
-SERVER="ssukpc347@8.230.1.67"
+SERVER="${V2X_SERVER:-}"   # 사용자@서버주소. v2x-log-upload.service가 /etc/default/v2x-riskmap 에서 읽음
 KEY="$HOME/.ssh/risk_server_key"
 REMOTE_DIR="v2x_logs/$(hostname)"
 SSH_CMD="ssh -i $KEY -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new"
+
+if [ -z "$SERVER" ]; then
+  echo "[SKIP] V2X_SERVER 미설정 -> /etc/default/v2x-riskmap 에 V2X_SERVER=사용자@서버주소 추가"
+  exit 0
+fi
 
 if [ ! -d "$LOG_DIR" ] || [ -z "$(ls -A "$LOG_DIR" 2>/dev/null)" ]; then
   echo "[SKIP] 업로드할 로그 없음: $LOG_DIR"

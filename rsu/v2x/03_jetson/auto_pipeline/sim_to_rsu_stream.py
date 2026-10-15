@@ -38,7 +38,7 @@ sys.path.insert(0, str(HERE.parent))
 import gps_noise  # noqa: E402
 from step7_risk import calculate_risk_score, calculate_ttc, classify_risk_level  # noqa: E402
 
-ORIGIN = (37.4977, 126.9528)   # 캠퍼스 중심 (생성기 CAMPUS_CENTER_LONLAT 과 동일)
+ORIGIN = (37.4977, 126.9528)   # 실험 구역 중심 (생성기 SITE_CENTER_LONLAT 과 동일)
 DEFAULT_HZ = 5.0
 BASE_EPOCH = 1_760_000_000.0   # 스트림 pc_time 기준(임의의 최근 epoch)
 

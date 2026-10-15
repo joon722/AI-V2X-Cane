@@ -12,7 +12,7 @@
 # 4번이 특히 헷갈린다. 서버에서 결과를 지워도 젯슨은 "이미 보냈다"고 기억하므로
 # 영원히 다시 보내지 않는다. 그때는 실패 기록이 하나도 없이 조용하다.
 #
-# 사용: bash diagnose_upload.sh
+# 사용: V2X_SERVER=<사용자>@<서버 주소> bash diagnose_upload.sh
 
 set -u
 LOG="$HOME/pipeline.log"
@@ -54,11 +54,15 @@ KEY=$(grep -oP 'SERVER_KEY\s*=\s*.*?"\K[^"]+' \
 KEY="${KEY/#\~/$HOME}"
 echo "  키 파일: ${KEY:-(못 찾음)}"
 [ -n "${KEY:-}" ] && ls -l "$KEY" 2>/dev/null | sed 's/^/    /'
-ssh -i "${KEY:-$HOME/.ssh/id_rsa}" -o ConnectTimeout=15 -o BatchMode=yes \
-    ssukpc347@8.230.1.67 \
-    'echo "    접속 OK"; echo -n "    서버 디스크: "; df -h ~ | tail -1; \
-     echo -n "    결과 파일 수: "; ls SUMO_project/results/ 2>/dev/null | wc -l' \
-    2>&1 | sed 's/^/  /'
+if [ -z "${V2X_SERVER:-}" ]; then
+  echo "  V2X_SERVER(사용자@서버주소)가 설정되지 않아 접속 확인을 건너뜀"
+else
+  ssh -i "${KEY:-$HOME/.ssh/id_rsa}" -o ConnectTimeout=15 -o BatchMode=yes \
+      "$V2X_SERVER" \
+      'echo "    접속 OK"; echo -n "    서버 디스크: "; df -h ~ | tail -1; \
+       echo -n "    결과 파일 수: "; ls SUMO_project/results/ 2>/dev/null | wc -l' \
+      2>&1 | sed 's/^/  /'
+fi
 
 echo
 echo "=============================================="

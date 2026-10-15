@@ -4,11 +4,11 @@
 <netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
-        <osm-files value="C:\Users\choim\Downloads\map.osm"/>
+        <osm-files value="map.osm"/>
     </input>
 
     <output>
-        <output-file value="C:\Users\choim\Downloads\net_clean.net.xml"/>
+        <output-file value="net_clean.net.xml"/>
     </output>
 
     <projection>

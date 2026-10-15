@@ -12,6 +12,6 @@ VALUES
 DELETE FROM zones;
 INSERT INTO zones (zone_id, zone_name, zone_type, center_lat, center_lng, radius_m, base_risk)
 VALUES
-  ('Z01','정문 앞',   'crosswalk', 37.4966, 126.9573, 30, 3),
+  ('Z01','횡단보도 A','crosswalk', 37.4966, 126.9573, 30, 3),
   ('Z02','주차장 출구','parking',   37.4958, 126.9562, 25, 4),
-  ('Z03','중문',      'crosswalk', 37.4972, 126.9558, 30, 2);
+  ('Z03','횡단보도 B','crosswalk', 37.4972, 126.9558, 30, 2);

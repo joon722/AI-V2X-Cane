@@ -8,6 +8,7 @@
 
 사용:
     export API_KEY=...            # 또는 --api-key
+    export RISKMAP_URL=https://<서비스>.run.app   # 또는 --url
     python3 sync_to_riskmap.py
 """
 import argparse
@@ -26,7 +27,7 @@ from pathlib import Path
 BASE = Path.home() / "SUMO_project"
 RESULTS_DIR = BASE / "results"
 STATE_FILE = BASE / "map_data" / "sync_state.json"
-DEFAULT_URL = "https://riskmap-api-193571596396.asia-northeast3.run.app"
+DEFAULT_URL = os.environ.get("RISKMAP_URL", "")
 
 # net_clean.net.xml의 <location> 값 (projParameter: +proj=utm +zone=52 +datum=WGS84)
 NET_OFFSET_X = -315516.76
@@ -198,6 +199,9 @@ def main():
 
     if not args.api_key:
         print("ERROR: API_KEY가 없습니다. export API_KEY=... 또는 --api-key 사용", file=sys.stderr)
+        sys.exit(1)
+    if not args.url:
+        print("ERROR: 서버 주소가 없습니다. export RISKMAP_URL=... 또는 --url 사용", file=sys.stderr)
         sys.exit(1)
 
     url = args.url.rstrip("/")

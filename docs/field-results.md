@@ -6,7 +6,7 @@ Not lab numbers — **logs recorded on a real road.** Every figure below is gene
 
 - Period: **2026-08-12 – 08-25 (7 days, 47 sessions)**
 - Basis: **104,511** GPS-valid risk decisions, **95** extracted approach events
-- Site: campus sidewalk–road boundary (the vehicle node rides an RC car as a speed-scaled stand-in)
+- Site: outdoor test-site sidewalk–road boundary (the vehicle node rides an RC car as a speed-scaled stand-in)
 
 ---
 

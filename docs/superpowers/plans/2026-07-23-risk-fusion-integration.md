@@ -101,9 +101,9 @@
 | base_risk | risk_level | 근거 |
 |---|---|---|
 | 5 (주차장 출구) | 3 | 시야 차단 + 상시 차량 진출 |
-| 4 (중문/blind spot) | 2 | 건물 사각 |
-| 3 (정문) | 1 | 보행 밀집 |
-| 2 (학생회관) | 1 | 보행 밀집 |
+| 4 (사각 교차로/blind spot) | 2 | 건물 사각 |
+| 3 (출입구) | 1 | 보행 밀집 |
+| 2 (보행 밀집 구역) | 1 | 보행 밀집 |
 | 0 (OUT) | 0 | 등록 구역 밖 |
 ```
 
@@ -151,7 +151,7 @@ from zone_risk import load_zones, detect_zone, zone_level, BASE_RISK_TO_LEVEL
 ZONE_CSV = (
     "zone_id,zone_name,zone_type,center_x,center_y,radius_m,base_risk,speed_limit,description\n"
     "Z04,Parking Exit,Parking,100.0,100.0,30,5,10,exit\n"
-    "Z03,Student Center,Pedestrian Area,300.0,300.0,30,2,10,center\n"
+    "Z03,Pedestrian Area A,Pedestrian Area,300.0,300.0,30,2,10,center\n"
 )
 
 

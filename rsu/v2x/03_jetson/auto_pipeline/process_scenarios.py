@@ -19,6 +19,7 @@ import해서 사용한다. zone_base_risk는 SUMO 시뮬레이션에 구역 정�
 """
 import argparse
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -41,7 +42,7 @@ from retention import cleanup_old_scenarios, purged_exclude_args  # noqa: E402
 # ---------------------------------------------------------
 # 설정
 # ---------------------------------------------------------
-SERVER = "ssukpc347@8.230.1.67"
+SERVER = os.environ.get("V2X_SERVER", "")  # 사용자@서버주소 (환경변수로 지정)
 SERVER_KEY = str(Path.home() / ".ssh" / "risk_server_key")
 SERVER_DATA_DIR = "SUMO_project/generated_data"
 SERVER_RESULT_DIR = "SUMO_project/results"
@@ -309,6 +310,11 @@ def main():
             logging.StreamHandler(),
         ],
     )
+
+    if not SERVER and not (args.no_sync and args.no_upload):
+        log.error("V2X_SERVER 환경변수(사용자@서버주소)가 없어 서버 수신·업로드를 할 수 없음 "
+                  "-> 설정하거나 --no-sync --no-upload 로 실행")
+        sys.exit(1)
 
     # v2 scaler/모델 로드 (auto_pipeline 폴더의 v2 파일 사용)
     import json as _json

@@ -89,7 +89,7 @@ ESP32 DevKitC (WROOM-32D) ×3 · NEO-6M GPS · ICM-20948 9-axis IMU · vibration
 | --- | --- |
 | ![AI risk map](docs/images/risk-map.jpg) | ![Live monitor escalating LV0 to LV3](docs/images/live-risk-monitor.jpg) |
 
-*Left: per-road risk levels rendered by the risk-map server (Leaflet); the display alone does not establish 3-second-ahead field prediction performance. Right: the Jetson's live monitor during a field run — no alert (LV0) escalates through caution (LV1) and warning (LV2) to danger (LV3) as the vehicle closes in, then clears once it passes.*
+*Left: per-road risk levels rendered by the risk-map server (Leaflet, base map omitted); the display alone does not establish 3-second-ahead field prediction performance. Right: the Jetson's live monitor during a field run — no alert (LV0) escalates through caution (LV1) and warning (LV2) to danger (LV3) as the vehicle closes in, then clears once it passes.*
 
 [The real-car / moving-pedestrian demonstration](https://www.youtube.com/watch?v=Auj-7gjxO64) includes alerts on both sides and driving scenes. The RC-car photo above shows the earlier test rig.
 

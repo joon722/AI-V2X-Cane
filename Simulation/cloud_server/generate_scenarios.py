@@ -48,7 +48,7 @@ VTYPES_FILE = PROJECT_DIR / "vtypes_mix.add.xml"
 DRIVER_TYPES = ["cautious_car", "normal_car", "aggressive_car"]
 
 SIM_END = 200.0            # config.sumocfg의 end와 동일
-CAMPUS_CENTER_LONLAT = (126.9528, 37.4977)   # 캠퍼스 중심
+SITE_CENTER_LONLAT = (126.9528, 37.4977)   # 실험 구역 중심
 CAMPUS_RADIUS_M = 350.0
 
 # 조심/보통 운전 성향 정의 (aggressive_car는 route.rou.xml에 기존 정의됨)
@@ -89,7 +89,7 @@ def campus_graph() -> dict:
     global _campus_graph
     if _campus_graph is None:
         net = sumolib.net.readNet(str(NET_FILE))
-        cx, cy = net.convertLonLat2XY(*CAMPUS_CENTER_LONLAT)
+        cx, cy = net.convertLonLat2XY(*SITE_CENTER_LONLAT)
         r2 = CAMPUS_RADIUS_M ** 2
         ids = set()
         for e in net.getEdges():

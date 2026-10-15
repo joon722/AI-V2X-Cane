@@ -10,4 +10,6 @@ After=network-online.target
 Type=oneshot
 # SSH 키(~/.ssh/risk_server_key)가 일반 사용자 홈에 있으므로 그 사용자로 실행
 User=@RUN_USER@
+# 업로드 서버 계정(V2X_SERVER=사용자@서버주소)을 여기서 읽는다
+EnvironmentFile=-/etc/default/v2x-riskmap
 ExecStart=@DEPLOY_DIR@/upload_logs.sh

@@ -46,9 +46,11 @@ echo "[OK] 로그 업로드 타이머 등록됨 (5분 주기, 사용자=$RUN_USE
 # 4. 위험 이벤트 업로드 타이머 (1분마다, 위험지도 서버로)
 if [ ! -f /etc/default/v2x-riskmap ]; then
   cat > /etc/default/v2x-riskmap <<'EOF'
-# 위험지도 서버 설정. API 키를 채워 넣어야 이벤트 업로드가 동작한다.
-RISKMAP_URL=https://riskmap-api-193571596396.asia-northeast3.run.app
+# 위험지도 서버 설정. 서버 주소(https://<서비스>.run.app)와 API 키를 채워 넣어야 이벤트 업로드가 동작한다.
+RISKMAP_URL=
 RISKMAP_API_KEY=
+# 로그 업로드 서버 계정(사용자@서버주소). 비워 두면 로그 업로드를 건너뛴다.
+V2X_SERVER=
 EOF
   chmod 600 /etc/default/v2x-riskmap
 fi
@@ -58,8 +60,11 @@ cp "$DIR/v2x-event-upload.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now v2x-event-upload.timer
 echo "[OK] 이벤트 업로드 타이머 등록됨 (1분 주기)"
-if ! grep -q "RISKMAP_API_KEY=." /etc/default/v2x-riskmap; then
-  echo "[주의] /etc/default/v2x-riskmap 의 RISKMAP_API_KEY 가 비어 있음 -> 채우기 전까지 업로드 안 함"
+if ! grep -q "RISKMAP_URL=." /etc/default/v2x-riskmap || ! grep -q "RISKMAP_API_KEY=." /etc/default/v2x-riskmap; then
+  echo "[주의] /etc/default/v2x-riskmap 의 RISKMAP_URL / RISKMAP_API_KEY 가 비어 있음 -> 채우기 전까지 이벤트 업로드 안 함"
+fi
+if ! grep -q "V2X_SERVER=." /etc/default/v2x-riskmap; then
+  echo "[주의] /etc/default/v2x-riskmap 의 V2X_SERVER 가 비어 있음 -> 채우기 전까지 로그 업로드 안 함"
 fi
 
 echo ""
@@ -71,6 +76,6 @@ echo "업로드 확인: journalctl -u v2x-log-upload -n 20"
 echo "즉시 업로드: sudo systemctl start v2x-log-upload"
 echo "이벤트 업로드 확인: journalctl -u v2x-event-upload -n 20"
 echo "이벤트 즉시 업로드: sudo systemctl start v2x-event-upload"
-echo "서버 설정: /etc/default/v2x-riskmap (API 키)"
+echo "서버 설정: /etc/default/v2x-riskmap (서버 주소·API 키·로그 서버 계정)"
 echo "중지:        sudo systemctl stop v2x-risk-engine"
 echo "자동시작 해제: sudo systemctl disable v2x-risk-engine"
