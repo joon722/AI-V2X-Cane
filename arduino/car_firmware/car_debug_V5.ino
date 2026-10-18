@@ -1,14 +1,14 @@
 // ESP32 V2X 차량 노드 통합 코드 V5
 // - u-blox M9N GPS(KoA, L1 4-GNSS) 또는 MicoAir MG-F10/NEO-F10N(L1+L5), 5Hz: 차량 위치/속도/방향 수집
-// - BNO055 (100Hz): 센서융합 방향, 가속도/자이로 및 큰 충격 감지
+// - IMU (100Hz): ICM-20948 또는 BNO055(IMU_CHIP_ICM20948로 선택). 방향, 가속도/자이로 및 큰 충격 감지
 // - Fermion DFPlayer Pro DFR0768 + 스피커: 위험 단계/충격 음성 안내
 // - ESP-NOW: 차량 상태 송신, 지팡이 상태 수신, 거리/TTC 위험도 송신
 //
 // 필요한 Arduino 라이브러리
 //   TinyGPSPlus
 //   SparkFun u-blox GNSS v3
-//   Adafruit BNO055
-//   Adafruit Unified Sensor
+//   SparkFun 9DoF IMU Breakout - ICM 20948 (ICM-20948일 때)
+//   Adafruit BNO055, Adafruit Unified Sensor (BNO055일 때)
 // DFPlayer Pro는 별도 라이브러리 없이 AT 명령으로 제어함.
 
 // USB-C로 DFPlayer Pro 내장 128MB 저장소의 루트에 넣을 음원 이름
@@ -20,7 +20,9 @@
 // ESP32 기본 배선
 //   GPS TX  -> GPIO16 (ESP32 RX2)
 //   GPS RX  -> GPIO17 (ESP32 TX2, 없어도 수신 가능)
-//   BNO055 SDA -> GPIO21, SCL -> GPIO22, COM3/I2C_SEL -> GND (주소 0x28)
+//   IMU SDA -> GPIO21, SCL -> GPIO22, 3.3V, GND
+//     ICM-20948: 주소 0x69/0x68 둘 다 자동 시도
+//     BNO055: COM3/I2C_SEL -> GND (주소 0x28)
 //   DF Pro RX <- GPIO27 (ESP32 TX1)
 //   Portenta C33 D14/TX -> GPIO32 (ESP32 RX1)
 //   Portenta C33+UWB Shield를 별도 USB로 켜면 ESP32와 GND는 반드시 공통
@@ -37,9 +39,17 @@
 #include <Wire.h>
 #include <TinyGPSPlus.h>
 #include <SparkFun_u-blox_GNSS_v3.h>
+#include <math.h>
+
+// IMU 칩 선택. 1 = ICM-20948, 0 = BNO055 (CJMCU-055).
+#define IMU_CHIP_ICM20948 1
+
+#if IMU_CHIP_ICM20948
+#include <ICM_20948.h>
+#else
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include <math.h>
+#endif
 
 // =====================
 // 기능 설정
@@ -96,6 +106,8 @@ uint32_t lastUdpTelemetryMs = 0;
 // CJMCU-055 보드에 32.768kHz 외부 크리스털을 납땜했을 때만 1.
 // (크리스털은 보드와 따로 들어 있다. 안 달았는데 1이면 동작이 불안정할 수 있다)
 #define BNO_USE_EXTERNAL_CRYSTAL 0
+// ICM-20948 자력계 방향을 자이로 방향에 섞는 시상수(초). 클수록 자이로를 더 믿는다.
+#define ICM_MAG_BLEND_TAU_S 1.0f
 #define IMU_SAMPLE_INTERVAL_MS 10UL
 // 가속도·자력계·보정상태는 이 주기로만 읽어 I2C(100kHz) 점유를 줄인다.
 #define IMU_SLOW_INTERVAL_MS 100UL
@@ -1110,7 +1122,11 @@ HardwareSerial gpsSerial(2);
 HardwareSerial dfSerial(1);
 TinyGPSPlus gps;
 SFE_UBLOX_GNSS_SERIAL gnss;
+#if IMU_CHIP_ICM20948
+ICM_20948_I2C icm;
+#else
 Adafruit_BNO055 bno(55, BNO055_I2C_ADDRESS, &Wire);
+#endif
 
 #if USE_BT_DEBUG
 BluetoothSerial SerialBT;
@@ -1977,8 +1993,13 @@ bool runDeviceCommand(const String &name, bool hasValue, float number) {
   }
   if (name == "imusave") {
     bool ok = saveImuCalibration();
+#if IMU_CHIP_ICM20948
+    cmdReply(ok ? "IMU 보정값 저장 완료" :
+                  "IMU 저장 실패: 2초 가만히(G=3) + 공중에서 여러 방향으로 8자 돌리기(M=3) 후 다시");
+#else
     cmdReply(ok ? "IMU 보정값 저장 완료" :
                   "IMU 저장 실패: 먼저 S/G/A/M 보정도를 모두 3으로 만들 것");
+#endif
     return true;
   }
   if (name == "imureset") {
@@ -3485,29 +3506,263 @@ void readGps() {
 }
 
 // =====================
-// BNO055 IMU (차량: 자석 간섭을 고려해 gyro delta 중심, 자력계는 느린 보정)
+// ICM-20948 (IMU_CHIP_ICM20948 = 1일 때)
+// =====================
+// BNO055는 방향 계산과 보정을 칩 안에서 하지만 ICM-20948은 측정값만 준다.
+// 그래서 여기서 방향(imuRawHeadingDeg)과 보정도(imuCal S/G/A/M)를 BNO055와
+// 같은 뜻으로 만든다. 정렬·걸어서 정렬·뷰어 등 나머지 코드는 그대로 쓴다.
+//   G: 가만히 있을 때 자이로 영점을 2초 이상 배웠으면 3
+//   M: 자력계를 돌려 축마다 60uT 넘게 움직인 축 수(0~3). imusave 값을 불러왔으면 3
+//   A: 공장 보정을 그대로 써서 늘 3,  S: G와 M 중 작은 값
+// 방향은 보드 X축이 가리키는 방위(북 0, 시계방향 +)다. 보드가 기울어져도
+// 중력으로 수평면을 잡아 계산한다. 장착 각도 차이는 imualign/imuwalk가 맞춘다.
+#if IMU_CHIP_ICM20948
+#define ICM_GRAVITY_MPS2 9.80665f
+#define ICM_MAG_AXIS_RANGE_UT 60.0f
+#define ICM_GYRO_LEARN_SECONDS 2.0f
+
+float icmAccel[3] = {0.0f, 0.0f, 0.0f};    // m/s^2
+float icmGyro[3] = {0.0f, 0.0f, 0.0f};     // dps, 영점 뺀 값
+float icmMag[3] = {0.0f, 0.0f, 0.0f};      // uT, 가속도 축 기준, 영점 뺀 값
+float icmLinear[3] = {0.0f, 0.0f, 0.0f};   // 중력 뺀 가속도(충격 판정)
+float icmGravity[3] = {0.0f, 0.0f, ICM_GRAVITY_MPS2};
+float icmGyroFast[3] = {0.0f, 0.0f, 0.0f};
+float icmGyroBias[3] = {0.0f, 0.0f, 0.0f};
+float icmMagMin[3] = {1e9f, 1e9f, 1e9f};
+float icmMagMax[3] = {-1e9f, -1e9f, -1e9f};
+float icmMagCenter[3] = {0.0f, 0.0f, 0.0f};
+float icmGyroLearnedS = 0.0f;
+float icmFieldUt = 0.0f;
+float icmDipDeg = 0.0f;
+bool icmMagCenterRestored = false;
+bool icmFirstSample = true;
+bool icmHeadingReady = false;
+uint8_t icmAddress = 0;
+uint32_t icmLastSampleMs = 0;
+
+float icmDot(const float *a, const float *b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+void icmResetCalibrationState() {
+  for (int i = 0; i < 3; i++) {
+    icmMagMin[i] = 1e9f;
+    icmMagMax[i] = -1e9f;
+    icmMagCenter[i] = 0.0f;
+    icmGyroBias[i] = 0.0f;
+  }
+  icmMagCenterRestored = false;
+  icmGyroLearnedS = 0.0f;
+}
+
+bool icmBegin() {
+  // 보드마다 AD0가 달라 0x69(AD0=1)와 0x68(AD0=0)을 차례로 시도한다.
+  const bool ad0Values[2] = {true, false};
+  for (int i = 0; i < 2; i++) {
+    icm.begin(Wire, ad0Values[i]);
+    if (icm.status != ICM_20948_Stat_Ok) continue;
+    ICM_20948_fss_t fullScale;
+    fullScale.a = gpm8;     // 기본 ±2g는 노면 충격에도 포화됐다(V4 실측)
+    fullScale.g = dps1000;  // RC카 제자리 회전까지 담는다
+    icm.setFullScale((ICM_20948_Internal_Acc | ICM_20948_Internal_Gyr), fullScale);
+    icmAddress = ad0Values[i] ? 0x69 : 0x68;
+    return true;
+  }
+  return false;
+}
+
+void icmLoadCalibration(Preferences &prefs) {
+  if (prefs.getBytesLength("icm_mag") == sizeof(icmMagCenter) &&
+      prefs.getBytes("icm_mag", icmMagCenter, sizeof(icmMagCenter)) == sizeof(icmMagCenter)) {
+    icmMagCenterRestored = true;
+  }
+  if (prefs.getBytesLength("icm_gyr") == sizeof(icmGyroBias) &&
+      prefs.getBytes("icm_gyr", icmGyroBias, sizeof(icmGyroBias)) == sizeof(icmGyroBias)) {
+    icmGyroLearnedS = ICM_GYRO_LEARN_SECONDS;
+  }
+}
+
+bool icmSaveCalibration(Preferences &prefs) {
+  if (imuCalGyro < 3 || imuCalMag < 3) return false;
+  bool ok = prefs.putBytes("icm_mag", icmMagCenter, sizeof(icmMagCenter)) == sizeof(icmMagCenter);
+  ok = prefs.putBytes("icm_gyr", icmGyroBias, sizeof(icmGyroBias)) == sizeof(icmGyroBias) && ok;
+  if (ok) icmMagCenterRestored = true;
+  return ok;
+}
+
+void icmReportStatus() {
+  cmdReply("ICM-20948 0x%02X field=%.0fuT dip=%.0f mag=%s range=%.0f/%.0f/%.0f gyroBias=%.2f/%.2f/%.2f",
+           icmAddress, icmFieldUt, icmDipDeg,
+           icmMagCenterRestored ? "saved" : "live",
+           icmMagMax[0] - icmMagMin[0], icmMagMax[1] - icmMagMin[1],
+           icmMagMax[2] - icmMagMin[2],
+           icmGyroBias[0], icmGyroBias[1], icmGyroBias[2]);
+}
+
+// 새 측정값이 있으면 읽어 방향·보정도를 갱신하고 true를 돌려준다.
+bool icmUpdate(uint32_t now) {
+  if (!icm.dataReady()) return false;
+  icm.getAGMT();
+  if (icm.status != ICM_20948_Stat_Ok) return false;
+
+  float dt = icmLastSampleMs > 0 ? (now - icmLastSampleMs) / 1000.0f : 0.0f;
+  if (dt > 0.2f) dt = 0.2f;
+  icmLastSampleMs = now;
+
+  icmAccel[0] = icm.accX() * 0.00980665f;  // mg -> m/s^2
+  icmAccel[1] = icm.accY() * 0.00980665f;
+  icmAccel[2] = icm.accZ() * 0.00980665f;
+  float gyroRaw[3] = {icm.gyrX(), icm.gyrY(), icm.gyrZ()};
+  // 칩 안 자력계(AK09916)는 X축만 가속도·자이로와 같고 Y·Z축은 반대 방향이다.
+  float magRaw[3] = {icm.magX(), -icm.magY(), -icm.magZ()};
+
+  // 중력 = 가속도를 0.5초로 평활한 값. 나머지는 움직임(충격 판정용).
+  if (icmFirstSample) {
+    for (int i = 0; i < 3; i++) {
+      icmGravity[i] = icmAccel[i];
+      icmGyroFast[i] = gyroRaw[i];
+    }
+  }
+  float kGravity = dt / (0.5f + dt);
+  float kFast = dt / (0.3f + dt);
+  bool gyroSteady = true;
+  for (int i = 0; i < 3; i++) {
+    icmGravity[i] += (icmAccel[i] - icmGravity[i]) * kGravity;
+    icmLinear[i] = icmAccel[i] - icmGravity[i];
+    icmGyroFast[i] += (gyroRaw[i] - icmGyroFast[i]) * kFast;
+    if (fabsf(gyroRaw[i] - icmGyroFast[i]) > 0.8f || fabsf(gyroRaw[i]) > 20.0f) {
+      gyroSteady = false;
+    }
+    // 영점을 배운 뒤에는 천천히 도는 것을 영점으로 착각하지 않게 막는다.
+    if (icmGyroLearnedS >= ICM_GYRO_LEARN_SECONDS &&
+        fabsf(gyroRaw[i] - icmGyroBias[i]) > 2.0f) {
+      gyroSteady = false;
+    }
+  }
+  float accelNorm = sqrtf(icmDot(icmAccel, icmAccel));
+  float linearNorm = sqrtf(icmDot(icmLinear, icmLinear));
+  bool still = !icmFirstSample && gyroSteady &&
+               fabsf(accelNorm - ICM_GRAVITY_MPS2) < 0.6f && linearNorm < 0.4f;
+
+  // 자이로 영점: 가만히 있을 때만 배운다(처음엔 빠르게, 배운 뒤엔 천천히 따라감).
+  if (still && dt > 0.0f) {
+    float tau = icmGyroLearnedS < ICM_GYRO_LEARN_SECONDS ? 0.5f : 5.0f;
+    float k = dt / (tau + dt);
+    for (int i = 0; i < 3; i++) icmGyroBias[i] += (gyroRaw[i] - icmGyroBias[i]) * k;
+    if (icmGyroLearnedS < 10.0f) icmGyroLearnedS += dt;
+  }
+  for (int i = 0; i < 3; i++) icmGyro[i] = gyroRaw[i] - icmGyroBias[i];
+
+  // 자력계 영점(하드아이언): 저장값이 없으면 돌리는 동안 축별 최소·최대의 가운데.
+  bool magSane = true;
+  for (int i = 0; i < 3; i++) {
+    if (!isfinite(magRaw[i]) || fabsf(magRaw[i]) > 200.0f) magSane = false;
+  }
+  uint8_t magAxesCovered = 3;
+  if (!icmMagCenterRestored) {
+    magAxesCovered = 0;
+    for (int i = 0; i < 3; i++) {
+      if (magSane) {
+        if (magRaw[i] < icmMagMin[i]) icmMagMin[i] = magRaw[i];
+        if (magRaw[i] > icmMagMax[i]) icmMagMax[i] = magRaw[i];
+      }
+      if (icmMagMax[i] >= icmMagMin[i]) {
+        icmMagCenter[i] = 0.5f * (icmMagMin[i] + icmMagMax[i]);
+      }
+      if (icmMagMax[i] - icmMagMin[i] >= ICM_MAG_AXIS_RANGE_UT) magAxesCovered++;
+    }
+  }
+  for (int i = 0; i < 3; i++) icmMag[i] = magRaw[i] - icmMagCenter[i];
+
+  imuCalGyro = icmGyroLearnedS >= ICM_GYRO_LEARN_SECONDS ? 3
+             : (icmGyroLearnedS >= 0.5f ? 1 : 0);
+  imuCalMag = magAxesCovered;
+  imuCalAccel = 3;
+  imuCalSystem = imuCalGyro < imuCalMag ? imuCalGyro : imuCalMag;
+
+  float gravityNorm = sqrtf(icmDot(icmGravity, icmGravity));
+  if (gravityNorm > 3.0f) {
+    float up[3] = {icmGravity[0] / gravityNorm, icmGravity[1] / gravityNorm,
+                   icmGravity[2] / gravityNorm};
+
+    // 위에서 봐서 시계방향 회전이 + (나침반 방위가 늘어나는 방향)
+    float yawRateDps = -icmDot(icmGyro, up);
+    if (icmHeadingReady) {
+      imuRawHeadingDeg = normalizeHeading(imuRawHeadingDeg + yawRateDps * dt);
+    }
+
+    float magUp = icmDot(icmMag, up);
+    float magNorm = sqrtf(icmDot(icmMag, icmMag));
+    icmFieldUt = magNorm;
+    icmDipDeg = magNorm > 1.0f
+      ? asinf(constrain(-magUp / magNorm, -1.0f, 1.0f)) * RAD_TO_DEG : 0.0f;
+
+    // 수평 자기장 방향 = 자북, 보드 X축의 수평 성분 = 보드가 보는 방향
+    float north[3] = {icmMag[0] - magUp * up[0], icmMag[1] - magUp * up[1],
+                      icmMag[2] - magUp * up[2]};
+    float northNorm = sqrtf(icmDot(north, north));
+    float forward[3] = {1.0f - up[0] * up[0], -up[0] * up[1], -up[0] * up[2]};
+    float forwardNorm = sqrtf(icmDot(forward, forward));
+    if (magSane && northNorm > 5.0f && forwardNorm > 0.3f) {
+      for (int i = 0; i < 3; i++) north[i] /= northNorm;
+      float east[3] = {  // 동쪽 = 북쪽 x 위쪽
+        north[1] * up[2] - north[2] * up[1],
+        north[2] * up[0] - north[0] * up[2],
+        north[0] * up[1] - north[1] * up[0]
+      };
+      float magHeadingDeg = normalizeHeading(
+        atan2f(icmDot(forward, east), icmDot(forward, north)) * RAD_TO_DEG);
+      if (!icmHeadingReady) {
+        imuRawHeadingDeg = magHeadingDeg;
+        icmHeadingReady = true;
+      } else if (imuCalMag >= 2 && dt > 0.0f) {
+        // 영점이 안 잡힌 자력계는 섞지 않고 자이로만 따라간다.
+        imuRawHeadingDeg = blendHeading(imuRawHeadingDeg, magHeadingDeg,
+                                        dt / (ICM_MAG_BLEND_TAU_S + dt));
+      }
+    }
+  }
+  icmFirstSample = false;
+  return true;
+}
+#endif
+
+// =====================
+// IMU 보정값 저장·정렬 (차량: 자석 간섭을 고려해 gyro delta 중심, 자력계는 느린 보정)
 // =====================
 void loadImuCalibration() {
   Preferences prefs;
   if (!prefs.begin("v5imu", true)) return;
+#if IMU_CHIP_ICM20948
+  icmLoadCalibration(prefs);
+  imuOffsetsRestored = icmMagCenterRestored;
+#else
   uint8_t offsets[NUM_BNO055_OFFSET_REGISTERS];
   if (prefs.getBytesLength("offsets") == sizeof(offsets) &&
       prefs.getBytes("offsets", offsets, sizeof(offsets)) == sizeof(offsets)) {
     bno.setSensorOffsets(offsets);
     imuOffsetsRestored = true;
   }
+#endif
   imuHeadingAligned = prefs.getBool("aligned", false);
   imuHeadingOffsetDeg = prefs.getFloat("head_off", 0.0f);
   prefs.end();
 }
 
 bool saveImuCalibration() {
+#if IMU_CHIP_ICM20948
+  if (!imuReady) return false;
+  Preferences prefs;
+  if (!prefs.begin("v5imu", false)) return false;
+  bool ok = icmSaveCalibration(prefs);
+#else
   if (!imuReady || !bno.isFullyCalibrated()) return false;
   uint8_t offsets[NUM_BNO055_OFFSET_REGISTERS];
   if (!bno.getSensorOffsets(offsets)) return false;
   Preferences prefs;
   if (!prefs.begin("v5imu", false)) return false;
   bool ok = prefs.putBytes("offsets", offsets, sizeof(offsets)) == sizeof(offsets);
+#endif
   prefs.putBool("aligned", imuHeadingAligned);
   prefs.putFloat("head_off", imuHeadingOffsetDeg);
   prefs.end();
@@ -3521,6 +3776,9 @@ void resetImuCalibration() {
     prefs.clear();
     prefs.end();
   }
+#if IMU_CHIP_ICM20948
+  icmResetCalibrationState();
+#endif
   imuOffsetsRestored = false;
   imuHeadingAligned = false;
   imuHeadingOffsetDeg = 0.0f;
@@ -3545,11 +3803,26 @@ void reportImuStatus() {
            imuReady ? 1u : 0u, imuCalSystem, imuCalGyro, imuCalAccel, imuCalMag,
            imuOffsetsRestored ? 1u : 0u, imuHeadingAligned ? 1u : 0u,
            imuRawHeadingDeg, vehicleBodyHeadingDeg, imuHeadingOffsetDeg);
+#if IMU_CHIP_ICM20948
+  if (imuReady) icmReportStatus();
+#endif
 }
 
 void setupImu() {
 #if USE_IMU
   Wire.begin(IMU_SDA, IMU_SCL);
+#if IMU_CHIP_ICM20948
+  Wire.setClock(400000);
+  if (icmBegin()) {
+    imuReady = true;
+    loadImuCalibration();
+    Serial.printf("[IMU] ICM-20948 connected 0x%02X, accel=±8g gyro=±1000dps, offsets=%u aligned=%u\n",
+                  icmAddress, imuOffsetsRestored ? 1u : 0u,
+                  imuHeadingAligned ? 1u : 0u);
+  } else {
+    Serial.println("[IMU] ICM-20948 연결 실패: 3.3V, SDA21/SCL22 확인 (주소 0x69/0x68 둘 다 시도함)");
+  }
+#else
   Wire.setClock(100000);
   if (bno.begin(OPERATION_MODE_NDOF_FMC_OFF)) {
     imuReady = true;
@@ -3564,6 +3837,7 @@ void setupImu() {
     Serial.println("[IMU] BNO055 연결 실패: 3.3V, SDA21/SCL22, COM3=GND, 주소 0x28 확인");
   }
 #endif
+#endif
 }
 
 void readImu() {
@@ -3576,6 +3850,15 @@ void readImu() {
       ? (now - lastImuSampleMs) / 1000.0f
       : 0.0f;
 
+#if IMU_CHIP_ICM20948
+  if (!icmUpdate(now)) return;
+  gyroX = icmGyro[0]; gyroY = icmGyro[1]; gyroZ = icmGyro[2];
+  accelX = icmAccel[0]; accelY = icmAccel[1]; accelZ = icmAccel[2];
+  magX = icmMag[0]; magY = icmMag[1]; magZ = icmMag[2];
+  float linearX = icmLinear[0];
+  float linearY = icmLinear[1];
+  float linearZ = icmLinear[2];
+#else
   // 100kHz I2C에서 벡터 하나 읽는 데 약 1ms가 든다. 매 10ms에는 방향 계산과
   // 충격 판정에 필요한 3개만 읽고, 나머지는 IMU_SLOW_INTERVAL_MS마다 읽는다.
   imu::Vector<3> gyro = bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
@@ -3593,12 +3876,16 @@ void readImu() {
     accelX = accel.x(); accelY = accel.y(); accelZ = accel.z();
     magX = mag.x(); magY = mag.y(); magZ = mag.z();
   }
+  float linearX = linear.x();
+  float linearY = linear.y();
+  float linearZ = linear.z();
+#endif
   lastImuSampleMs = now;
   imuHasSample = true;
 
-  linearAccelMagnitude = sqrtf(linear.x() * linear.x() +
-                               linear.y() * linear.y() +
-                               linear.z() * linear.z());
+  linearAccelMagnitude = sqrtf(linearX * linearX +
+                               linearY * linearY +
+                               linearZ * linearZ);
 
   if (linearAccelMagnitude > impactPeakSinceTelemetry) {
     impactPeakSinceTelemetry = linearAccelMagnitude;
@@ -4872,7 +5159,11 @@ void setup() {
   captureTuningDefaults();
   loadTuningFromFlash();
 
-  Serial.println("\n=== V2X V5 Vehicle + MG-F10 + BNO055 + C33 UWB ===");
+  #if IMU_CHIP_ICM20948
+  Serial.println("\n=== V2X V5 Vehicle + GPS + ICM-20948 + C33 UWB ===");
+#else
+  Serial.println("\n=== V2X V5 Vehicle + GPS + BNO055 + C33 UWB ===");
+#endif
   Serial.printf("[CONFIG] CPA distance: %.1f / %.1f / %.1f m\n",
                 (float)cfgCpaCautionM,
                 (float)cfgCpaWarningM,
