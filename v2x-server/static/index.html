@@ -8,7 +8,6 @@
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
   #map { width: 100%; height: 100vh; }
-  .leaflet-tile-pane { filter: grayscale(70%) brightness(1.15) contrast(0.9); }
 
   /* 좌상단 컨트롤 패널 (지도 종류 전환 + 등급 필터 + 상태) */
   #panel {
@@ -157,8 +156,8 @@ function fmtKST(iso) {
 let source = "live";
 const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
 const map = L.map("map").setView([37.4965, 126.9571], 16);
-L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-  maxZoom: 19, attribution: "Tiles &copy; Esri",
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
 }).addTo(map);
 segLayer.addTo(map); zoneLayer.addTo(map);
 
@@ -222,11 +221,11 @@ function renderTop(all) {
   const box = document.getElementById("top-box");
   TOP_ROADS = {};
 
-  // 실측은 정문 앞 한 곳에서 나온 데이터다. 도로별 순위를 매기면
+  // 실측은 숭실대 정문 앞 한 곳에서 나온 데이터다. 도로별 순위를 매기면
   // 전부 같은 도로가 나와서 "어디부터 손볼까"의 답이 되지 않는다.
   if (source !== "sumo") {
     box.innerHTML = "<h2>현장 검증 지점</h2><div class='note'>"
-      + "정문 앞 교차로 1개소<br>"
+      + "숭실대학교 정문 앞 한 곳 · 상도로 369<br>"
       + "도로별 우선순위는 <b>AI 예측</b> 탭에서 봅니다.</div>";
     return;
   }
