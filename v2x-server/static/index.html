@@ -8,6 +8,7 @@
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
   #map { width: 100%; height: 100vh; }
+  .leaflet-tile-pane { filter: grayscale(70%) brightness(1.15) contrast(0.9); }
 
   /* 좌상단 컨트롤 패널 (지도 종류 전환 + 등급 필터 + 상태) */
   #panel {
@@ -29,6 +30,23 @@
     border-radius: 8px; border: 1px solid #d1d5db; font-family: inherit; background: #fff;
   }
   #status { font-size: 12px; color: #555; line-height: 1.5; }
+
+  /* 위험 구간 우선순위 */
+  #top-box { margin-top: 10px; border-top: 1px solid #e5e7eb; padding-top: 9px; }
+  #top-box h2 { font-size: 12px; margin: 0 0 6px; color: #111; }
+  #top-box .note { font-size: 11px; color: #777; line-height: 1.45; }
+  .top-row {
+    display: flex; gap: 7px; align-items: baseline;
+    padding: 4px 5px; margin: 0 -5px; border-radius: 6px; cursor: pointer;
+  }
+  .top-row:hover { background: #f3f4f6; }
+  .top-rank { font-size: 11px; font-weight: 700; color: #6b7280; width: 12px; flex: none; }
+  .top-name { font-size: 12px; font-weight: 600; color: #111; }
+  .top-meta { font-size: 11px; color: #6b7280; margin-left: auto; white-space: nowrap; }
+  .top-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+    margin-right: 4px; flex: none;
+  }
 
   /* 우상단 범례 */
   #legend {
@@ -72,9 +90,8 @@
 <div id="panel">
   <h1>V2X 보행 위험지도</h1>
   <div class="tabs">
-    <button id="b-live" class="on" onclick="setSource('live')">예측</button>
-    <button id="b-sumo" onclick="setSource('sumo')">시나리오</button>
-    <button id="b-combined" onclick="setSource('combined')">통합</button>
+    <button id="b-live" class="on" onclick="setSource('live')">현장 실측</button>
+    <button id="b-sumo" onclick="setSource('sumo')">AI 예측 (시뮬)</button>
   </div>
   <select id="minGrade" onchange="loadSegments()">
     <option value="0">전체 등급 보기</option>
@@ -82,16 +99,14 @@
     <option value="2">2(위험) 이상</option>
     <option value="3">3(매우 위험)만</option>
   </select>
-  <div id="demo-badge" style="display:none;background:#e8f0fe;color:#174ea6;font-size:11px;
-       padding:6px 8px;border-radius:6px;margin-bottom:8px;line-height:1.4;">
-    <b>예시 표시</b><br>차량·경로는 임시 데이터입니다<br>(실제 예측 모델 연동 전)</div>
   <div id="status">데이터 불러오는 중...</div>
+  <div id="top-box"></div>
 </div>
 
 <div id="legend">
-  <h4>3초 내 예상 위험 등급</h4>
-  <div style="font-size:11px;color:#777;margin:-2px 0 6px;line-height:1.4;">
-    AI 모델이 3초 후 상황을<br>예측한 값 (v3 이후)</div>
+  <h4 id="lg-title">현장 실측 위험 등급</h4>
+  <div id="lg-sub" style="font-size:11px;color:#777;margin:-2px 0 6px;line-height:1.4;">
+    현장 실험에서 실제 발생한<br>위험 등급 (젯슨 현장 판정)</div>
   <div><span class="legend-swatch" style="background:#22c55e"></span>0 · 안전</div>
   <div><span class="legend-swatch" style="background:#eab308"></span>1 · 주의</div>
   <div><span class="legend-swatch" style="background:#f97316"></span>2 · 위험</div>
@@ -109,7 +124,26 @@
 const COLORS = { 0: "#22c55e", 1: "#eab308", 2: "#f97316", 3: "#ef4444" };
 const GRADE_LABELS = { 0: "안전", 1: "주의", 2: "위험", 3: "매우 위험" };
 const AGR = { both: "실측·시뮬 모두 위험", live_only: "실측만 위험", sumo_only: "시뮬만 위험" };
-const SRC = { live: "예측", sumo: "시나리오", combined: "통합" };
+const SRC = { live: "현장 실측", sumo: "AI 예측 (시뮬)" };
+// 탭마다 데이터의 성격이 다르다. 실측은 젯슨이 현장에서 규칙으로 판정한 결과이고,
+// 시뮬은 SUMO 시나리오를 v3 모델로 추론한 3초 선행 예측이다. 범례를 하나로 두면
+// 실측 등급까지 "AI가 예측한 값"으로 읽혀서, 탭에 따라 갈아끼운다.
+const LEGEND = {
+  live: { title: "현장 실측 위험 등급",
+          sub: "현장 실험에서 실제 발생한<br>위험 등급 (젯슨 현장 판정)" },
+  sumo: { title: "3초 내 예상 위험 등급",
+          sub: "AI 모델(v3)이 3초 후 상황을<br>예측한 값" },
+};
+// 상태줄에 쓰는 규모 표시. 같은 "건"이라도 실측은 현장 이벤트, 시뮬은 추론 건수다.
+const SRC_UNIT = { live: "이벤트", sumo: "추론" };
+
+// 구간 id는 OSM way id + 순번이다. 화면에 "1381099007_1"을 띄우면 아무도 못 읽으므로
+// OSM에서 받아온 도로명을 붙인다. 이름이 없는 way(골목·보행로)는 순위에서 빠진다.
+const WAY_NAMES = {"1138377348": "상도로60가길", "1450884426": "상도로58길", "220064933": "사당로", "220064934": "상도로", "261484534": "상도로55길", "278024797": "상도로50길", "278024799": "상도로52길", "278024801": "상도로62길", "278024802": "상도로53길", "278145988": "상도로45길", "278145989": "상도로41길", "278146424": "상도로37길", "278146909": "상도로55길", "278146911": "상도로55길", "278146912": "상도로53가길", "278148182": "상도로54길", "278148183": "상도로58길", "278148184": "상도로60길", "278148189": "상도로56길", "278148191": "상도로54길", "278148277": "상도로61길", "278148591": "상도로62가길", "278148592": "상도로", "278148630": "상도로68길", "278149178": "상도로49길", "467478843": "상도로63길", "467478844": "상도로61가길", "467478846": "상도로60길", "467479185": "상도로66길", "467538220": "상도로", "467538221": "상도로37길", "467539853": "상도로39길", "467540934": "상도로47길", "474771574": "상도로55길", "520704309": "상도로", "1474731223": "상도로", "1474731224": "상도로", "1474731225": "상도로", "1474731226": "상도로", "1474731228": "상도로", "1474731231": "상도로", "521182518": "서달로", "521295452": "사당로", "744062052": "상도로43길", "801862821": "상도로"};
+
+// 구간이 이만큼 모인 도로만 순위에 올린다. 한 구간짜리가 평균만 높아서 1위로
+// 튀면 "어디부터 손볼까"라는 질문에 잘못 답하게 된다.
+const TOP_MIN_SEGMENTS = 5;
 
 function fmtKST(iso) {
   if (!iso) return "-";
@@ -123,20 +157,24 @@ function fmtKST(iso) {
 let source = "live";
 const segLayer = L.layerGroup(), zoneLayer = L.layerGroup();
 const map = L.map("map").setView([37.4965, 126.9571], 16);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 19, attribution: "Tiles &copy; Esri",
 }).addTo(map);
 segLayer.addTo(map); zoneLayer.addTo(map);
 
 function setSource(s) {
   source = s;
-  ["live", "sumo", "combined"].forEach(x =>
+  ["live", "sumo"].forEach(x =>
     document.getElementById("b-" + x).className = (x === s ? "on" : ""));
   hideCard();
-  if (s === "live") { drawPredictionDemo(); predictLayer.addTo(map); }
-  else { map.removeLayer(predictLayer); }
-  document.getElementById("demo-badge").style.display = (s === "live") ? "block" : "none";
+  applyLegend();
   loadSegments();
+}
+
+function applyLegend() {
+  const lg = LEGEND[source];
+  document.getElementById("lg-title").textContent = lg.title;
+  document.getElementById("lg-sub").innerHTML = lg.sub;
 }
 
 function hideCard() { document.getElementById("detail-card").style.display = "none"; }
@@ -166,6 +204,75 @@ function showZoneCard(z) {
   document.getElementById("detail-card").style.display = "block";
 }
 
+function roadNameOf(seg) {
+  const way = String(seg.edge_id).replace(/_[^_]*$/, "");
+  return WAY_NAMES[way] || null;
+}
+
+let TOP_ROADS = {};
+
+function zoomRoad(name) {
+  const pts = TOP_ROADS[name];
+  // maxZoom이 없으면 구간이 짧은 도로에서 z19까지 붙어 도로 전체가 안 보인다.
+  if (pts && pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 17 });
+}
+
+// 도로명 단위로 묶는다. 행정이 판단하는 단위는 "구간"이 아니라 "도로"다.
+function renderTop(all) {
+  const box = document.getElementById("top-box");
+  TOP_ROADS = {};
+
+  // 실측은 정문 앞 한 곳에서 나온 데이터다. 도로별 순위를 매기면
+  // 전부 같은 도로가 나와서 "어디부터 손볼까"의 답이 되지 않는다.
+  if (source !== "sumo") {
+    box.innerHTML = "<h2>현장 검증 지점</h2><div class='note'>"
+      + "정문 앞 교차로 1개소<br>"
+      + "도로별 우선순위는 <b>AI 예측</b> 탭에서 봅니다.</div>";
+    return;
+  }
+
+  const agg = {};
+  all.forEach(function (seg) {
+    const nm = roadNameOf(seg);
+    if (!nm) return;
+    const a = agg[nm] || (agg[nm] = { n: 0, sum: 0, ev: 0, pts: [] });
+    a.n += 1;
+    a.sum += seg.avg || 0;
+    a.ev += seg.events || 0;
+    a.pts = a.pts.concat(seg.points);
+  });
+
+  const rows = Object.keys(agg)
+    .filter(function (nm) { return agg[nm].n >= TOP_MIN_SEGMENTS; })
+    .map(function (nm) {
+      const a = agg[nm];
+      return { name: nm, avg: a.sum / a.n, n: a.n, ev: a.ev, pts: a.pts };
+    })
+    .sort(function (x, y) { return y.avg - x.avg; })
+    .slice(0, 5);
+
+  if (rows.length === 0) { box.innerHTML = ""; return; }
+
+  let h = "<h2>위험 구간 우선순위</h2>";
+  rows.forEach(function (r, i) {
+    TOP_ROADS[r.name] = r.pts;
+    const g = Math.min(3, Math.round(r.avg));
+    h += "<div class='top-row' data-road='" + r.name + "'>"
+       + "<span class='top-rank'>" + (i + 1) + "</span>"
+       + "<span class='top-dot' style='background:" + COLORS[g] + "'></span>"
+       + "<span class='top-name'>" + r.name + "</span>"
+       + "<span class='top-meta'>" + r.avg.toFixed(2) + " · " + r.n + "구간</span>"
+       + "</div>";
+  });
+  h += "<div class='note' style='margin-top:6px;'>구간 " + TOP_MIN_SEGMENTS
+     + "개 이상 모인 도로만, 평균 위험도 순</div>";
+  box.innerHTML = h;
+
+  box.querySelectorAll(".top-row").forEach(function (el) {
+    el.addEventListener("click", function () { zoomRoad(el.dataset.road); });
+  });
+}
+
 function loadSegments() {
   segLayer.clearLayers();
   const st = document.getElementById("status");
@@ -176,6 +283,7 @@ function loadSegments() {
     const rows = (all || []).filter(s => s.grade >= minG);
     if (rows.length === 0) {
       st.textContent = "해당 데이터는 준비 중입니다.";
+      renderTop(all || []);
       return;
     }
     rows.forEach(s => {
@@ -185,74 +293,18 @@ function loadSegments() {
       line.on("click", () => showSegmentCard(s));
       line.addTo(segLayer);
     });
+    // 화면을 캡처해서 쓰는 일이 많다. 정지 화면 한 장만 보고도 어느 데이터인지,
+    // 얼마나 쌓인 건지 알 수 있어야 해서 출처·구간 수·건수를 함께 적는다.
+    const total = all.reduce((a, s) => a + (s.events || 0), 0);
+    let t = SRC[source] + " · " + all.length + "개 구간";
+    if (rows.length !== all.length) t += " (" + rows.length + "개 표시 중)";
+    t += " · " + SRC_UNIT[source] + " " + total.toLocaleString("ko-KR") + "건";
+    st.innerHTML = t;
+    renderTop(all);
     fetch("/api/status").then(r => r.json()).then(info => {
-      let t = rows.length + "개 구간 표시 중";
-      if (info.last_updated) t += "<br>갱신 " + fmtKST(info.last_updated);
-      st.innerHTML = t;
-    }).catch(() => { st.textContent = rows.length + "개 구간 표시 중"; });
+      if (info.last_updated) st.innerHTML = t + "<br>갱신 " + fmtKST(info.last_updated);
+    }).catch(() => {});
   }).catch(() => { st.textContent = "데이터를 불러오지 못했습니다. 새로고침 해보세요."; });
-}
-
-// ===== 예측 데모: 차량 1대 + 경로 갈래별 확률 (임시 예시, 실제 모델 연동 전) =====
-const DEMO_CAR = { lat: 37.4964687, lng: 126.9578935, heading: 0 };
-const DEMO_PATHS = [
-  { label: "직진", prob: 0.60, points: [[37.4964687,126.9578935],[37.4965615,126.9579137],[37.4965756,126.9579167],[37.496627,126.9578873],[37.49666,126.9578204],[37.4966968,126.9574114]] },
-  { label: "좌회전", prob: 0.25, points: [[37.4964687,126.9578935],[37.4965084,126.9574527],[37.4965393,126.9571087]] },
-  { label: "우회전", prob: 0.15, points: [[37.4964687,126.9578935],[37.4964528,126.9578901],[37.4962938,126.9578556],[37.4962841,126.9578535],[37.49627,126.9578504],[37.4961587,126.9578262]] },
-];
-const PRED_BLUE = "#1d6fe0";
-const predictLayer = L.layerGroup();
-
-function carIcon(headingDeg) {
-  return L.divIcon({
-    className: "", iconSize: [34, 34], iconAnchor: [17, 17],
-    html: '<div style="transform:rotate(' + headingDeg + 'deg);width:34px;height:34px;">'
-        + '<svg viewBox="0 0 24 24" width="34" height="34">'
-        + '<circle cx="12" cy="12" r="11" fill="#fff" stroke="' + PRED_BLUE + '" stroke-width="1.5" opacity="0.95"/>'
-        + '<path d="M12 3.5 L15.4 9.2 L13.2 9.2 L13.2 19 L10.8 19 L10.8 9.2 L8.6 9.2 Z" fill="' + PRED_BLUE + '"/>'
-        + '</svg></div>',
-  });
-}
-
-function drawPredictionDemo() {
-  predictLayer.clearLayers();
-  DEMO_PATHS.forEach(function (p) {
-    const w = 4 + p.prob * 14;
-    L.polyline(p.points, { color: PRED_BLUE, weight: w, opacity: 0.75, lineCap: "round" })
-      .on("click", function () {
-        document.getElementById("d-title").textContent = "예측 경로 (예시)";
-        document.getElementById("d-rows").innerHTML =
-          row("경로", p.label) + row("진행 확률", Math.round(p.prob * 100) + "%")
-          + row("구분", "임시 예시 데이터");
-        document.getElementById("detail-card").style.display = "block";
-      })
-      .addTo(predictLayer);
-
-    const end = p.points[p.points.length - 1];
-    const prev = p.points[p.points.length - 2];
-    const ang = Math.atan2((end[1]-prev[1]) * 0.79, (end[0]-prev[0])) * 180 / Math.PI;
-    L.marker(end, { icon: L.divIcon({ className: "", iconSize: [18,18], iconAnchor: [9,9],
-      html: '<div style="transform:rotate(' + (90 - ang) + 'deg)"><svg viewBox="0 0 24 24" width="18" height="18">'
-          + '<path d="M12 2 L19 20 L12 15.5 L5 20 Z" fill="' + PRED_BLUE + '"/></svg></div>' }) })
-      .addTo(predictLayer);
-
-    L.marker(p.points[Math.floor(p.points.length / 2)], { icon: L.divIcon({ className: "",
-      iconSize: [72,22], iconAnchor: [36,11],
-      html: '<div style="background:' + PRED_BLUE + ';color:#fff;font-size:11px;font-weight:600;'
-          + 'padding:2px 0;border-radius:11px;text-align:center;white-space:nowrap;">'
-          + p.label + " " + Math.round(p.prob * 100) + "%</div>" }) })
-      .addTo(predictLayer);
-  });
-
-  L.marker([DEMO_CAR.lat, DEMO_CAR.lng], { icon: carIcon(DEMO_CAR.heading), zIndexOffset: 1000 })
-    .on("click", function () {
-      document.getElementById("d-title").textContent = "차량 (예시)";
-      document.getElementById("d-rows").innerHTML =
-        row("위치", DEMO_CAR.lat.toFixed(5) + ", " + DEMO_CAR.lng.toFixed(5))
-        + row("경로 후보", DEMO_PATHS.length + "개") + row("구분", "임시 예시 데이터");
-      document.getElementById("detail-card").style.display = "block";
-    })
-    .addTo(predictLayer);
 }
 
 function loadZones() {
@@ -269,6 +321,7 @@ function loadZones() {
 }
 
 // loadZones();
+applyLegend();
 loadSegments();
 </script>
 

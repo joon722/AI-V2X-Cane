@@ -310,14 +310,17 @@ if(MOCK_MODE){
   document.getElementById("mode").textContent="목업 (?mock)";
   startMock();
 }else{
-  setInterval(pollLive,250);pollLive();
+  setInterval(pollLive,100);pollLive();
 }
 
 // ===== 좌표 변환: 지팡이 기준 차량 위치 -> 내 차 기준 보행자 위치 =====
 function pedPosition(fr){
   const v=fr.vehicle||{};
-  if(v.heading_deg!=null)ST.lastHeading=v.heading_deg;
-  if(v.rel_east_m==null||v.rel_north_m==null)return ST.lastPos;   // 이전 프레임 유지
+  if(Number.isFinite(v.heading_deg))ST.lastHeading=v.heading_deg;
+  if(!Number.isFinite(v.rel_east_m)||!Number.isFinite(v.rel_north_m)){
+    ST.lastPos=null;
+    return null;
+  }
   const pe=-v.rel_east_m, pn=-v.rel_north_m;
   const h=ST.lastHeading*Math.PI/180;
   const forward=pe*Math.sin(h)+pn*Math.cos(h);
@@ -392,6 +395,11 @@ function render(){
   const clos=(r.closing_mps==null)?null:r.closing_mps;
   const vspd=(fr.vehicle&&fr.vehicle.speed_mps!=null)?fr.vehicle.speed_mps*3.6:null;
   const pos=pedPosition(fr);
+  if(!pos){
+    idle.style.display="block";
+    document.getElementById("idleT").textContent="보행자 위치 확인 중";
+    document.getElementById("idleS").textContent="거리·위험도는 수신 중이며, 위치에 필요한 방향을 기다리고 있습니다";
+  }
 
   document.getElementById("dist").textContent=dist!=null?fmt(dist,1):"--";
   document.getElementById("ttc").textContent=ttc!=null?fmt(ttc,1):"--";

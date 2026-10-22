@@ -1,4 +1,5 @@
 import json
+import math
 import os, hmac, csv, io, datetime
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
@@ -294,6 +295,111 @@ def post_live(payload: LiveIn, x_api_key: str = Header(default="")):
             (payload.device_id, json.dumps(payload.model_dump())))
         conn.commit()
         return {"ok": True}
+    finally:
+        conn.close()
+
+
+class LiveNode(BaseModel):
+    id: Optional[int] = None
+    type: str                       # "vehicle" | "cane"
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    heading: Optional[float] = None
+    speed: Optional[float] = None
+    risk: Optional[int] = None
+    gps_valid: Optional[int] = None
+
+
+class LivePushIn(BaseModel):
+    t: float                        # 유닉스 시각(초)
+    nodes: list[LiveNode]
+    device_id: Optional[str] = None
+
+
+def _node_to_state(n):
+    """노드 배열 항목 -> 기존 NodeState 형식"""
+    return {"lat": n.lat, "lng": n.lng,
+            "speed_mps": n.speed, "heading_deg": n.heading,
+            "gps_valid": bool(n.gps_valid) if n.gps_valid is not None else False,
+            "rel_east_m": None, "rel_north_m": None}
+
+
+@app.post("/api/live/push")
+def post_live_push(payload: LivePushIn, x_api_key: str = Header(default="")):
+    """노드 배열 형식 수신 (10Hz). 저장 시 기존 /api/live 형식으로 정규화한다."""
+    require_key(x_api_key)
+    cane = veh = None
+    for n in payload.nodes:
+        if n.type == "cane" and cane is None:
+            cane = n
+        elif n.type == "vehicle" and veh is None:
+            veh = n
+
+    empty = {"lat": None, "lng": None, "speed_mps": None, "heading_deg": None,
+             "gps_valid": False, "rel_east_m": None, "rel_north_m": None}
+
+    # 위험도: 노드가 각자 들고 오므로 둘 중 높은 값을 상태 위험도로 쓴다
+    risks = [n.risk for n in payload.nodes if n.risk is not None]
+    level = max(risks) if risks else 0
+
+    # 두 노드 좌표가 모두 있으면 거리와 상대좌표를 계산해 채운다
+    dist = None
+    rel_e = rel_n = None
+    if cane and veh and None not in (cane.lat, cane.lng, veh.lat, veh.lng):
+        lat_m = 110540.0
+        lng_m = 111320.0 * math.cos(math.radians(cane.lat))
+        rel_e = round((veh.lng - cane.lng) * lng_m, 2)
+        rel_n = round((veh.lat - cane.lat) * lat_m, 2)
+        dist = round(math.hypot(rel_e, rel_n), 2)
+
+    ts = datetime.datetime.fromtimestamp(
+        payload.t, datetime.timezone.utc).isoformat()
+    age = max(0.0, datetime.datetime.now(datetime.timezone.utc).timestamp() - payload.t)
+
+    veh_state = _node_to_state(veh) if veh else dict(empty)
+    if rel_e is not None:
+        veh_state["rel_east_m"] = rel_e
+        veh_state["rel_north_m"] = rel_n
+
+    data = {
+        "device_id": payload.device_id or "nodes",
+        "ts": ts,
+        "age_s": round(age, 2),
+        "cane": _node_to_state(cane) if cane else dict(empty),
+        "vehicle": veh_state,
+        "risk": {"level": level, "distance_m": dist, "ttc_s": None,
+                 "closing_mps": None, "source": "node"},
+    }
+
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO live_state (device_id, payload, received_at) "
+            "VALUES (%s, %s::jsonb, now()) "
+            "ON CONFLICT (device_id) DO UPDATE SET payload = EXCLUDED.payload, "
+            "received_at = now()",
+            (data["device_id"], json.dumps(data)))
+
+        # 지도 예측 탭(source=live)에도 누적한다. 10Hz 전부 쌓으면 폭증하므로
+        # 위험할 때(level>=1)만, 그리고 지팡이 좌표 기준으로 1초에 한 번만 넣는다.
+        inserted = 0
+        if level >= 1 and cane and cane.lat is not None and cane.lng is not None:
+            edge_id = roads.nearest_edge_id(cane.lat, cane.lng)
+            if edge_id is not None:
+                uid = "live-%s-%d" % (data["device_id"], int(payload.t))
+                cur.execute(
+                    "INSERT INTO events (event_uid,source,device_id,lat,lng,edge_id,"
+                    "risk,ttc,distance_m,occurred_at) "
+                    "VALUES (%s,'live',%s,%s,%s,%s,%s,%s,%s,%s::timestamptz) "
+                    "ON CONFLICT (event_uid) DO NOTHING",
+                    (uid, data["device_id"], cane.lat, cane.lng, edge_id,
+                     min(3, max(0, level)), None, dist, ts))
+                inserted = cur.rowcount
+
+        conn.commit()
+        return {"ok": True, "nodes": len(payload.nodes), "level": level,
+                "map_event": inserted}
     finally:
         conn.close()
 
