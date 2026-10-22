@@ -14,6 +14,16 @@ import roads  # [변경] 실제 도로망 스냅 모듈 (roads.json 필요)
 
 app = FastAPI(title="V2X Risk Map")
 
+# HTML은 열 때마다 서버에 새 버전이 있는지 확인하게 한다(안 바뀌었으면 304).
+# 이 헤더가 없으면 브라우저가 Last-Modified로 보관 기간을 어림잡아
+# 재배포 뒤에도 몇 시간 동안 옛 화면을 보여 준다.
+@app.middleware("http")
+async def no_cache_html(request, call_next):
+    resp = await call_next(request)
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 _pool = None
 
 def _get_pool():
