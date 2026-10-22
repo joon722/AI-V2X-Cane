@@ -153,6 +153,7 @@ const LEVEL_COLOR=["#34D399","#FBBF24","#FB923C","#EF4444"];
 const LEVEL_NAME=["안전","주의","경고","위험"];
 const ROAD_HALF=5.4, WALK_OUT=9.0;
 const MY_CAR_Z=4.0;                      // 내 차는 화면 하단 중앙 고정
+const VIEW_K=4.0;                        // 실내 시연(5 m 이내)용 배율: 실제 1 m를 화면 4 m로 그린다
 const MOCK_MODE=new URLSearchParams(location.search).has("mock");
 
 function el(t,a){const n=document.createElementNS(NS,t);
@@ -322,7 +323,9 @@ function pedPosition(fr){
     return null;
   }
   const pe=-v.rel_east_m, pn=-v.rel_north_m;
-  const h=ST.lastHeading*Math.PI/180;
+  // 실내 UWB 경로에서 젯슨은 이동방향이 '지금' 유효할 때만 그 방향으로 돌려 상대좌표를
+  // 만들고, 아니면 0을 쓴다. 같은 기준으로 되돌려야 위치가 맞는다(값이 없으면 기존대로).
+  const h=(v.heading_valid===false?0:ST.lastHeading)*Math.PI/180;
   const forward=pe*Math.sin(h)+pn*Math.cos(h);
   const right  =pe*Math.cos(h)-pn*Math.sin(h);
   ST.lastPos={forward:forward,right:right};
@@ -341,7 +344,7 @@ function setSeg(l){
 function drawPed(pos,level){
   while(gWorld.firstChild)gWorld.removeChild(gWorld.firstChild);
   if(!pos)return;
-  const z=pos.forward+MY_CAR_Z, x=pos.right;
+  const z=pos.forward*VIEW_K+MY_CAR_Z, x=pos.right*VIEW_K;
   const p=proj(z,x);
   if(z<-6||p.s<.03||p.y<HORIZON)return;
   const col=level>=3?"#F87171":level===2?"#FBBF24":"#C7D2DE";

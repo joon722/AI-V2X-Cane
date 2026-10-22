@@ -272,6 +272,9 @@ class NodeState(BaseModel):
     # null이라, 화면 배치는 이 두 값만 쓴다. (젯슨 step6의 veh - cane)
     rel_east_m: Optional[float] = None
     rel_north_m: Optional[float] = None
+    # 차량 이동방향이 '지금' 유효한지. heading_deg는 마지막 유효값이 계속 오므로,
+    # drive.html이 젯슨과 같은 기준으로 상대좌표를 되돌릴 때 이 값을 본다.
+    heading_valid: Optional[bool] = None
 
 
 class RiskState(BaseModel):
